@@ -1,0 +1,146 @@
+# CUE 프로젝트 가이드 (Claude 작업용)
+
+작업을 시작하기 전에 이 문서를 읽고, 코드·구조·결정이 바뀌면 **같은 PR에서 이 문서도 함께 갱신**한다.
+
+## 서비스 개요
+CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근거로 경쟁력을 **지속적으로 재평가**하는 개인 아이디어 포트폴리오 서비스다. (자연어처리 7조: 김경주·이정원 백엔드, 최원호·강지영 프론트)
+
+핵심 흐름
+1. 기록: 텍스트·음성 입력. **음성 인식(STT)은 프론트에서 처리**하고 서버는 텍스트만 받는다.
+2. 구조화: AI가 타깃·문제·해결·기대효과로 요약 → **사용자가 검증·수정 완료해야만 DB에 저장**한다. (원문·입력 방식은 DB에 저장하지 않는다.)
+3. 평가: 4개 기준(문제 중요성, 시장 수요, 시장 차별성, 기술적 실현 가능성)으로 점수화.
+4. 갱신(Idea Delta): 하루 1회 AI가 재평가 → **점수에 변화가 있을 때만** 변화량(difference)과 근거 요약(출처 URL 포함)을 저장. 다음 날 이전 점수에 변화량을 반영해 보여주고 변화량은 점수 옆에 작게 표시한다.
+
+## 저장소 구조
+```
+CUE/
+├── backend/    Spring Boot API (현재 작업 대상)
+├── frontend/   React·TypeScript (아직 비어 있음)
+├── docker-compose.yml   로컬 PostgreSQL (호스트 포트 5433)
+├── .github/pull_request_template.md
+├── README.md   사용자용 문서
+└── CLAUDE.md   이 문서
+```
+
+## 기술 스택 (backend)
+- Java 21 (이 머신의 JDK 21 사용, Java 25 아님), Spring Boot 4.0.9, Gradle(Kotlin DSL) 9.1
+- Spring Web MVC, Validation, Data JPA, Flyway, PostgreSQL 17
+- Spring Security + OAuth2 Resource Server (JWT, HS256), Actuator, springdoc 3.0.3(Swagger), RestClient 스타터
+- Lombok, DevTools, Docker Compose Support, Testcontainers
+- **Redis는 쓰지 않는다.** 리프레시 토큰/재발급은 아직 없고, 필요해지면 DB 테이블로 구현한다.
+
+## 패키지 구조 (도메인별)
+`backend/src/main/java/com/cue`
+```
+global/
+  config/     SecurityConfig (JWT 설정, PasswordEncoder, JwtEncoder/Decoder 빈)
+  error/      ErrorCode(전체 에러 코드), CustomException, GlobalExceptionHandler
+  response/   CommonResponse (모든 응답 래퍼)
+  security/   UserPrincipal, JwtProperties, JwtTokenProvider, JwtPrincipalConverter, SecurityErrorWriter
+auth/         controller / service / dto   — 로그인(JWT 발급)
+user/         controller / service / repository / entity / dto — 회원가입, 내 정보
+idea/         controller / service / repository / entity / dto — 아이디어 저장·조회·리더보드·가중치
+score/        entity (Score, ScoreType)
+evaluation/   entity, repository (Evaluation)
+source/       entity (Source, ApiProvider)
+trend/        entity (Trend)
+```
+각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
+
+## DB (Flyway, `src/main/resources/db/migration`)
+- `V1__init.sql`: users, ideas, scores, trends, evaluations, sources
+- `V2__score_pending_weight.sql`: `scores.pending_weight`
+- **이미 반영된 마이그레이션 파일은 수정하지 않는다.** 변경은 항상 새 버전(`V3__...`)으로 추가한다. `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패.
+
+ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, scores 1:N evaluations, trends 1:N evaluations, evaluations 1:N sources.
+- `ideas.type`: 현재 `IT` 하나뿐이며 확장 예정. 종류별로 검색에 쓰는 외부 API 조합이 다르다 (`IdeaType.searchProviders()`).
+- `scores`: 아이디어당 4행(`ScoreType`), `(idea_id, type)` 유니크. `weight`는 0~1 비율(DECIMAL 4,3), `pending_weight`는 변경 예약.
+- `evaluations`: score 단위 평가 이력(`difference`, `evidence_summary`, nullable `trend_id`).
+- `sources`: 아이디어별 검색 설정(provider, keyword) + `content_hash`로 변경 감지.
+- `trends`: 아이디어와 무관한 전역 트렌드 요약. 고정 API 4개로 수집.
+- 외부 API는 6종(`ApiProvider`): 아이디어 검색은 종류별 3개, 트렌드는 고정 4개. **현재 조합은 임시 값**(TODO: 팀 확정).
+
+## 핵심 규칙·컨벤션
+
+### 응답: 항상 `CommonResponse` 래퍼
+- 컨트롤러는 `CommonResponse<T>`를 반환한다: `CommonResponse.onSuccess(data)`.
+- 형식: `{result: SUCCESS|FAIL, code, message, data(null이면 생략), timestamp}`. 성공 `code`는 `"200"` 고정.
+- 입력 검증 실패(`G004`)는 `data`에 `[{field, reason}]`.
+- 서비스는 DTO를 반환하고, 래핑은 컨트롤러에서 한다.
+
+### 에러: `ErrorCode` 하나로 관리
+- `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
+- 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
+- JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효 `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
+- 필터 단계 에러(401/403)는 `SecurityErrorWriter`가 CommonResponse로 응답한다.
+
+### 인증
+- `POST /api/auth/login` → JWT(access token) 발급. 클레임: sub=userId, email, nickname.
+- 컨트롤러에서 로그인 사용자는 `@AuthenticationPrincipal UserPrincipal principal` (`id`, `email`, `nickname`)로 받는다. **요청 바디/파라미터로 userId를 받지 않는다.** 요청마다 DB를 조회하지 않고 토큰 클레임에서 복원한다.
+- 인증 없이 열린 경로: `POST /api/users`, `POST /api/auth/login`, `/actuator/health/**`, `/v3/api-docs/**`, `/swagger-ui/**`. 나머지는 인증 필요. 열린 경로를 추가하면 `SecurityConfig`를 수정한다.
+- 자신의 리소스만 접근 가능해야 하는 API는 소유자 검사를 한다 (예: `IdeaService.findOwned` → `I002`).
+
+### 코드 스타일
+- Lombok 사용: 엔티티 `@Getter` + `@NoArgsConstructor(access = PROTECTED)`, 서비스/컨트롤러 `@RequiredArgsConstructor`. 요청/응답 DTO는 Java record.
+- 엔티티에 setter를 만들지 않는다. 상태 변경은 의미 있는 도메인 메서드로 한다 (`Score.applyDifference`, `Idea.reserveWeights` 등).
+- 서비스는 클래스/메서드에 `@Transactional`(조회는 `readOnly = true`).
+- 시간 필드는 `LocalDateTime`, 점수는 `BigDecimal`.
+
+### Spring Boot 4 주의사항 (자주 틀림)
+- Jackson 3: `tools.jackson.databind.ObjectMapper` (`com.fasterxml.jackson.annotation.*` 애너테이션은 그대로).
+- 스타터 이름: `spring-boot-starter-webmvc`, `-flyway`, `-restclient`, `-security-oauth2-resource-server`. 테스트에서 MockMvc는 `org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc`.
+- start.spring.io가 서버 오류를 내므로 프로젝트 의존성은 `backend/build.gradle.kts`를 직접 수정한다.
+
+## 도메인 로직 메모
+
+### 점수·가중치
+- 총점 `Idea.totalScore` = Σ(항목 점수 × 가중치), 소수 2자리. `Idea.recalculateTotal()`.
+- 점수 갱신: `Score.applyDifference(diff)` — 0~100으로 제한.
+- 가중치는 **아이디어별**, 항목별 퍼센트 정수, **합이 정확히 100**. 기본 25/25/25/25.
+- 가중치 변경(`PATCH /api/ideas/{id}/weights`)은 즉시 적용하지 않고 `pending_weight`에 **예약**한다. 다음 평가 턴 시작 시 `Idea.startNextTurn()`이 적용하고 총점을 재계산한다. API 응답은 `weightPercent`(현재)와 `pendingWeightPercent`(예약).
+- 점수는 하루치만 반영한다: 최신 점수 = 이전 점수 + 변화량. 변화량이 없으면 `evaluations` 행을 만들지 않는다.
+
+### 외부 자료 변경 감지
+- `Source.updateHash(newHash)`가 이전 해시와 다르면 true. 변경이 있을 때만 재평가를 트리거한다.
+
+## API 현황
+| Method | Path | 인증 | 설명 |
+| --- | --- | --- | --- |
+| POST | `/api/users` | ✕ | 회원가입 |
+| POST | `/api/auth/login` | ✕ | 로그인 (JWT 발급) |
+| GET | `/api/users/me` | ✓ | 내 정보 |
+| POST | `/api/ideas` | ✓ | 검증 완료된 구조화 아이디어 저장 |
+| GET | `/api/ideas` | ✓ | 내 아이디어 리더보드 (총점 순) |
+| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (점수·가중치·최근 변화량) |
+| PATCH | `/api/ideas/{id}/weights` | ✓ | 가중치 변경 예약 |
+
+Swagger: `/swagger-ui.html`, 헬스체크: `/actuator/health`.
+
+## 실행·테스트
+```bash
+cd backend && ./gradlew bootRun    # Docker Compose Support가 루트 docker-compose.yml의 DB를 자동 기동
+cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (Docker 필요)
+```
+- DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
+- 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`.
+- 테스트: `DomainTest`(순수 단위), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치 흐름).
+- `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
+
+## 작업 방식
+- **PR 기반**으로 작업한다. `main`에 직접 커밋하지 않고 `feature/...` 브랜치 → PR(`.github/pull_request_template.md` 형식). 커밋·푸시·PR은 사용자가 요청할 때만 한다.
+- 커밋 메시지는 한국어, `feat:`/`fix:`/`docs:` 접두사.
+- 코드 변경 시 테스트를 함께 추가/수정하고 `./gradlew test`를 통과시킨 뒤 알린다.
+- 동작이 바뀌면 `README.md`(사용자용)와 이 문서(작업용)를 함께 갱신한다.
+
+## 미구현·TODO
+- 24시간 주기 평가 스케줄러(`@Scheduled`): 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집 → AI 평가 → 변화량·근거 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다.
+- 외부 API 클라이언트(GitHub, Hugging Face, Stack Exchange, Hacker News, Semantic Scholar, Wikipedia Pageviews)와 Gemini 연동 (예외는 `G002 EXTERNAL_SERVER_ERROR` 사용).
+- AI 구조화 API (입력 텍스트 → 4항목 초안; 저장은 검증 후 별도 호출).
+- 외부 API 조합(`IdeaType.searchProviders`, `ApiProvider.TREND_PROVIDERS`) 팀 확정.
+- 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
+- GitHub Actions CI(빌드·테스트), `frontend/` 구성.
+- 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.
+
+## 참고
+- `~/Desktop/Ceased/LoopOn/loop-on-backend`(이전 프로젝트)에서 에러 코드 체계·CommonResponse 형식을 참고했다. LoopOn의 Redis 기반 리프레시 토큰, 코드 중복 문제는 가져오지 않았다.
+- PPT/대본의 기술 스택 표기는 Spring Boot(Java)가 최신 확정안이다 (초기 대본의 FastAPI 아님).
