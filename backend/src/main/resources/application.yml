@@ -13,9 +13,9 @@ spring:
     enabled: true
   docker:
     compose:
-      # 로컬 실행 시 루트의 docker-compose.yml DB를 자동으로 띄운다. 끄려면 DOCKER_COMPOSE_ENABLED=false
-      enabled: ${DOCKER_COMPOSE_ENABLED:true}
-      file: ../docker-compose.yml
+      # 기본은 꺼짐. ./gradlew bootRun 이 켜고 compose 파일 경로를 넘긴다 (build.gradle.kts 참고).
+      # IDE에서 직접 실행할 때는 `docker compose up -d db` 로 DB를 먼저 띄운다.
+      enabled: ${DOCKER_COMPOSE_ENABLED:false}
       lifecycle-management: start_only
 
 jwt:

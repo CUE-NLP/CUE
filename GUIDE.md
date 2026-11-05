@@ -130,8 +130,8 @@ cd CUE/backend
 ./gradlew bootRun
 ```
 - `.env` 파일이나 별도 설정이 **필요 없다**. 모든 값에 개발용 기본값이 있다.
-- DB는 Docker Compose Support가 루트의 `docker-compose.yml`로 자동 기동한다 (`application.yml`의 `file: ../docker-compose.yml` 상대 경로라서 **작업 디렉터리가 `backend/`여야 한다**. IntelliJ에서 메인 클래스로 직접 실행할 때는 Working directory를 `backend`로 맞춘다).
-- 자동 기동이 안 되면 `DOCKER_COMPOSE_ENABLED=false`로 두고 `docker compose up -d db`를 직접 실행한다.
+- **`./gradlew bootRun`**: Docker Compose Support가 루트의 `docker-compose.yml` DB를 자동 기동한다. `build.gradle.kts`가 compose 파일의 절대 경로를 넘기므로 어느 디렉터리에서 실행해도 된다.
+- **IntelliJ에서 `CueApplication` 메인 클래스를 직접 실행**할 때는 자동 기동이 꺼져 있다(기본값 `false`). 먼저 터미널에서 `docker compose up -d db`로 DB를 띄운다. (자동 기동을 켜면 작업 디렉터리 때문에 compose 파일을 못 찾는 오류가 난다.)
 - 확인: `http://localhost:8080/swagger-ui.html`, `http://localhost:8080/actuator/health`
 
 ### 로컬 DB 정보
@@ -149,7 +149,7 @@ cd CUE/backend
 | `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | 위 로컬 DB | 로컬에서는 설정 불필요 |
 | `JWT_SECRET` | 개발용 임시 값 | **개발 서버·운영에서는 반드시 교체** (32바이트 이상). 서버 인스턴스끼리 같은 값이어야 한다 |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간 |
-| `DOCKER_COMPOSE_ENABLED` | `true` | 실행 시 DB 자동 기동 여부 |
+| `DOCKER_COMPOSE_ENABLED` | `false` | DB 자동 기동 여부. `bootRun`이 켜 준다 |
 
 - 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 키(Gemini 등)가 추가되면 이 표에 변수 이름을 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
 
@@ -162,7 +162,7 @@ cd CUE/backend
 
 ## 실행·테스트
 ```bash
-cd backend && ./gradlew bootRun    # Docker Compose Support가 루트 docker-compose.yml의 DB를 자동 기동
+cd backend && ./gradlew bootRun    # 루트 docker-compose.yml의 DB를 자동 기동 (어느 디렉터리에서 실행해도 됨)
 cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (Docker 필요)
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
@@ -172,9 +172,46 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 
 ## 작업 방식
 - **PR 기반**으로 작업한다. `main`에 직접 커밋하지 않고 `feature/...` 브랜치 → PR(`.github/pull_request_template.md` 형식). 커밋·푸시·PR은 사용자가 요청할 때만 한다.
-- 커밋 메시지는 한국어, `feat:`/`fix:`/`docs:` 접두사.
+- 커밋·브랜치·PR 이름은 아래 **커밋 컨벤션**을 따른다.
 - 코드 변경 시 테스트를 함께 추가/수정하고 `./gradlew test`를 통과시킨 뒤 알린다.
 - 동작이 바뀌면 `README.md`(사용자용)와 이 문서(작업 가이드)를 함께 갱신한다.
+
+## 커밋 컨벤션
+
+### 커밋 메시지 형식
+```
+type: 제목 (한국어, 50자 안팎, 마침표 없음, "~한다/~추가" 등 명사형·평서형으로 간결하게)
+
+(선택) 본문 — 무엇을/왜 바꿨는지. 한 줄 띄우고 작성.
+
+(선택) Closes #이슈번호
+```
+
+| type | 용도 |
+| --- | --- |
+| `feat` | 새 기능 추가 |
+| `fix` | 버그 수정 |
+| `docs` | 문서만 변경 (README, GUIDE 등) |
+| `refactor` | 동작 변경 없는 구조 개선 |
+| `test` | 테스트 추가·수정 |
+| `chore` | 빌드 설정, 의존성, 기타 잡무 |
+| `style` | 포맷·공백 등 코드 의미 없는 변경 |
+| `perf` | 성능 개선 |
+| `ci` | CI/CD 설정 변경 |
+
+- 한 커밋에는 **하나의 목적**만 담는다 (기능 + 무관한 리팩터링을 섞지 않는다).
+- DB 스키마 변경은 마이그레이션 파일을 같은 커밋에 포함한다.
+- AI 도구로 작성한 커밋은 말미에 `Co-Authored-By:` 줄을 남긴다.
+- 예시
+  - `feat: 아이디어 가중치 변경 예약 API 추가`
+  - `fix: JWT 만료 토큰이 A005로 응답되던 문제 수정`
+  - `docs: GUIDE에 팀원 온보딩 섹션 추가`
+  - `chore: Testcontainers 의존성 추가`
+
+### 브랜치·PR 이름
+- 브랜치: `{type}/{간단한-설명}` 예) `feature/idea-weights`, `fix/jwt-expired-code`, `docs/guide-update`. (`feat` 대신 `feature`를 쓴다.)
+- PR 제목은 커밋 메시지와 같은 형식(`type: 제목`)으로 쓰고, 본문은 `.github/pull_request_template.md`를 채운다.
+- `main`에 직접 푸시하지 않는다. 리뷰 후 병합한다.
 
 ## 미구현·TODO
 - 24시간 주기 평가 스케줄러(`@Scheduled`): 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집 → AI 평가 → 변화량·근거 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다.

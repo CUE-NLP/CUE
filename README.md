@@ -66,7 +66,7 @@ backend/src/main/java/com/cue
 cd backend && ./gradlew bootRun
 ```
 
-Docker Compose Support가 루트의 `docker-compose.yml` DB를 자동으로 띄웁니다 (끄려면 `DOCKER_COMPOSE_ENABLED=false` 후 `docker compose up -d db`를 직접 실행).
+`./gradlew bootRun`으로 실행하면 루트의 `docker-compose.yml` DB가 자동으로 뜹니다 (실행 위치와 무관). IDE에서 메인 클래스(`CueApplication`)를 직접 실행할 때는 자동 기동이 꺼져 있으니 먼저 `docker compose up -d db`를 실행하세요.
 서버는 `http://localhost:8080` 에서 실행되고, DB는 호스트 포트 **5433** 을 사용합니다 (로컬 PostgreSQL과 충돌 방지).
 
 | 주소 | 설명 |
@@ -82,7 +82,7 @@ Docker Compose Support가 루트의 `docker-compose.yml` DB를 자동으로 띄�
 | `DB_USERNAME` / `DB_PASSWORD` | `cue` / `cue` | DB 계정 |
 | `JWT_SECRET` | 개발용 임시 값 | **운영에서는 반드시 32바이트 이상 값으로 교체** |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간(분) |
-| `DOCKER_COMPOSE_ENABLED` | `true` | 실행 시 DB 컨테이너 자동 기동 여부 |
+| `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
 
 ### 테스트
 

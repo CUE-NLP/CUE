@@ -64,3 +64,13 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
 }
+
+// ./gradlew bootRun 으로 실행할 때만 루트의 docker-compose.yml DB를 자동 기동한다.
+// 절대 경로를 넘기므로 작업 디렉터리와 무관하게 동작한다. (IDE에서 메인 클래스로 직접 실행하면 자동 기동은 꺼져 있다)
+tasks.bootRun {
+    systemProperty("spring.docker.compose.enabled", "true")
+    systemProperty(
+        "spring.docker.compose.file",
+        layout.projectDirectory.file("../docker-compose.yml").asFile.canonicalPath
+    )
+}
