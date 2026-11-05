@@ -26,10 +26,11 @@ CUE
 
 | 영역 | 기술 |
 | --- | --- |
-| Backend | Java 21, Spring Boot 4, Spring Security (JWT), Spring Data JPA |
+| Backend | Java 21, Spring Boot 4, Spring Security (JWT), Spring Data JPA, Lombok, RestClient, Actuator, springdoc(Swagger) |
 | Database | PostgreSQL 17, Flyway |
 | AI | Gemini API (구조화 · 평가), 음성인식 STT |
 | Frontend | React, TypeScript |
+| Test | JUnit 5, Testcontainers (PostgreSQL) |
 | Infra | Docker, GitHub Actions |
 
 ## 백엔드 구조 (도메인별)
@@ -49,7 +50,7 @@ backend/src/main/java/com/cue
 └── trend/           고정 API 4개로 수집한 트렌드 요약
 ```
 
-각 도메인은 `controller / service / repository / entity / dto` 로 나눕니다.
+각 도메인은 `controller / service / repository / entity / dto` 로 나누고, 보일러플레이트는 Lombok(`@Getter`, `@RequiredArgsConstructor` 등)으로 줄입니다.
 
 ## 시작하기
 
@@ -60,11 +61,16 @@ backend/src/main/java/com/cue
 ### 실행
 
 ```bash
-docker compose up -d db
 cd backend && ./gradlew bootRun
 ```
 
-서버는 `http://localhost:8080` 에서 실행됩니다. DB는 호스트 포트 **5433** 을 사용합니다 (로컬 PostgreSQL과 충돌 방지).
+Docker Compose Support가 루트의 `docker-compose.yml` DB를 자동으로 띄웁니다 (끄려면 `DOCKER_COMPOSE_ENABLED=false` 후 `docker compose up -d db`를 직접 실행).
+서버는 `http://localhost:8080` 에서 실행되고, DB는 호스트 포트 **5433** 을 사용합니다 (로컬 PostgreSQL과 충돌 방지).
+
+| 주소 | 설명 |
+| --- | --- |
+| `/swagger-ui.html` | API 문서 (Swagger UI) |
+| `/actuator/health` | 헬스체크 |
 
 ### 환경 변수
 
@@ -74,12 +80,15 @@ cd backend && ./gradlew bootRun
 | `DB_USERNAME` / `DB_PASSWORD` | `cue` / `cue` | DB 계정 |
 | `JWT_SECRET` | 개발용 임시 값 | **운영에서는 반드시 32바이트 이상 값으로 교체** |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간(분) |
+| `DOCKER_COMPOSE_ENABLED` | `true` | 실행 시 DB 컨테이너 자동 기동 여부 |
 
 ### 테스트
 
 ```bash
 cd backend && ./gradlew test
 ```
+
+통합 테스트는 Testcontainers로 PostgreSQL 컨테이너를 띄우므로 Docker가 실행 중이어야 합니다.
 
 ## API
 
@@ -93,19 +102,45 @@ cd backend && ./gradlew test
 | GET | `/api/users/me` | ✓ | 내 정보 |
 | POST | `/api/ideas` | ✓ | 검증 완료된 구조화 아이디어 저장 |
 | GET | `/api/ideas` | ✓ | 내 아이디어 리더보드 (총점 순) |
-| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (항목별 점수 · 최근 변화량) |
+| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (항목별 점수 · 가중치 · 최근 변화량) |
+| PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
 
-### 에러 응답
+### 가중치
 
-모든 에러는 아래 형식이며, 코드는 [`ErrorCode`](backend/src/main/java/com/cue/global/error/ErrorCode.java)에서 관리합니다.
+- 평가 항목 4개(문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성)의 가중치는 아이디어별로 조절하며, 합이 **100%** 여야 합니다. 기본값은 각 25%입니다.
+- 변경하면 `pendingWeightPercent`에 예약되고, 현재 점수·순위에는 바로 반영되지 않습니다. 다음 평가 턴 시작 시(`Idea.startNextTurn()`) 적용되고 총점이 다시 계산됩니다.
 
 ```json
-{
-  "code": "USER-002",
-  "message": "이미 사용 중인 이메일입니다.",
-  "errors": []
-}
+PATCH /api/ideas/1/weights
+{ "weights": { "PROBLEM_IMPORTANCE": 30, "MARKET_DEMAND": 30, "MARKET_DIFFERENTIATION": 20, "TECH_FEASIBILITY": 20 } }
 ```
+
+### 응답 형식
+
+모든 응답은 `CommonResponse` 래퍼로 감싸서 반환합니다.
+
+```json
+// 성공
+{ "result": "SUCCESS", "code": "200", "message": "요청이 성공적으로 처리되었습니다.", "data": { ... }, "timestamp": "2026-11-05 15:00:00" }
+
+// 실패 (data는 검증 오류 상세 등이 있을 때만 포함)
+{ "result": "FAIL", "code": "U001", "message": "이미 존재하는 이메일입니다.", "timestamp": "2026-11-05 15:00:00" }
+```
+
+입력 검증 실패(`G004`)는 `data`에 `[{ "field": "...", "reason": "..." }]` 목록이 담깁니다.
+
+### 에러 코드
+
+[`ErrorCode`](backend/src/main/java/com/cue/global/error/ErrorCode.java)에서 관리하며, 코드는 `{영문 1자}{3자리}` 형식이고 전체에서 유일해야 합니다 (테스트로 검사).
+
+| 구분 | 코드 | 예시 |
+| --- | --- | --- |
+| Global | `G001~` | 서버 오류, 외부 서비스 오류, 잘못된 요청/입력, 405, 404 |
+| Auth | `A001~` | 인증 필요, 권한 없음, JWT 형식 오류·만료·무효·없음, 로그인 실패 |
+| User | `U001~` | 이메일 중복, 사용자 없음 |
+| Idea | `I001~` | 아이디어 없음, 접근 거부, 가중치 오류 |
+
+JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 재로그인 흐름으로 분기하면 됩니다.
 
 새 에러가 필요하면 `ErrorCode`에 추가하고 `throw new CustomException(ErrorCode.XXX)` 로 사용합니다.
 
@@ -118,7 +153,7 @@ cd backend && ./gradlew test
 | --- | --- |
 | `users` | 사용자 |
 | `ideas` | 구조화된 아이디어와 총점 |
-| `scores` | 아이디어별 4개 기준 점수·가중치 |
+| `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
 | `evaluations` | 일일 재평가의 변화량과 근거 요약 |
 | `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지) |
 | `trends` | 고정 API로 수집한 트렌드 요약 |

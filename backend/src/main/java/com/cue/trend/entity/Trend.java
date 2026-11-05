@@ -3,9 +3,14 @@ package com.cue.trend.entity;
 import com.cue.source.entity.ApiProvider;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 @Entity
 @Table(name = "trends")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Trend {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -21,15 +26,9 @@ public class Trend {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    protected Trend() {}
-
     public Trend(String summary, ApiProvider provider) {
         this.summary = summary;
         this.provider = provider;
     }
 
-    public Long getId() { return id; }
-    public String getSummary() { return summary; }
-    public ApiProvider getProvider() { return provider; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
 }

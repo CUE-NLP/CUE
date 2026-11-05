@@ -6,6 +6,7 @@ import com.cue.global.error.ErrorCode;
 import com.cue.idea.dto.CreateIdeaRequest;
 import com.cue.idea.dto.IdeaResponse;
 import com.cue.idea.dto.ScoreResponse;
+import com.cue.idea.dto.UpdateWeightsRequest;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaType;
 import com.cue.idea.repository.IdeaRepository;
@@ -13,18 +14,14 @@ import com.cue.user.repository.UserRepository;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class IdeaService {
     private final IdeaRepository ideas;
     private final UserRepository users;
     private final EvaluationRepository evaluations;
-
-    public IdeaService(IdeaRepository ideas, UserRepository users, EvaluationRepository evaluations) {
-        this.ideas = ideas;
-        this.users = users;
-        this.evaluations = evaluations;
-    }
 
     /** 검증을 마친 구조화 결과를 저장한다. 점수는 첫 AI 평가 전까지 0. */
     @Transactional
@@ -37,10 +34,22 @@ public class IdeaService {
 
     @Transactional(readOnly = true)
     public IdeaResponse get(Long userId, Long ideaId) {
+        return toResponse(findOwned(userId, ideaId));
+    }
+
+    private Idea findOwned(Long userId, Long ideaId) {
         Idea idea = ideas.findById(ideaId).orElseThrow(() -> new CustomException(ErrorCode.IDEA_NOT_FOUND));
         if (!idea.getUser().getId().equals(userId)) {
             throw new CustomException(ErrorCode.IDEA_ACCESS_DENIED);
         }
+        return idea;
+    }
+
+    /** 항목별 가중치를 예약한다. 현재 점수에는 영향이 없고 다음 평가 턴부터 적용된다. */
+    @Transactional
+    public IdeaResponse reserveWeights(Long userId, Long ideaId, UpdateWeightsRequest req) {
+        Idea idea = findOwned(userId, ideaId);
+        idea.reserveWeights(req.weights());
         return toResponse(idea);
     }
 
@@ -53,11 +62,15 @@ public class IdeaService {
     private IdeaResponse toResponse(Idea idea) {
         List<ScoreResponse> scores = idea.getScores().stream()
                 .map(s -> new ScoreResponse(
-                        s.getType(), s.getWeight(), s.getScore(),
+                        s.getType(), percent(s.getWeight()), percent(s.getPendingWeight()), s.getScore(),
                         evaluations.findFirstByScoreIdOrderByCreatedAtDesc(s.getId())
                                 .map(e -> e.getDifference()).orElse(null)))
                 .toList();
         return new IdeaResponse(idea.getId(), idea.getType(), idea.getProblem(), idea.getTarget(),
                 idea.getSolution(), idea.getExpectation(), idea.getTotalScore(), idea.getCreatedAt(), scores);
+    }
+
+    private static Integer percent(java.math.BigDecimal fraction) {
+        return fraction == null ? null : fraction.movePointRight(2).intValue();
     }
 }

@@ -11,8 +11,28 @@ spring:
       ddl-auto: validate
   flyway:
     enabled: true
+  docker:
+    compose:
+      # 로컬 실행 시 루트의 docker-compose.yml DB를 자동으로 띄운다. 끄려면 DOCKER_COMPOSE_ENABLED=false
+      enabled: ${DOCKER_COMPOSE_ENABLED:true}
+      file: ../docker-compose.yml
+      lifecycle-management: start_only
 
 jwt:
   # 운영에서는 반드시 JWT_SECRET 환경변수로 32바이트 이상 값을 주입한다.
   secret: ${JWT_SECRET:dev-only-secret-key-change-me-please-32bytes!!}
   access-token-minutes: ${JWT_ACCESS_MINUTES:60}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html

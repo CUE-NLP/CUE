@@ -9,21 +9,18 @@ import com.cue.user.entity.User;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class UserService {
     private final UserRepository users;
     private final PasswordEncoder encoder;
 
-    public UserService(UserRepository users, PasswordEncoder encoder) {
-        this.users = users;
-        this.encoder = encoder;
-    }
-
     @Transactional
     public UserResponse signUp(SignUpRequest req) {
         if (users.existsByEmail(req.email())) {
-            throw new CustomException(ErrorCode.EMAIL_DUPLICATED);
+            throw new CustomException(ErrorCode.EMAIL_ALREADY_EXISTS);
         }
         User saved = users.save(new User(req.nickname(), req.email(), encoder.encode(req.password())));
         return UserResponse.from(saved);

@@ -1,11 +1,9 @@
 package com.cue.global.config;
 
-import com.cue.global.error.ErrorCode;
-import com.cue.global.error.ErrorResponse;
 import com.cue.global.security.JwtPrincipalConverter;
 import com.cue.global.security.JwtProperties;
+import com.cue.global.security.SecurityErrorWriter;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
-import jakarta.servlet.http.HttpServletResponse;
 import java.nio.charset.StandardCharsets;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -13,7 +11,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -26,33 +23,27 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 @EnableConfigurationProperties(JwtProperties.class)
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http, JwtPrincipalConverter converter, ObjectMapper mapper) throws Exception {
+    SecurityFilterChain filterChain(HttpSecurity http, JwtPrincipalConverter converter, SecurityErrorWriter errorWriter) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(a -> a
                         .requestMatchers(HttpMethod.POST, "/api/users", "/api/auth/login").permitAll()
+                        .requestMatchers("/actuator/health/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(o -> o
                         .jwt(j -> j.jwtAuthenticationConverter(converter))
-                        .authenticationEntryPoint((req, res, e) -> write(res, mapper, ErrorCode.UNAUTHORIZED))
-                        .accessDeniedHandler((req, res, e) -> write(res, mapper, ErrorCode.FORBIDDEN)));
+                        .authenticationEntryPoint(errorWriter)
+                        .accessDeniedHandler(errorWriter))
+                .exceptionHandling(e -> e.authenticationEntryPoint(errorWriter).accessDeniedHandler(errorWriter));
         return http.build();
-    }
-
-    private void write(HttpServletResponse res, ObjectMapper mapper, ErrorCode code) throws java.io.IOException {
-        res.setStatus(code.getStatus().value());
-        res.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        res.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        res.getWriter().write(mapper.writeValueAsString(ErrorResponse.of(code)));
     }
 
     @Bean
