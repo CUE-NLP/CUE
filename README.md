@@ -33,6 +33,8 @@ CUE
 | Test | JUnit 5, Testcontainers (PostgreSQL) |
 | Infra | Docker, GitHub Actions |
 
+> 팀원용 환경 세팅·컨벤션·협업 규칙은 [GUIDE.md](GUIDE.md)를 참고하세요.
+
 ## 백엔드 구조 (도메인별)
 
 ```

@@ -1,6 +1,6 @@
-# CUE 프로젝트 가이드 (Claude 작업용)
+# CUE 프로젝트 가이드
 
-작업을 시작하기 전에 이 문서를 읽고, 코드·구조·결정이 바뀌면 **같은 PR에서 이 문서도 함께 갱신**한다.
+팀원과 Claude가 함께 보는 작업 가이드. 작업을 시작하기 전에 읽고, 코드·구조·결정이 바뀌면 **같은 PR에서 이 문서도 함께 갱신**한다.
 
 ## 서비스 개요
 CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근거로 경쟁력을 **지속적으로 재평가**하는 개인 아이디어 포트폴리오 서비스다. (자연어처리 7조: 김경주·이정원 백엔드, 최원호·강지영 프론트)
@@ -19,7 +19,7 @@ CUE/
 ├── docker-compose.yml   로컬 PostgreSQL (호스트 포트 5433)
 ├── .github/pull_request_template.md
 ├── README.md   사용자용 문서
-└── CLAUDE.md   이 문서
+└── GUIDE.md    이 문서 (작업 가이드)
 ```
 
 ## 기술 스택 (backend)
@@ -116,6 +116,50 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, scores 1:N eva
 
 Swagger: `/swagger-ui.html`, 헬스체크: `/actuator/health`.
 
+## 팀원 온보딩 (로컬 환경 세팅)
+
+### 필요한 것
+- **JDK 21** (필수). Gradle toolchain이 21을 요구하며 자동 다운로드는 설정하지 않았다. `java -version`이 21이 아니어도 설치만 되어 있으면 Gradle이 찾아 쓴다 (macOS는 `/usr/libexec/java_home -V`로 확인).
+- **Docker** (필수). 로컬 DB 기동과 통합 테스트(Testcontainers)에 쓴다. 첫 실행 때 `postgres:17` 이미지를 받는다.
+- IntelliJ라면 **Lombok 플러그인 + Annotation Processing 활성화** (Settings → Build → Compiler → Annotation Processors → Enable). 꺼져 있으면 getter가 없다는 컴파일 오류가 난다.
+
+### 처음 실행
+```bash
+git clone https://github.com/CUE-NLP/CUE.git
+cd CUE/backend
+./gradlew bootRun
+```
+- `.env` 파일이나 별도 설정이 **필요 없다**. 모든 값에 개발용 기본값이 있다.
+- DB는 Docker Compose Support가 루트의 `docker-compose.yml`로 자동 기동한다 (`application.yml`의 `file: ../docker-compose.yml` 상대 경로라서 **작업 디렉터리가 `backend/`여야 한다**. IntelliJ에서 메인 클래스로 직접 실행할 때는 Working directory를 `backend`로 맞춘다).
+- 자동 기동이 안 되면 `DOCKER_COMPOSE_ENABLED=false`로 두고 `docker compose up -d db`를 직접 실행한다.
+- 확인: `http://localhost:8080/swagger-ui.html`, `http://localhost:8080/actuator/health`
+
+### 로컬 DB 정보
+| 항목 | 값 |
+| --- | --- |
+| 호스트/포트 | `localhost:5433` (로컬 PostgreSQL이 5432를 써도 충돌하지 않게 5433으로 매핑) |
+| DB / 계정 / 비밀번호 | `cue` / `cue` / `cue` |
+| 초기화 | `docker compose down -v` 후 다시 실행 (Flyway가 스키마를 새로 만든다) |
+
+5433도 이미 쓰는 중이면 `docker-compose.yml`의 포트와 `DB_URL`을 함께 바꾼다.
+
+### 환경 변수 (선택)
+| 이름 | 기본값 | 비고 |
+| --- | --- | --- |
+| `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | 위 로컬 DB | 로컬에서는 설정 불필요 |
+| `JWT_SECRET` | 개발용 임시 값 | **개발 서버·운영에서는 반드시 교체** (32바이트 이상). 서버 인스턴스끼리 같은 값이어야 한다 |
+| `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간 |
+| `DOCKER_COMPOSE_ENABLED` | `true` | 실행 시 DB 자동 기동 여부 |
+
+- 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 키(Gemini 등)가 추가되면 이 표에 변수 이름을 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
+
+### 협업 시 주의
+- **Flyway 버전 충돌**: 두 명이 동시에 `V3__*.sql`을 만들면 충돌한다. 마이그레이션을 추가하기 전에 `main`을 최신으로 받아 다음 번호를 확인하고, 번호가 겹치면 나중에 머지하는 사람이 번호를 올린다. 이미 머지된 파일은 절대 수정하지 않는다.
+- 엔티티를 바꾸면 마이그레이션도 같은 PR에 넣는다 (`ddl-auto: validate`라서 어긋나면 서버가 안 뜬다).
+- 에러 코드(`ErrorCode`)와 마이그레이션 번호는 충돌이 잦은 파일이다. PR을 작게 유지하고 자주 `main`을 반영한다.
+- 통합 테스트는 Docker가 켜져 있어야 통과한다.
+- 프론트 연동: 아직 **CORS 설정이 없다.** 프론트가 브라우저에서 호출하기 시작하면 허용 도메인을 설정해야 한다 (TODO).
+
 ## 실행·테스트
 ```bash
 cd backend && ./gradlew bootRun    # Docker Compose Support가 루트 docker-compose.yml의 DB를 자동 기동
@@ -130,7 +174,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - **PR 기반**으로 작업한다. `main`에 직접 커밋하지 않고 `feature/...` 브랜치 → PR(`.github/pull_request_template.md` 형식). 커밋·푸시·PR은 사용자가 요청할 때만 한다.
 - 커밋 메시지는 한국어, `feat:`/`fix:`/`docs:` 접두사.
 - 코드 변경 시 테스트를 함께 추가/수정하고 `./gradlew test`를 통과시킨 뒤 알린다.
-- 동작이 바뀌면 `README.md`(사용자용)와 이 문서(작업용)를 함께 갱신한다.
+- 동작이 바뀌면 `README.md`(사용자용)와 이 문서(작업 가이드)를 함께 갱신한다.
 
 ## 미구현·TODO
 - 24시간 주기 평가 스케줄러(`@Scheduled`): 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집 → AI 평가 → 변화량·근거 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다.
