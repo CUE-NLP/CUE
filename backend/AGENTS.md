@@ -1,6 +1,7 @@
-# CUE 프로젝트 가이드
+# CUE Backend 작업 가이드 (AGENTS.md)
 
-팀원과 AI 코딩 도구(Claude, ChatGPT, Copilot, Cursor 등 무엇이든)가 함께 보는 작업 가이드. AI 도구를 쓸 때는 작업 시작 전에 이 문서를 먼저 읽게 한다. 작업을 시작하기 전에 읽고, 코드·구조·결정이 바뀌면 **같은 PR에서 이 문서도 함께 갱신**한다.
+`backend/` 영역 작업 가이드. 팀원과 AI 코딩 도구가 함께 보며, **백엔드 코드·구조·결정이 바뀌면 같은 PR에서 이 문서도 갱신**한다.
+공통 규칙(커밋 컨벤션, 브랜치·PR, 작업 방식)은 루트 [AGENTS.md](../AGENTS.md)를 따른다.
 
 ## 서비스 개요
 CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근거로 경쟁력을 **지속적으로 재평가**하는 개인 아이디어 포트폴리오 서비스다. (자연어처리 7조: 김경주·이정원 백엔드, 최원호·강지영 프론트)
@@ -10,17 +11,6 @@ CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근�
 2. 구조화: AI가 타깃·문제·해결·기대효과로 요약 → **사용자가 검증·수정 완료해야만 DB에 저장**한다. (원문·입력 방식은 DB에 저장하지 않는다.)
 3. 평가: 4개 기준(문제 중요성, 시장 수요, 시장 차별성, 기술적 실현 가능성)으로 점수화.
 4. 갱신(Idea Delta): 하루 1회 AI가 재평가 → **점수에 변화가 있을 때만** 변화량(difference)과 근거 요약(출처 URL 포함)을 저장. 다음 날 이전 점수에 변화량을 반영해 보여주고 변화량은 점수 옆에 작게 표시한다.
-
-## 저장소 구조
-```
-CUE/
-├── backend/    Spring Boot API (현재 작업 대상)
-├── frontend/   React·TypeScript (아직 비어 있음)
-├── docker-compose.yml   로컬 PostgreSQL (호스트 포트 5433)
-├── .github/pull_request_template.md
-├── README.md   사용자용 문서
-└── GUIDE.md    이 문서 (작업 가이드)
-```
 
 ## 기술 스택 (backend)
 - Java 21 (이 머신의 JDK 21 사용, Java 25 아님), Spring Boot 4.0.9, Gradle(Kotlin DSL) 9.1
@@ -170,48 +160,10 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - 테스트: `DomainTest`(순수 단위), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치 흐름).
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
-## 작업 방식
-- **PR 기반**으로 작업한다. `main`에 직접 커밋하지 않고 `feature/...` 브랜치 → PR(`.github/pull_request_template.md` 형식). 커밋·푸시·PR은 사용자가 요청할 때만 한다.
-- 커밋·브랜치·PR 이름은 아래 **커밋 컨벤션**을 따른다.
-- 코드 변경 시 테스트를 함께 추가/수정하고 `./gradlew test`를 통과시킨 뒤 알린다.
-- 동작이 바뀌면 `README.md`(사용자용)와 이 문서(작업 가이드)를 함께 갱신한다.
-
-## 커밋 컨벤션
-
-### 커밋 메시지 형식
-```
-type: 제목 (한국어, 50자 안팎, 마침표 없음, "~한다/~추가" 등 명사형·평서형으로 간결하게)
-
-(선택) 본문 — 무엇을/왜 바꿨는지. 한 줄 띄우고 작성.
-
-(선택) Closes #이슈번호
-```
-
-| type | 용도 |
-| --- | --- |
-| `feat` | 새 기능 추가 |
-| `fix` | 버그 수정 |
-| `docs` | 문서만 변경 (README, GUIDE 등) |
-| `refactor` | 동작 변경 없는 구조 개선 |
-| `test` | 테스트 추가·수정 |
-| `chore` | 빌드 설정, 의존성, 기타 잡무 |
-| `style` | 포맷·공백 등 코드 의미 없는 변경 |
-| `perf` | 성능 개선 |
-| `ci` | CI/CD 설정 변경 |
-
-- 한 커밋에는 **하나의 목적**만 담는다 (기능 + 무관한 리팩터링을 섞지 않는다).
-- DB 스키마 변경은 마이그레이션 파일을 같은 커밋에 포함한다.
-- AI 도구로 작성한 커밋은 말미에 `Co-Authored-By:` 줄을 남긴다.
-- 예시
-  - `feat: 아이디어 가중치 변경 예약 API 추가`
-  - `fix: JWT 만료 토큰이 A005로 응답되던 문제 수정`
-  - `docs: GUIDE에 팀원 온보딩 섹션 추가`
-  - `chore: Testcontainers 의존성 추가`
-
-### 브랜치·PR 이름
-- 브랜치: `{type}/{간단한-설명}` 예) `feature/idea-weights`, `fix/jwt-expired-code`, `docs/guide-update`. (`feat` 대신 `feature`를 쓴다.)
-- PR 제목은 커밋 메시지와 같은 형식(`type: 제목`)으로 쓰고, 본문은 `.github/pull_request_template.md`를 채운다.
-- `main`에 직접 푸시하지 않는다. 리뷰 후 병합한다.
+## 작업 규칙 (backend)
+- 코드 변경 시 테스트를 함께 추가/수정하고 `cd backend && ./gradlew test`를 통과시킨 뒤 알린다.
+- 동작이 바뀌면 루트 `README.md`의 Backend 섹션과 이 문서를 함께 갱신한다.
+- 이미 반영된 Flyway 마이그레이션은 수정하지 않고 새 버전을 추가한다.
 
 ## 미구현·TODO
 - 24시간 주기 평가 스케줄러(`@Scheduled`): 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집 → AI 평가 → 변화량·근거 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다.
@@ -219,7 +171,7 @@ type: 제목 (한국어, 50자 안팎, 마침표 없음, "~한다/~추가" 등 �
 - AI 구조화 API (입력 텍스트 → 4항목 초안; 저장은 검증 후 별도 호출).
 - 외부 API 조합(`IdeaType.searchProviders`, `ApiProvider.TREND_PROVIDERS`) 팀 확정.
 - 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
-- GitHub Actions CI(빌드·테스트), `frontend/` 구성.
+- GitHub Actions CI(빌드·테스트).
 - 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.
 
 ## 참고

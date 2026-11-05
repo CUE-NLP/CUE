@@ -17,23 +17,49 @@
 ```
 CUE
 ├── backend/    Spring Boot API 서버
-├── frontend/   React · TypeScript (작업 예정)
+├── frontend/   React · TypeScript
 ├── docker-compose.yml   로컬 PostgreSQL
+├── AGENTS.md   공통 작업 규칙 (커밋 컨벤션, PR 규칙)
 └── .github/    PR 템플릿
 ```
+
+| 영역 | 담당 | 가이드 |
+| --- | --- | --- |
+| Frontend | 최원호, 강지영 | 작업 예정 |
+| Backend | 김경주, 이정원 | [backend/AGENTS.md](backend/AGENTS.md) |
 
 ## 기술 스택
 
 | 영역 | 기술 |
 | --- | --- |
+| Frontend | React, TypeScript |
 | Backend | Java 21, Spring Boot 4, Spring Security (JWT), Spring Data JPA, Lombok, RestClient, Actuator, springdoc(Swagger) |
 | Database | PostgreSQL 17, Flyway |
 | AI | Gemini API (구조화 · 평가), 음성인식 STT |
-| Frontend | React, TypeScript |
 | Test | JUnit 5, Testcontainers (PostgreSQL) |
 | Infra | Docker, GitHub Actions |
 
-> 팀원용 환경 세팅·컨벤션·협업 규칙은 [GUIDE.md](GUIDE.md)를 참고하세요.
+---
+
+# Frontend
+
+> 작업 예정입니다. 구조와 실행 방법은 작업이 시작되면 이 섹션에 추가합니다.
+
+## 프론트가 맡는 역할
+- 아이디어 입력(텍스트·음성): **음성 인식(STT)은 프론트에서 처리**하고, 서버에는 텍스트만 보냅니다.
+- AI 구조화 결과(타깃 · 문제 · 해결 · 기대효과) 확인·수정 후 저장 요청
+- 리더보드(점수 · 순위 · 변화량), Idea Delta, 항목별 가중치 조절 화면
+
+## 백엔드 연동 참고
+- **응답 형식**: 모든 응답이 `CommonResponse` 래퍼입니다 (`result`, `code`, `message`, `data`, `timestamp`). 자세한 형식은 [응답 형식](#응답-형식)을 참고하세요.
+- **인증**: 로그인(`POST /api/auth/login`)으로 받은 `accessToken`을 `Authorization: Bearer {accessToken}` 헤더로 보냅니다.
+- **에러 처리**: `code` 값으로 분기합니다. 토큰 만료는 `A004`입니다. 전체 목록은 [에러 코드](#에러-코드)를 참고하세요.
+- **API 문서**: 백엔드 실행 후 `http://localhost:8080/swagger-ui.html`
+- **CORS**: 아직 설정되어 있지 않습니다. 브라우저에서 호출을 시작할 때 백엔드와 허용 도메인을 맞춰야 합니다.
+
+---
+
+# Backend
 
 ## 백엔드 구조 (도메인별)
 
@@ -149,7 +175,7 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 ## 데이터베이스
 
 스키마는 Flyway 마이그레이션(`backend/src/main/resources/db/migration`)으로 관리합니다.
-이미 반영된 파일은 수정하지 말고, 변경은 새 버전 파일(`V2__*.sql`)로 추가해 주세요.
+이미 반영된 파일은 수정하지 말고, 변경은 새 버전 파일(`V3__*.sql` 등)로 추가해 주세요.
 
 | 테이블 | 설명 |
 | --- | --- |
@@ -160,8 +186,11 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지) |
 | `trends` | 고정 API로 수집한 트렌드 요약 |
 
+---
+
 ## 협업 규칙
 
 - 작업은 Issue 단위로 브랜치를 만들어 진행하고, PR 템플릿에 변경 내용과 확인 방법을 작성합니다.
+- 커밋·브랜치·PR 이름은 [AGENTS.md](AGENTS.md)의 커밋 컨벤션을 따릅니다.
 - 코드는 리뷰 후 병합합니다.
 - 기술 이견은 비교 실험으로, 범위·일정 변경은 팀 합의 후 Notion에 기록합니다.
