@@ -11,8 +11,28 @@ spring:
       ddl-auto: validate
   flyway:
     enabled: true
+  docker:
+    compose:
+      # 기본은 꺼짐. ./gradlew bootRun 이 켜고 compose 파일 경로를 넘긴다 (build.gradle.kts 참고).
+      # IDE에서 직접 실행할 때는 `docker compose up -d db` 로 DB를 먼저 띄운다.
+      enabled: ${DOCKER_COMPOSE_ENABLED:false}
+      lifecycle-management: start_only
 
 jwt:
   # 운영에서는 반드시 JWT_SECRET 환경변수로 32바이트 이상 값을 주입한다.
   secret: ${JWT_SECRET:dev-only-secret-key-change-me-please-32bytes!!}
   access-token-minutes: ${JWT_ACCESS_MINUTES:60}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html

@@ -11,18 +11,14 @@ import com.cue.user.repository.UserRepository;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class AuthService {
     private final UserRepository users;
     private final PasswordEncoder encoder;
     private final JwtTokenProvider tokenProvider;
-
-    public AuthService(UserRepository users, PasswordEncoder encoder, JwtTokenProvider tokenProvider) {
-        this.users = users;
-        this.encoder = encoder;
-        this.tokenProvider = tokenProvider;
-    }
 
     @Transactional(readOnly = true)
     public TokenResponse login(LoginRequest req) {

@@ -4,9 +4,14 @@ import com.cue.evaluation.entity.Evaluation;
 import com.cue.idea.entity.Idea;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 @Entity
 @Table(name = "sources")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Source {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -34,8 +39,6 @@ public class Source {
     @Column(name = "checked_at")
     private LocalDateTime checkedAt;
 
-    protected Source() {}
-
     public Source(Idea idea, ApiProvider provider, String keyword) {
         this.idea = idea;
         this.provider = provider;
@@ -50,11 +53,4 @@ public class Source {
         return changed;
     }
 
-    public Long getId() { return id; }
-    public Idea getIdea() { return idea; }
-    public Evaluation getEvaluation() { return evaluation; }
-    public ApiProvider getProvider() { return provider; }
-    public String getKeyword() { return keyword; }
-    public String getContentHash() { return contentHash; }
-    public LocalDateTime getCheckedAt() { return checkedAt; }
 }

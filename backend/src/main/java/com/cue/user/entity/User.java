@@ -2,9 +2,14 @@ package com.cue.user.entity;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 @Entity
 @Table(name = "users")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class User {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -22,17 +27,10 @@ public class User {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    protected User() {}
-
     public User(String nickname, String email, String passwordHash) {
         this.nickname = nickname;
         this.email = email;
         this.passwordHash = passwordHash;
     }
 
-    public Long getId() { return id; }
-    public String getNickname() { return nickname; }
-    public String getEmail() { return email; }
-    public String getPasswordHash() { return passwordHash; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
 }

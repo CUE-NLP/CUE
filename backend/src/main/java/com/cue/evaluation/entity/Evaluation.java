@@ -5,10 +5,15 @@ import com.cue.trend.entity.Trend;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 /** 하루 1회 AI 재평가 결과. 점수에 변화가 있을 때만 생성된다. */
 @Entity
 @Table(name = "evaluations")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Evaluation {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -32,8 +37,6 @@ public class Evaluation {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    protected Evaluation() {}
-
     public Evaluation(Score score, Trend trend, String evidenceSummary, BigDecimal difference) {
         this.score = score;
         this.trend = trend;
@@ -41,10 +44,4 @@ public class Evaluation {
         this.difference = difference;
     }
 
-    public Long getId() { return id; }
-    public Score getScore() { return score; }
-    public Trend getTrend() { return trend; }
-    public String getEvidenceSummary() { return evidenceSummary; }
-    public BigDecimal getDifference() { return difference; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
 }

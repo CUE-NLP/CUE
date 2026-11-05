@@ -8,16 +8,13 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Component;
+import lombok.RequiredArgsConstructor;
 
 @Component
+@RequiredArgsConstructor
 public class JwtTokenProvider {
     private final JwtEncoder encoder;
     private final JwtProperties props;
-
-    public JwtTokenProvider(JwtEncoder encoder, JwtProperties props) {
-        this.encoder = encoder;
-        this.props = props;
-    }
 
     public String issue(UserPrincipal user) {
         Instant now = Instant.now();
