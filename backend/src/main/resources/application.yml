@@ -40,6 +40,11 @@ cue:
     zone: ${EVALUATION_ZONE:Asia/Seoul}
     # 아이디어 사이 대기(ms). Gemini 무료 티어 분당 호출 한도용 (아이디어당 최대 2회 호출)
     delay-ms: ${EVALUATION_DELAY_MS:15000}
+  trend:
+    # 글로벌 트렌드(5번째 평가 기준 TREND): 고정 provider(HN·GitHub·Hugging Face)를 키워드 없이 하루 1회 수집한다.
+    # 최근 N일 안에 올라온 글·저장소를 인기 순으로 보고, provider마다 상위 top-n개를 읽어 요약한다 (Gemini 호출 수에 비례)
+    days: ${TREND_DAYS:7}
+    top-n: ${TREND_TOP_N:5}
   source:
     # 외부 자료 API 토큰/키: 모두 선택. 없으면 익명 호출(rate limit 낮음). 값은 환경변수로만 주입하고 커밋하지 않는다.
     connect-timeout: 3s

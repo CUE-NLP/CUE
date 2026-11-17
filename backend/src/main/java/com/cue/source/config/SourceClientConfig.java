@@ -15,7 +15,7 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 @Configuration
-@EnableConfigurationProperties(SourceApiProperties.class)
+@EnableConfigurationProperties({SourceApiProperties.class, com.cue.trend.config.TrendProperties.class})
 public class SourceClientConfig {
     private static final String GITHUB_URL = "https://api.github.com";
     private static final String HUGGING_FACE_URL = "https://huggingface.co";

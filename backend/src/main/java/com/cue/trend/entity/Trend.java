@@ -9,7 +9,10 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/** 재평가 한 번에서 변경이 감지된 외부 자료를 Gemini로 요약한 결과. 그 재평가의 {@code evaluations.trend_id}가 가리킨다. */
+/**
+ * 글로벌 트렌드 1행(하루 1회 수집, 키워드 없음). 5번째 평가 기준 TREND의 근거로, 그 평가의 {@code evaluations.trend_id}가 가리킨다.
+ * {@code content_hash}는 상위 항목(제목·URL·요약)의 해시라서 어제와 같으면 새 행을 만들지 않고 기존 행을 그대로 쓴다.
+ */
 @Entity
 @Table(name = "trends")
 @Getter
@@ -19,19 +22,23 @@ public class Trend {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /** 최종 트렌드 요약 (provider별 요약을 합친 것). */
     @Column(nullable = false, columnDefinition = "TEXT")
     private String summary;
 
-    /** 요약에 쓰인 provider 이름 (쉼표 구분, 예: "GITHUB,HACKER_NEWS"). */
+    /** 수집에 쓰인 provider 이름 (쉼표 구분, 예: "HACKER_NEWS,GITHUB"). */
     @Column(nullable = false)
     private String providers;
+
+    @Column(name = "content_hash", nullable = false, length = 64)
+    private String contentHash;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    public Trend(String summary, List<ApiProvider> providers) {
+    public Trend(String summary, List<ApiProvider> providers, String contentHash) {
         this.summary = summary;
         this.providers = providers.stream().map(Enum::name).collect(Collectors.joining(","));
+        this.contentHash = contentHash;
     }
-
 }

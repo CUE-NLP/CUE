@@ -187,4 +187,58 @@ class SourceClientTest {
         CustomException e = assertThrows(CustomException.class, () -> new HackerNewsSourceClient(b.build(), SETTINGS, null).search("x"));
         assertEquals(ErrorCode.EXTERNAL_SERVER_ERROR, e.getErrorCode());
     }
+
+    // ===== 글로벌 트렌드: 키워드 없는 급상승 조회 =====
+
+    @Test
+    void 트렌드_GitHub은_최근_N일_새로_만든_저장소를_stars_순으로_키워드_없이_조회한다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://gh.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://gh.test/search/repositories")))
+                .andExpect(request -> assertTrue(decodedQuery(request).contains("q=created:>2026-06-23"), decodedQuery(request)))
+                .andExpect(queryParam("sort", "stars")).andExpect(queryParam("per_page", "3"))
+                .andRespond(withSuccess("{\"items\":[{\"full_name\":\"a/b\",\"html_url\":\"https://github.com/a/b\",\"description\":\"d\","
+                        + "\"pushed_at\":\"2026-06-29T01:02:03Z\",\"stargazers_count\":900}]}", MediaType.APPLICATION_JSON));
+        List<SourceItem> items = new GithubSourceClient(b.build(), SETTINGS)
+                .trending(new SearchSettings(3, 7, SETTINGS.clock()));
+        assertEquals("a/b", items.get(0).title());
+        server.verify();
+    }
+
+    @Test
+    void 트렌드_HuggingFace는_검색어_없이_trendingScore_순으로_조회한다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://hf.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://hf.test/api/models")))
+                .andExpect(request -> assertFalse(request.getURI().getRawQuery().contains("search"), request.getURI().toString()))
+                .andExpect(queryParam("sort", "trendingScore")).andExpect(queryParam("direction", "-1"))
+                .andExpect(queryParam("limit", "3"))
+                .andRespond(withSuccess("[{\"id\":\"org/m\",\"pipeline_tag\":\"text-generation\",\"downloads\":5,\"likes\":1}]", MediaType.APPLICATION_JSON));
+        List<SourceItem> items = new HuggingFaceSourceClient(b.build(), "https://hf.test", SETTINGS)
+                .trending(new SearchSettings(3, 7, SETTINGS.clock()));
+        assertEquals("org/m", items.get(0).title());
+        server.verify();
+    }
+
+    @Test
+    void 트렌드_HackerNews는_빈_질의에_최근_N일_필터로_조회한다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://hn.test");
+        MockRestServiceServer server = bind(b);
+        // 2026-06-30 − 7일 = 2026-06-23 00:00 UTC = 1782172800
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://hn.test/api/v1/search?query=&")))
+                .andExpect(queryParam("tags", "story")).andExpect(queryParam("hitsPerPage", "3"))
+                .andExpect(request -> assertTrue(decodedQuery(request).contains("numericFilters=created_at_i>1782172800"), decodedQuery(request)))
+                .andRespond(withSuccess("{\"hits\":[{\"title\":\"T\",\"url\":\"https://x.test/a\",\"points\":900,\"num_comments\":50,\"created_at\":\"2026-06-28T00:00:00Z\",\"objectID\":\"1\"}]}", MediaType.APPLICATION_JSON));
+        List<SourceItem> items = new HackerNewsSourceClient(b.build(), SETTINGS, new WebContentFetcher(null, 3, 8000))
+                .trending(new SearchSettings(3, 7, SETTINGS.clock()));
+        assertEquals("https://x.test/a", items.get(0).url());
+        server.verify();
+    }
+
+    @Test
+    void 트렌드를_지원하지_않는_provider는_S002() {
+        SourceClient stack = new StackExchangeSourceClient(RestClient.builder().baseUrl("https://se.test").build(), "", SETTINGS);
+        assertEquals(ErrorCode.SOURCE_PROVIDER_NOT_SUPPORTED,
+                assertThrows(CustomException.class, () -> stack.trending(SETTINGS)).getErrorCode());
+    }
 }

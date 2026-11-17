@@ -36,6 +36,16 @@ public class HackerNewsSourceClient implements SourceClient {
 
     @Override
     public List<SourceItem> search(String keyword) {
+        return query(keyword, settings);
+    }
+
+    /** 글로벌 트렌드: 키워드 없이 최근 N일 스토리를 points 순으로 (빈 질의 + 날짜 필터는 인기순으로 정렬된다). */
+    @Override
+    public List<SourceItem> trending(SearchSettings s) {
+        return query("", s);
+    }
+
+    private List<SourceItem> query(String keyword, SearchSettings settings) {
         JsonNode root = SourceClientSupport.getJson(restClient.get().uri(
                 uri -> uri.path("/api/v1/search")
                         .queryParam("query", "{q}").queryParam("tags", "story")

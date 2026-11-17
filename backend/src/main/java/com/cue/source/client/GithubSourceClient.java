@@ -31,7 +31,16 @@ public class GithubSourceClient implements SourceClient {
 
     @Override
     public List<SourceItem> search(String keyword) {
-        String query = keyword + " pushed:>" + settings.cutoffDate();
+        return query(keyword + " pushed:>" + settings.cutoffDate(), settings);
+    }
+
+    /** 글로벌 트렌드: 최근 N일 안에 <b>새로 만들어진</b> 저장소를 stars 순으로 (키워드 없음). 갓 뜨는 프로젝트를 잡는다. */
+    @Override
+    public List<SourceItem> trending(SearchSettings s) {
+        return query("created:>" + s.cutoffDate(), s);
+    }
+
+    private List<SourceItem> query(String query, SearchSettings settings) {
         JsonNode root = SourceClientSupport.getJson(restClient.get().uri(
                 uri -> uri.path("/search/repositories")
                         .queryParam("q", "{q}").queryParam("sort", "stars").queryParam("order", "desc")

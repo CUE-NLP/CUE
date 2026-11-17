@@ -32,10 +32,24 @@ public class HuggingFaceSourceClient implements SourceClient {
 
     @Override
     public List<SourceItem> search(String keyword) {
-        JsonNode root = SourceClientSupport.getJson(restClient.get().uri(
-                uri -> uri.path("/api/models")
-                        .queryParam("search", "{q}").queryParam("sort", "trendingScore").queryParam("direction", -1)
-                        .queryParam("limit", settings.topN()).build(keyword)));
+        return query(keyword, settings);
+    }
+
+    /** 글로벌 트렌드: 검색어 없이 허브의 trendingScore 순 상위 모델. */
+    @Override
+    public List<SourceItem> trending(SearchSettings s) {
+        return query("", s);
+    }
+
+    private List<SourceItem> query(String keyword, SearchSettings settings) {
+        JsonNode root = SourceClientSupport.getJson(restClient.get().uri(uri -> {
+            var b = uri.path("/api/models");
+            if (!keyword.isBlank()) {
+                b.queryParam("search", "{q}");
+            }
+            return b.queryParam("sort", "trendingScore").queryParam("direction", -1)
+                    .queryParam("limit", settings.topN()).build(keyword.isBlank() ? new Object[0] : new Object[]{keyword});
+        }));
         List<SourceItem> items = new ArrayList<>();
         for (JsonNode n : root) {
             String id = SourceClientSupport.text(n, "id");

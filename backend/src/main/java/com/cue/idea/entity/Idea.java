@@ -69,6 +69,10 @@ public class Idea {
     @Column(name = "needs_full_evaluation", nullable = false)
     private boolean needsFullEvaluation = true;
 
+    /** 이 아이디어의 TREND 점수를 마지막으로 평가한 글로벌 트렌드 id. null이면 TREND 첫 평가 전 (내용이 바뀌면 다시 null). */
+    @Column(name = "last_trend_id")
+    private Long lastTrendId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -112,13 +116,19 @@ public class Idea {
         refreshStatus();
         String[] after = {this.problem, this.target, this.solution, this.expectation};
         if (!java.util.Arrays.equals(before, after)) {
-            needsFullEvaluation = true; // 내용이 바뀌었으니 다음 평가에서 전체 재평가
+            needsFullEvaluation = true; // 내용이 바뀌었으니 다음 평가에서 전체 재평가 (TREND도 첫 평가부터 다시)
+            lastTrendId = null;
         }
     }
 
     /** 전체(초기) 평가를 끝냈음을 기록한다. */
     public void completeFullEvaluation() {
         needsFullEvaluation = false;
+    }
+
+    /** 글로벌 트렌드({@code trendId})로 TREND 평가를 끝냈음을 기록한다 (점수가 안 바뀌었어도 평가는 한 것이다). */
+    public void completeTrendEvaluation(Long trendId) {
+        lastTrendId = trendId;
     }
 
     /** AI가 다시 추출한 아이디어 종류를 반영한다. */

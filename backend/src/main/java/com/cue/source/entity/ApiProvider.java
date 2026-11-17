@@ -2,7 +2,7 @@ package com.cue.source.entity;
 
 import java.util.List;
 
-/** 외부 자료 수집 API 6종. 아이디어 검색은 종류별 3개, 트렌드는 고정 4개를 호출한다. */
+/** 외부 자료 수집 API 6종. 아이디어 키워드 검색은 종류별 3~4개, 글로벌 트렌드는 고정 3개(키워드 없이)를 호출한다. */
 public enum ApiProvider {
     HACKER_NEWS,
     GITHUB,
@@ -11,7 +11,6 @@ public enum ApiProvider {
     SEMANTIC_SCHOLAR,
     STACK_EXCHANGE;
 
-    /** 트렌드 조사에 쓰는 고정 4개 (TODO: 팀 확정 후 조정). */
-    public static final List<ApiProvider> TREND_PROVIDERS =
-            List.of(HACKER_NEWS, GITHUB, HUGGING_FACE, SEMANTIC_SCHOLAR);
+    /** 글로벌 트렌드(5번째 평가 기준 TREND)에 쓰는 고정 3개. 모두 키워드 없이 "급상승" 지표로 조회한다. */
+    public static final List<ApiProvider> TREND_PROVIDERS = List.of(HACKER_NEWS, GITHUB, HUGGING_FACE);
 }

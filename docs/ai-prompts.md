@@ -29,7 +29,7 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 ## 프롬프트별 명세
 
 ### trend-summary.txt
-목적: 키워드와 수집 자료로 트렌드를 3~5문장으로 요약한다. **두 단계에 같은 프롬프트를 쓴다**: ① 소스 단위 요약 — 한 source의 항목 요약들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 입력으로 → `sources.summary`에 저장, ② 최종 트렌드 요약 — 변경된 source들의 소스 요약을 입력으로 → `Trend`로 저장되고 평가 프롬프트의 `{{trendSummary}}`로 쓰인다.
+목적: **키워드 근거 자료**의 소스 단위 요약. 한 source(provider × 아이디어 키워드)의 항목 요약들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 3~5문장으로 요약해 `sources.summary`에 저장한다. (글로벌 트렌드는 키워드가 없어 `global-trend-summary.txt`를 쓴다.)
 
 | 플레이스홀더 | 설명 |
 | --- | --- |
@@ -57,6 +57,34 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 {"summary":"에이전트 워크플로를 코드로 정의해 실행하는 오픈소스 프레임워크다. 개발자 대상이며 문서화된 예제가 많지만 대규모 운영 사례는 README에 없다."}
 ```
 - 원문이 비었거나 의미가 없으면 `{"summary":""}` — 서버는 그 항목을 건너뛴다.
+
+### trend-item-summary.txt
+목적: **글로벌 트렌드**(키워드 없음)의 상위 항목 **한 건의 원문**을 읽고 2~3문장으로 요약한다. `item-summary.txt`와 같은 규칙에서 `{{keyword}}`만 뺐다. 결과는 `trend_items`에 저장된다(같은 URL은 `summary-reuse-days` 안이면 재사용).
+
+| 플레이스홀더 | 설명 |
+| --- | --- |
+| `{{title}}` | 항목 제목 |
+| `{{url}}` | 항목 URL |
+| `{{content}}` | 읽어 온 원문 텍스트(길이 상한 적용, 신뢰하지 않는 데이터) |
+
+출력 스키마와 예시:
+```json
+{"summary":"브라우저에서 돌아가는 소형 음성 인식 모델의 오픈소스 구현이다. 서버 없이 기기 안에서 추론하려는 흐름을 보여준다."}
+```
+- 원문이 비었거나 의미가 없으면 `{"summary":""}` — 서버는 그 항목을 건너뛴다.
+
+### global-trend-summary.txt
+목적: **글로벌 트렌드**를 3~5문장으로 요약한다. **두 단계에 같은 프롬프트를 쓴다**: ① provider별 요약 — 한 provider의 항목 요약들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 입력으로 → `trend_sources`에 저장, ② 최종 트렌드 요약 — provider별 요약들을 입력으로 → `trends.summary`에 저장되고 TREND 평가 프롬프트의 `{{trendSummary}}`로 쓰인다.
+
+| 플레이스홀더 | 설명 |
+| --- | --- |
+| `{{items}}` | 자료 목록. 단계 ①은 항목 줄(`[PROVIDER] …`), 단계 ②는 provider별 요약 줄(`[PROVIDER] 요약문`) |
+
+출력 스키마와 예시:
+```json
+{"summary":"최근 소형 모델을 기기에서 직접 돌리는 프로젝트가 여러 곳에서 늘고 있다. 에이전트 도구와 코드 생성 관련 저장소도 빠르게 주목받고 있다."}
+```
+- 자료가 비었으면 `{"summary":""}`.
 
 ### initial-evaluation.txt
 목적: 아이디어 등록(ACTIVE) 직후 첫 평가. 4개 기준을 한 번씩 0~100 정수로 채점하고 근거를 쓴다.
@@ -113,5 +141,5 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 - 점수 앵커 구간(5단계, 20점 단위)과 "자료 빈약 시 40~60" 기준이 적절한지 팀 확정 필요.
 - Gemini 모델 선택(예: flash 계열)과 무료 티어 한도(RPM/일일 요청/토큰) — API 키 수령 후 확인해 호출 간격·상위 N개를 정한다.
 - 변화량 제한(±10)과 하루 반영 정책, 자료 항목 개수·스니펫 길이 상한.
-- ~~`{{items}}`, `{{currentScores}}`의 직렬화 형식~~ — 확정: `{{items}}`/`{{changedItems}}`는 줄 단위 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(변경 감지로 새로 나타난 항목만, 최대 15건), `{{currentScores}}`는 `TYPE: 점수` 줄 단위. 구현: `TrendService.formatSources`, `EvaluationAnalyzer`.
+- ~~`{{items}}`, `{{currentScores}}`의 직렬화 형식~~ — 확정: `{{items}}`/`{{changedItems}}`는 줄 단위 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(상위 항목, 최대 15건), `{{currentScores}}`는 `TYPE: 점수` 줄 단위. 구현: `SourceTextFormat.formatSources`, `EvaluationAnalyzer`.
 - 영어 자료(GitHub 등)를 한국어로 요약할 때 고유명사 표기 규칙.
