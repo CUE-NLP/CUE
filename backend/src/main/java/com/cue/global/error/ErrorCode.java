@@ -38,6 +38,7 @@ public enum ErrorCode {
     IDEA_ACCESS_DENIED(HttpStatus.FORBIDDEN, "I002", "본인의 아이디어만 조회할 수 있습니다."),
     INVALID_WEIGHT(HttpStatus.BAD_REQUEST, "I003", "가중치는 5개 항목을 모두 0~100 정수로 입력하고 합이 100이어야 합니다."),
     IDEA_NOT_ACTIVE(HttpStatus.CONFLICT, "I004", "구조화 항목이 모두 채워지지 않은 보류 아이디어는 평가할 수 없습니다."),
+    IDEA_EVALUATING(HttpStatus.CONFLICT, "I005", "평가가 진행 중인 아이디어는 수정할 수 없습니다. 평가가 끝난 뒤 다시 시도해 주세요."),
 
     // ===== Source (외부 자료 수집, S-xxx) — 외부 API 통신 오류 자체는 G002 =====
     SOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "S001", "수집 설정(source)을 찾을 수 없습니다."),

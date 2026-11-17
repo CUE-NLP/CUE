@@ -11,6 +11,7 @@ import com.cue.idea.dto.IdeaResponse;
 import com.cue.idea.dto.ScoreResponse;
 import com.cue.idea.dto.UpdateIdeaRequest;
 import com.cue.idea.dto.UpdateWeightsRequest;
+import com.cue.idea.entity.EvaluationStatus;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaSort;
 import com.cue.idea.entity.IdeaStatus;
@@ -55,10 +56,14 @@ public class IdeaService {
         return toResponse(idea);
     }
 
-    /** 아이디어를 수정한다. 모두 채워진 상태(ACTIVE)면 종류·키워드를 다시 추출한다. 재평가는 평가 단계에서 처리한다. */
+    /**
+     * 아이디어를 수정한다. 모두 채워진 상태(ACTIVE)면 종류·키워드를 다시 추출한다. 재평가는 평가 단계에서 처리한다.
+     * 평가가 대기(QUEUED)·진행(RUNNING) 중이면 {@code I005}로 거절한다. 행을 잠근 채 상태를 확인하고 수정하므로, 평가를 시작하는 쪽의
+     * 상태 전이(조건부 UPDATE)는 이 트랜잭션이 끝날 때까지 기다린다: 평가가 먼저 시작됐으면 수정이 거절되고, 수정이 먼저면 평가는 수정된 내용으로 시작한다.
+     */
     @Transactional
     public IdeaResponse update(Long userId, Long ideaId, UpdateIdeaRequest req) {
-        Idea idea = findOwned(userId, ideaId);
+        Idea idea = findOwnedForUpdate(userId, ideaId); // I001 → I002 → I005 순서로 검사
         boolean contentChanged = idea.edit(req.problem(), req.target(), req.solution(), req.expectation());
         if (idea.isActive()) {
             extractAndRegisterSources(idea);
@@ -92,6 +97,18 @@ public class IdeaService {
         if (!findOwned(userId, ideaId).isActive()) {
             throw new CustomException(ErrorCode.IDEA_NOT_ACTIVE);
         }
+    }
+
+    private Idea findOwnedForUpdate(Long userId, Long ideaId) {
+        Idea idea = ideas.findByIdForUpdate(ideaId).orElseThrow(() -> new CustomException(ErrorCode.IDEA_NOT_FOUND));
+        if (!idea.getUser().getId().equals(userId)) {
+            throw new CustomException(ErrorCode.IDEA_ACCESS_DENIED);
+        }
+        EvaluationStatus status = idea.getEvaluationStatus();
+        if (status == EvaluationStatus.QUEUED || status == EvaluationStatus.RUNNING) {
+            throw new CustomException(ErrorCode.IDEA_EVALUATING);
+        }
+        return idea;
     }
 
     private Idea findOwned(Long userId, Long ideaId) {

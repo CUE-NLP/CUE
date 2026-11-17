@@ -7,7 +7,9 @@ import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import org.springframework.data.domain.Sort;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -52,6 +54,11 @@ public interface IdeaRepository extends JpaRepository<Idea, Long> {
     @Query("update Idea i set i.evaluationStatus = com.cue.idea.entity.EvaluationStatus.FAILED, i.evaluationFinishedAt = :now, "
             + "i.lastEvaluationErrorCode = :code where i.evaluationStatus in (com.cue.idea.entity.EvaluationStatus.QUEUED, com.cue.idea.entity.EvaluationStatus.RUNNING)")
     int failStaleEvaluations(@Param("now") LocalDateTime now, @Param("code") String code);
+
+    /** 수정용 조회: 행을 잠가(SELECT ... FOR UPDATE) 상태 확인과 수정 사이에 평가 상태 전이가 끼어들지 못하게 한다. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select i from Idea i where i.id = :id")
+    java.util.Optional<Idea> findByIdForUpdate(@Param("id") Long id);
 
     @Query("select i.evaluationStatus from Idea i where i.id = :id")
     java.util.Optional<EvaluationStatus> findEvaluationStatus(@Param("id") Long id);
