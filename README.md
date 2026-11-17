@@ -157,12 +157,12 @@ cd backend && ./gradlew test
 | POST | `/api/auth/logout` | ✓ | 로그아웃 — 현재 액세스 토큰 즉시 무효화 + 바디 `refreshToken` 폐기 (현재 기기만, 멱등) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
 | POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD` |
-| GET | `/api/ideas` | ✓ | 리더보드. `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
+| GET | `/api/ideas` | ✓ | 리더보드(목록 응답 `data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태 · 항목별 점수 · 가중치 · 최근 변화량 · `hasNewChange`) |
 | PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출 |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
-| GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순) |
-| GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순) |
+| GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순, 목록 응답 `data.items`) |
+| GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순, 목록 응답 `data.items`) |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
 
 ### 가중치
@@ -185,6 +185,13 @@ PATCH /api/ideas/1/weights
 
 // 실패 (data는 검증 오류 상세 등이 있을 때만 포함)
 { "result": "FAIL", "code": "U001", "message": "이미 존재하는 이메일입니다.", "timestamp": "2026-11-05 15:00:00" }
+```
+
+**목록 응답**: `data`가 배열인 API(`GET /api/ideas`, `/api/ideas/{id}/history`, `/api/ideas/{id}/evaluations`)는 배열을 그대로 주지 않고 `{ "items": [...], "count": N }`으로 감쌉니다. `count`는 이번 응답의 `items` 크기이고, 비어 있으면 `"items": [], "count": 0`입니다. 나중에 페이지네이션 필드가 추가되어도 `items`·`count`는 그대로입니다.
+
+```json
+{ "result": "SUCCESS", "code": "200", "message": "요청이 성공적으로 처리되었습니다.",
+  "data": { "items": [ { "id": 1, "totalScore": 30.0 } ], "count": 1 }, "timestamp": "2026-11-05 15:00:00" }
 ```
 
 입력 검증 실패(`G004`)는 `data`에 `[{ "field": "...", "reason": "..." }]` 목록이 담깁니다.
@@ -220,6 +227,8 @@ PATCH /api/ideas/1/weights
 | | `I004` | 409 | 보류(HOLD) 아이디어는 평가 불가 |
 
 > 다른 브랜치에서 추가 중인 코드(예: 외부 API 클라이언트 PR의 `S001`·`S002`)는 해당 PR이 병합되면 이 표에 합쳐집니다. 새 코드를 만들 때는 먼저 현재 `ErrorCode`와 열려 있는 PR의 코드를 확인해 번호가 겹치지 않게 합니다.
+
+> **프론트 연동 참고 (호환성 변경)**: 목록 응답 형태가 배열에서 `data.items`(+`data.count`)로 바뀌었습니다. 기존의 `res.data[0]`, `res.data.map(...)`은 `res.data.items[0]`, `res.data.items.map(...)`으로 고쳐야 합니다. 단건/객체 응답은 그대로입니다.
 
 JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 `POST /api/auth/refresh`로 재발급하고, 리프레시 토큰 오류(`A008` 무효 / `A009` 만료 / `A010` 재사용)면 재로그인 흐름으로 분기하면 됩니다.
 

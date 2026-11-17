@@ -34,6 +34,11 @@ public record CommonResponse<T>(
         return new CommonResponse<>(Result.SUCCESS, SUCCESS_CODE, SUCCESS_MESSAGE, data, LocalDateTime.now());
     }
 
+    /** 목록 응답: data가 {@code {items, count}} 형태가 된다. List를 data로 직접 반환하지 말고 이것을 쓴다. */
+    public static <E> CommonResponse<ListData<E>> onSuccessList(List<E> items) {
+        return onSuccess(ListData.of(items));
+    }
+
     public static CommonResponse<Void> onSuccess() {
         return new CommonResponse<>(Result.SUCCESS, SUCCESS_CODE, SUCCESS_MESSAGE, null, LocalDateTime.now());
     }
