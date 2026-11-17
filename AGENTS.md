@@ -18,7 +18,7 @@ CUE/
 ├── backend/    Spring Boot API
 ├── frontend/   React·TypeScript
 ├── docker-compose.yml   로컬 PostgreSQL (호스트 포트 5433)
-├── .github/pull_request_template.md
+├── .github/    pull_request_template.md, workflows/backend-ci.yml (백엔드 테스트 CI)
 ├── README.md   프로젝트 소개 (Frontend / Backend 섹션 구분)
 └── AGENTS.md   공통 작업 규칙 (이 문서)
 ```
