@@ -53,4 +53,9 @@ public class Source {
         return changed;
     }
 
+    /** 평가가 실패했을 때 해시·시각을 이전 값으로 되돌려 다음 조회에서 같은 변화를 다시 감지하게 한다. */
+    public void restore(String contentHash, LocalDateTime checkedAt) {
+        this.contentHash = contentHash;
+        this.checkedAt = checkedAt;
+    }
 }

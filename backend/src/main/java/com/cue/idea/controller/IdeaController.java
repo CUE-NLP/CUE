@@ -3,6 +3,7 @@ package com.cue.idea.controller;
 import com.cue.global.response.CommonResponse;
 import com.cue.global.security.UserPrincipal;
 import com.cue.idea.dto.CreateIdeaRequest;
+import com.cue.idea.dto.EvaluateIdeaResponse;
 import com.cue.idea.dto.EvaluationResponse;
 import com.cue.idea.dto.IdeaHistoryResponse;
 import com.cue.idea.dto.IdeaResponse;
@@ -10,6 +11,7 @@ import com.cue.idea.dto.UpdateIdeaRequest;
 import com.cue.idea.dto.UpdateWeightsRequest;
 import com.cue.idea.entity.IdeaSort;
 import com.cue.idea.entity.IdeaStatus;
+import com.cue.idea.service.IdeaEvaluationService;
 import com.cue.idea.service.IdeaService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -23,6 +25,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class IdeaController {
     private final IdeaService ideaService;
+    private final IdeaEvaluationService ideaEvaluationService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -54,6 +57,16 @@ public class IdeaController {
     @PostMapping("/{id}/check")
     public CommonResponse<IdeaResponse> check(@AuthenticationPrincipal UserPrincipal principal, @PathVariable Long id) {
         return CommonResponse.onSuccess(ideaService.markChecked(principal.id(), id));
+    }
+
+    /**
+     * 일일 평가와 같은 재평가를 이 아이디어에 지금 실행한다. 본인 아이디어만, 보류(HOLD)면 I004.
+     * 자료 변화가 없으면 NO_CHANGE로 아무것도 기록하지 않는다. Gemini 호출 때문에 몇 초~수십 초 걸릴 수 있다.
+     */
+    @PostMapping("/{id}/evaluate")
+    public CommonResponse<EvaluateIdeaResponse> evaluate(@AuthenticationPrincipal UserPrincipal principal,
+                                                         @PathVariable Long id) {
+        return CommonResponse.onSuccess(ideaEvaluationService.evaluate(principal.id(), id));
     }
 
     /** 점수 이력 차트용 총점 이력 (오래된 순). */

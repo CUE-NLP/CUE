@@ -65,6 +65,10 @@ public class Idea {
     @Column(name = "last_checked_at")
     private LocalDateTime lastCheckedAt;
 
+    /** true면 다음 평가에서 자료 변화와 무관하게 Gemini 전체(초기) 평가를 한 번 한다. 등록·내용 수정 시 켜지고 평가 완료 시 꺼진다. */
+    @Column(name = "needs_full_evaluation", nullable = false)
+    private boolean needsFullEvaluation = true;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -100,11 +104,21 @@ public class Idea {
 
     /** 항목 수정. null이면 그대로 두고, 빈 문자열이면 비운다. 수정 후 상태를 다시 판단한다. */
     public void edit(String problem, String target, String solution, String expectation) {
+        String[] before = {this.problem, this.target, this.solution, this.expectation};
         if (problem != null) this.problem = blankToNull(problem);
         if (target != null) this.target = blankToNull(target);
         if (solution != null) this.solution = blankToNull(solution);
         if (expectation != null) this.expectation = blankToNull(expectation);
         refreshStatus();
+        String[] after = {this.problem, this.target, this.solution, this.expectation};
+        if (!java.util.Arrays.equals(before, after)) {
+            needsFullEvaluation = true; // 내용이 바뀌었으니 다음 평가에서 전체 재평가
+        }
+    }
+
+    /** 전체(초기) 평가를 끝냈음을 기록한다. */
+    public void completeFullEvaluation() {
+        needsFullEvaluation = false;
     }
 
     /** AI가 다시 추출한 아이디어 종류를 반영한다. */

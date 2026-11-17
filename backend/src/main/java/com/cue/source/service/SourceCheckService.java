@@ -41,6 +41,14 @@ public class SourceCheckService {
         return sourceRepository.findByIdeaId(ideaId).stream().map(this::checkSafely).toList();
     }
 
+    /** 평가가 실패해 변경을 반영하지 못했을 때, 해시·시각을 조회 이전 값으로 되돌린다 (다음 조회에서 다시 변경으로 감지). */
+    public void restoreHash(Long sourceId, String contentHash, java.time.LocalDateTime checkedAt) {
+        sourceRepository.findById(sourceId).ifPresent(s -> {
+            s.restore(contentHash, checkedAt);
+            sourceRepository.save(s);
+        });
+    }
+
     private SourceCheckResult checkSafely(Source source) {
         try {
             return check(source);

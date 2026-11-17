@@ -80,6 +80,14 @@ public class IdeaService {
         return toResponse(findOwned(userId, ideaId));
     }
 
+    /** 평가 가능한지 확인한다: 없으면 I001, 남의 것이면 I002, 보류면 I004. */
+    @Transactional(readOnly = true)
+    public void assertEvaluable(Long userId, Long ideaId) {
+        if (!findOwned(userId, ideaId).isActive()) {
+            throw new CustomException(ErrorCode.IDEA_NOT_ACTIVE);
+        }
+    }
+
     private Idea findOwned(Long userId, Long ideaId) {
         Idea idea = ideas.findById(ideaId).orElseThrow(() -> new CustomException(ErrorCode.IDEA_NOT_FOUND));
         if (!idea.getUser().getId().equals(userId)) {

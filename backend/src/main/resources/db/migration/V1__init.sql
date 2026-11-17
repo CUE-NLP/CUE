@@ -22,6 +22,8 @@ CREATE TABLE ideas (
     last_difference   DECIMAL(7, 2),
     last_evaluated_at TIMESTAMP,
     last_checked_at   TIMESTAMP,
+    -- true면 다음 평가에서 자료 변화와 무관하게 Gemini 전체(초기) 평가를 한 번 수행한다. 등록 직후와 내용 수정 시 켜지고, 평가가 끝나면 꺼진다.
+    needs_full_evaluation BOOLEAN   NOT NULL DEFAULT TRUE,
     created_at        TIMESTAMP     NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_ideas_user_status ON ideas (user_id, status);
@@ -36,11 +38,12 @@ CREATE TABLE scores (
     UNIQUE (idea_id, type)
 );
 
+-- 재평가 한 번의 변경된 외부 자료를 Gemini로 요약한 결과. evaluations.trend_id로 연결된다.
 CREATE TABLE trends (
     id         BIGSERIAL PRIMARY KEY,
-    summary    TEXT        NOT NULL,
-    provider   VARCHAR(30) NOT NULL,
-    created_at TIMESTAMP   NOT NULL DEFAULT now()
+    summary    TEXT         NOT NULL,
+    providers  VARCHAR(255) NOT NULL,  -- 요약에 쓰인 provider 이름 (쉼표 구분)
+    created_at TIMESTAMP    NOT NULL DEFAULT now()
 );
 
 -- 항목별 평가 이력. 점수에 변화가 있을 때만 생성된다 (변화가 없으면 행도, 날짜도 남기지 않는다).
