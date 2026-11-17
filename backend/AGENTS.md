@@ -108,8 +108,8 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 ### 외부 자료 변경 감지
 - `Source.updateHash(newHash)`가 이전 해시와 다르면 true(첫 조회는 해시만 기록하고 false). 변경이 있을 때만 재평가를 트리거한다.
 - `SourceClient`(provider당 구현체 1개, 빈으로 등록하면 자동 인식)가 RestClient로 키워드 검색 상위 5건을 `SourceItem(title,url,summary)`로 반환한다. 현재 구현: GITHUB(저장소, stars순), HUGGING_FACE(모델, downloads순), STACK_EXCHANGE(Stack Overflow, votes순). 나머지 provider는 `SourceClient` 구현 빈만 추가하면 된다 (없으면 `S002`).
-- `SourceCheckService.check(sourceId)`: 조회 → `SourceHasher`(제목·URL·요약의 SHA-256 hex) → `updateHash`로 `content_hash`·`checked_at` 갱신 → `SourceCheckResult`(CHANGED는 items 포함 / UNCHANGED). `checkAll(ideaId)`는 한 source가 실패해도 계속하고 실패는 `FAILED` 결과(해시·시각 유지)로 담는다. 외부 오류(4xx/5xx·타임아웃·파싱 실패)는 `G002`, 없는 source `S001`, 미지원 provider `S002`.
-- 외부 HTTP 호출 중 DB 트랜잭션을 잡지 않으려고 이 서비스만 `@Transactional`을 쓰지 않는다 (저장은 `repository.save` 단위). 해시 입력에서 별점·갱신일 등 자주 변하는 값은 뺀다.
+- `SourceCheckService.check(sourceId)`: 조회 → `SourceHasher`(제목·URL만, url 기준 정렬 후 SHA-256 hex) → `updateHash`로 `content_hash`·`checked_at` 갱신 → `SourceCheckResult`(CHANGED는 items 포함 / UNCHANGED). `checkAll(ideaId)`는 한 source가 실패해도 계속하고 실패는 `FAILED` 결과(해시·시각 유지)로 담는다. 외부 오류(4xx/5xx·타임아웃·파싱 실패)는 `G002`, 없는 source `S001`, 미지원 provider `S002`.
+- 외부 HTTP 호출 중 DB 트랜잭션을 잡지 않으려고 이 서비스만 `@Transactional`을 쓰지 않는다 (저장은 `repository.save` 단위). 해시에는 바뀌지 않는 값(제목·URL)만 쓴다: 요약·지표·날짜는 넣지 않고, 순위만 바뀌고 항목 집합이 같으면 같은 해시가 되도록 url로 정렬한다. 요약 변경만으로는 CHANGED가 되지 않는다 (`SourceItem.summary`는 변경 시 평가 입력용으로만 반환).
 - 스케줄러·평가 연결은 아직 없다 (evaluation 후속 작업).
 
 ## API 현황
@@ -196,7 +196,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - 24시간 주기 평가 스케줄러(`@Scheduled`): 대상은 `ACTIVE` 아이디어. 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집(`Source.updateHash`로 변경 감지) → AI 평가 → `EvaluationService.recordChanges`로 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다. 가중치 적용만으로 총점이 바뀌는 경우의 `idea_score_histories` 기록과, 등록·수정 직후 첫 평가·재평가 연결도 여기서 정한다.
 - `IdeaAnalyzer` Gemini 구현 (현재 `SimpleIdeaAnalyzer` 임시 구현). `evaluations.trend_id`에 트렌드 연결(현재 null).
 - 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange는 구현됨. Hacker News·Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가). 트렌드 수집(`TREND_PROVIDERS`)과 Gemini 연동도 남음.
-- **열린 결정**: 트렌드용 고정 4개 API와 종류별 검색 API 조합을 팀이 확정해야 한다. 확정되면 `IdeaType.searchProviders`/`ApiProvider.TREND_PROVIDERS`를 고치고 필요한 provider 클라이언트를 추가한다. 해시에 넣는 필드(현재 제목·URL·요약, 상위 5건)도 평가 정책과 함께 재검토.
+- **열린 결정**: 트렌드용 고정 4개 API와 종류별 검색 API 조합을 팀이 확정해야 한다. 확정되면 `IdeaType.searchProviders`/`ApiProvider.TREND_PROVIDERS`를 고치고 필요한 provider 클라이언트를 추가한다. 해시 대상 항목 수(현재 상위 5건)는 평가 정책과 함께 재검토.
 - 외부 API 조합(`IdeaType.searchProviders`, `ApiProvider.TREND_PROVIDERS`) 팀 확정.
 - 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
 - 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.
