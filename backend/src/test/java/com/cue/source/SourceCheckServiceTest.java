@@ -116,4 +116,18 @@ class SourceCheckServiceTest {
         assertEquals(ErrorCode.SOURCE_PROVIDER_NOT_SUPPORTED,
                 assertThrows(CustomException.class, () -> service.check(2L)).getErrorCode());
     }
+
+    @Test
+    void 시연용_강제_해시가_들어간_source는_다음_조회에서_변경으로_감지된다() {
+        Source s = new Source(null, ApiProvider.GITHUB, "kw");
+        when(repo.findById(1L)).thenReturn(Optional.of(s));
+        service.check(1L); // 실제 해시 기록
+        assertFalse(service.check(1L).changed());
+
+        s.restore(com.cue.demo.DemoEvaluationService.FORCED_HASH, s.getCheckedAt()); // 시연 API가 해시를 바꾼 상태
+        SourceCheckResult r = service.check(1L);
+        assertTrue(r.changed());
+        assertEquals(githubItems, r.items());
+        assertEquals(SourceHasher.hash(githubItems), s.getContentHash());
+    }
 }

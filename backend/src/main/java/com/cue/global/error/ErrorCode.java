@@ -6,7 +6,7 @@ import org.springframework.http.HttpStatus;
 
 /**
  * 서비스 전체 에러 코드. 새 에러는 도메인 구분 주석 아래에 추가한다.
- * 코드 형식: {도메인 영문자 1자}{3자리 번호} (G: 공통, A: 인증, U: 사용자, I: 아이디어, S: 외부 자료 수집, E: 평가). 코드는 전체에서 유일해야 한다.
+ * 코드 형식: {도메인 영문자 1자}{3자리 번호} (G: 공통, A: 인증, U: 사용자, I: 아이디어, S: 외부 자료 수집, D: 시연용 API, E: 평가). 코드는 전체에서 유일해야 한다.
  */
 @Getter
 @RequiredArgsConstructor
@@ -44,6 +44,10 @@ public enum ErrorCode {
     SOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "S001", "수집 설정(source)을 찾을 수 없습니다."),
     SOURCE_PROVIDER_NOT_SUPPORTED(HttpStatus.NOT_IMPLEMENTED, "S002", "아직 지원하지 않는 외부 API입니다."),
     SOURCE_URL_BLOCKED(HttpStatus.BAD_REQUEST, "S003", "허용되지 않는 URL입니다. (http/https 공개 주소만 가져올 수 있습니다)"),
+
+    // ===== Demo (시연용 수동 실행, D-xxx) =====
+    DEMO_API_DISABLED(HttpStatus.FORBIDDEN, "D001", "시연용 API가 꺼져 있습니다. (cue.demo.enabled / DEMO_API_ENABLED)"),
+    DEMO_COOLDOWN(HttpStatus.TOO_MANY_REQUESTS, "D002", "시연용 실행을 너무 자주 눌렀습니다. 잠시 후 다시 시도해주세요."),
 
     // ===== Evaluation (재평가, E-xxx) — AI 호출 자체의 통신 오류는 G002 =====
     AI_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, "E001", "AI 평가를 사용할 수 없습니다. (Gemini 비활성 또는 API 키 없음)"),

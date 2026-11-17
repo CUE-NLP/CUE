@@ -74,6 +74,11 @@ cue:
     stack-exchange:
       token: ${STACK_EXCHANGE_KEY:}
 
+  demo:
+    # 시연용 "지금 조회·평가" API(POST /api/demo/evaluations/run). 기본 꺼짐: 호출이 Gemini 무료 한도를 소진시킬 수 있다
+    enabled: ${DEMO_API_ENABLED:false}
+    cooldown-seconds: ${DEMO_COOLDOWN_SECONDS:30}
+
 management:
   endpoints:
     web:
