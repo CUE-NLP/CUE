@@ -53,9 +53,14 @@ CUE
 ## 백엔드 연동 참고
 - **응답 형식**: 모든 응답이 `CommonResponse` 래퍼입니다 (`result`, `code`, `message`, `data`, `timestamp`). 자세한 형식은 [응답 형식](#응답-형식)을 참고하세요.
 - **인증**: 로그인(`POST /api/auth/login`)으로 받은 `accessToken`을 `Authorization: Bearer {accessToken}` 헤더로 보냅니다.
+- **리프레시 토큰** (로그인 응답에 `refreshToken` 필드가 **추가**됐습니다. 기존 `accessToken`, `tokenType`은 그대로입니다):
+  - 액세스 토큰이 만료(`A004`)되면 `POST /api/auth/refresh` 바디 `{"refreshToken": "..."}` 로 새 `accessToken`과 **새 `refreshToken`**을 받습니다. 리프레시 토큰은 **1회용(회전)**이라 응답의 새 값으로 반드시 교체해 저장하세요.
+  - 이미 쓴 리프레시 토큰을 다시 보내면 `A010`이며 보안을 위해 그 사용자의 모든 리프레시 토큰이 폐기됩니다 → 재로그인. `A008`(무효)·`A009`(만료, 기본 14일)도 재로그인 처리하면 됩니다.
+  - 로그아웃은 `POST /api/auth/logout` 바디 `{"refreshToken": "..."}` (액세스 토큰 헤더 불필요). 성공 후 클라이언트에서 두 토큰을 지우세요.
+  - 여러 탭이 동시에 재발급하면 한쪽이 `A010`을 받을 수 있으니 재발급 요청은 한 번에 하나만 보내세요(요청 큐/락).
 - **에러 처리**: `code` 값으로 분기합니다. 토큰 만료는 `A004`입니다. 전체 목록은 [에러 코드](#에러-코드)를 참고하세요.
 - **API 문서**: 백엔드 실행 후 `http://localhost:8080/swagger-ui.html`
-- **CORS**: 아직 설정되어 있지 않습니다. 브라우저에서 호출을 시작할 때 백엔드와 허용 도메인을 맞춰야 합니다.
+- **CORS**: 기본 허용 오리진은 `http://localhost:5173`, `http://localhost:3000`입니다. 다른 도메인(배포 주소 등)은 백엔드 환경변수 `CORS_ALLOWED_ORIGINS`(쉼표 구분)에 추가해야 합니다. 허용 헤더는 `Authorization`·`Content-Type`·`Accept`, 메서드는 GET/POST/PUT/PATCH/DELETE/OPTIONS이며 쿠키(credentials)는 쓰지 않습니다.
 
 ---
 
@@ -69,7 +74,7 @@ backend/src/main/java/com/cue
 │   ├── config/      SecurityConfig (JWT, 인증 설정)
 │   ├── error/       ErrorCode(전체 에러 코드), CustomException, GlobalExceptionHandler
 │   └── security/    UserPrincipal, JwtTokenProvider, JwtPrincipalConverter
-├── auth/            로그인 (JWT 발급)
+├── auth/            로그인 · 리프레시 토큰 재발급 · 로그아웃
 ├── user/            회원가입 · 내 정보
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
 ├── score/           항목별 점수 (4개 기준)
@@ -108,6 +113,8 @@ cd backend && ./gradlew bootRun
 | `DB_USERNAME` / `DB_PASSWORD` | `cue` / `cue` | DB 계정 |
 | `JWT_SECRET` | 개발용 임시 값 | **운영에서는 반드시 32바이트 이상 값으로 교체** |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간(분) |
+| `JWT_REFRESH_DAYS` | `14` | 리프레시 토큰 유효 시간(일) |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | CORS 허용 오리진(쉼표 구분). 운영에서는 실제 프론트 도메인으로 제한 |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
 | `GEMINI_API_KEY` | (없음) | Gemini API 키(아이디어 종류·키워드 추출). 커밋 금지. 없거나 호출 실패 시 임시 분석기로 대체되어 등록은 계속 동작 |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
@@ -133,7 +140,9 @@ cd backend && ./gradlew test
 | Method | Path | 인증 | 설명 |
 | --- | --- | --- | --- |
 | POST | `/api/users` | ✕ | 회원가입 |
-| POST | `/api/auth/login` | ✕ | 로그인, 액세스 토큰 발급 |
+| POST | `/api/auth/login` | ✕ | 로그인, 액세스 토큰 + 리프레시 토큰 발급 |
+| POST | `/api/auth/refresh` | ✕ | 리프레시 토큰으로 재발급 (회전: 사용한 토큰은 폐기, 바디 `refreshToken`) |
+| POST | `/api/auth/logout` | ✕ | 리프레시 토큰 폐기 (멱등, 바디 `refreshToken`) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
 | POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
 | GET | `/api/ideas` | ✓ | 리더보드. `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
@@ -200,11 +209,11 @@ PATCH /api/ideas/1/weights
 | 구분 | 코드 | 예시 |
 | --- | --- | --- |
 | Global | `G001~` | 서버 오류, 외부 서비스 오류, 잘못된 요청/입력, 405, 404 |
-| Auth | `A001~` | 인증 필요, 권한 없음, JWT 형식 오류·만료·무효·없음, 로그인 실패 |
+| Auth | `A001~` | 인증 필요, 권한 없음, JWT 형식 오류·만료·무효·없음, 로그인 실패, 리프레시 토큰 무효·만료·재사용 |
 | User | `U001~` | 이메일 중복, 사용자 없음 |
 | Idea | `I001~` | 아이디어 없음, 접근 거부, 가중치 오류, 보류 아이디어 평가 불가 |
 
-JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 재로그인 흐름으로 분기하면 됩니다.
+JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 `POST /api/auth/refresh`로 재발급하고, 리프레시 토큰 오류(`A008` 무효 / `A009` 만료 / `A010` 재사용)면 재로그인 흐름으로 분기하면 됩니다.
 
 새 에러가 필요하면 `ErrorCode`에 추가하고 `throw new CustomException(ErrorCode.XXX)` 로 사용합니다.
 
@@ -215,6 +224,7 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | 테이블 | 설명 |
 | --- | --- |
 | `users` | 사용자 |
+| `refresh_tokens` | 리프레시 토큰 SHA-256 해시 · 만료 시각 · 폐기 시각 (사용자 FK) |
 | `ideas` | 구조화된 아이디어 · 대분류 `type`(IT)·세부 종류 `it_category` · 상태(`ACTIVE`/`HOLD`) · 검색 키워드(`keywords`, 줄바꿈 구분)와 출처(`keyword_origin`) · 총점 · 최근 변화량 · 확인 시각 |
 | `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
