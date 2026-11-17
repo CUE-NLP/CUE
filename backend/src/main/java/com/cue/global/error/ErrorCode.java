@@ -28,6 +28,9 @@ public enum ErrorCode {
     JWT_INVALID(HttpStatus.UNAUTHORIZED, "A005", "유효하지 않은 JWT 토큰입니다."),
     JWT_MISSING(HttpStatus.UNAUTHORIZED, "A006", "JWT 토큰이 없습니다."),
     INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "A007", "이메일 또는 비밀번호가 올바르지 않습니다."),
+    REFRESH_TOKEN_INVALID(HttpStatus.UNAUTHORIZED, "A008", "유효하지 않은 리프레시 토큰입니다."),
+    REFRESH_TOKEN_EXPIRED(HttpStatus.UNAUTHORIZED, "A009", "만료된 리프레시 토큰입니다. 다시 로그인해주세요."),
+    REFRESH_TOKEN_REUSED(HttpStatus.UNAUTHORIZED, "A010", "이미 사용된 리프레시 토큰입니다. 보안을 위해 모든 로그인 세션이 종료되었습니다."),
 
     // ===== User (사용자, U-xxx) =====
     EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "U001", "이미 존재하는 이메일입니다."),
