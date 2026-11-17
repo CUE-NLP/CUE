@@ -99,5 +99,5 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 - 점수 앵커 구간(5단계, 20점 단위)과 "자료 빈약 시 40~60" 기준이 적절한지 팀 확정 필요.
 - Gemini 모델 선택(예: flash 계열)과 무료 티어 한도(RPM/일일 요청/토큰) — API 키 수령 후 확인해 호출 간격·상위 N개를 정한다.
 - 변화량 제한(±10)과 하루 반영 정책, 자료 항목 개수·스니펫 길이 상한.
-- `{{items}}`, `{{currentScores}}`의 직렬화 형식(줄 단위 텍스트 vs JSON) — `PromptLoader` 구현 쪽과 맞춰야 한다.
+- ~~`{{items}}`, `{{currentScores}}`의 직렬화 형식~~ — 확정: `{{items}}`/`{{changedItems}}`는 줄 단위 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(변경 감지로 새로 나타난 항목만, 최대 15건), `{{currentScores}}`는 `TYPE: 점수` 줄 단위. 구현: `TrendService.formatSources`, `EvaluationAnalyzer`.
 - 영어 자료(GitHub 등)를 한국어로 요약할 때 고유명사 표기 규칙.
