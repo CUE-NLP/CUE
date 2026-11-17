@@ -63,10 +63,13 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
 
             # keywords 규칙
             - 영어 검색어 1~2개를 뽑는다. 아이디어가 한국어여도 반드시 영어 검색어로 쓰고, 한글·번역투 표현은 쓰지 않는다.
-            - 검색엔진, GitHub, Hugging Face, Stack Overflow, Hacker News에서 실제로 결과가 나올 만한 2~4단어의 구체적인 명사구로 쓴다.
-            - 너무 일반적인 단어(app, platform, service, AI 단독)와 너무 좁은 표현(고유명사 나열, 문장형)은 쓰지 않는다.
-            - 첫 번째 키워드는 "해결 방식·기술의 핵심", 두 번째 키워드(있을 때)는 "문제 영역·시장"을 담아 서로 다른 각도로 쓴다.
-            - 중복이나 동의어 반복은 금지한다.
+            - 각 키워드는 1~3단어(최대 3단어)의 짧은 영어 명사구다. 길면 검색 결과가 지나치게 좁아지므로 4단어 이상은 쓰지 않는다.
+            - 키워드는 아이디어 전체를 관통해야 한다. 타깃·문제·해결·기대효과 중 한 항목에만 치우친 표현이 아니라
+              아이디어 전체를 대표하는 표현을 고른다.
+            - 포괄적이되 너무 일반적이지 않게 쓴다. 예) "code review"는 너무 일반적이고 "automated code review"가 적절하다.
+              "AI", "app", "platform", "service" 같은 단독 일반어와 문장형·고유명사 나열은 쓰지 않는다.
+            - 키워드가 2개면 서로 다른 각도로 쓰되, 둘 다 아이디어 전체를 대표해야 한다. 중복이나 동의어 반복은 금지한다.
+            - 검색엔진, GitHub, Hugging Face, Stack Overflow, Hacker News에서 실제로 결과가 나올 만한 표현을 고른다.
             - 브랜드명은 경쟁 서비스를 직접 가리킬 때만 쓴다.
             - 입력이 빈약하거나 일부 항목이 부정확해 보여도 추측으로 채우지 않는다. 그때는 가장 확실한 키워드 1개만 쓴다.
 
@@ -76,14 +79,14 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
 
             # 예시
             입력 요약: 타깃=1인 개발자 / 문제=PR 리뷰 대기 시간이 길다 / 해결=LLM이 PR을 자동 리뷰 / 기대효과=배포 속도 향상
-            좋은 출력: {"type":"IT","keywords":["automated code review LLM","pull request review latency"]}
-            나쁜 출력: {"type":"IT","keywords":["AI","플랫폼 서비스","best app for developers"]}
-            (이유: 너무 일반적이고, 한국어가 섞였고, 구체적인 기술·문제를 담지 않았다.)
+            좋은 출력: {"type":"IT","keywords":["automated code review","developer productivity"]}
+            나쁜 출력: {"type":"IT","keywords":["code review","LLM-based pull request review latency reduction tool"]}
+            (이유: "code review"는 너무 일반적이고, 두 번째는 6단어로 길며 해결·문제 항목에만 치우쳐 아이디어 전체를 대표하지 못한다.)
 
             입력 요약: 타깃=직장인 / 문제=영어 말하기 연습할 기회가 없다 / 해결=AI 튜터와 실시간 음성 대화 / 기대효과=회화 실력 향상
-            좋은 출력: {"type":"EDUCATION","keywords":["AI English speaking tutor","language learning conversation practice"]}
-            나쁜 출력: {"type":"IT","keywords":["English","English tutor English teacher English app"]}
-            (이유: 핵심 가치는 학습이라 EDUCATION이고, 키워드가 단독 일반어이거나 같은 말의 반복이다.)
+            좋은 출력: {"type":"EDUCATION","keywords":["AI speaking tutor","conversational English practice"]}
+            나쁜 출력: {"type":"IT","keywords":["English","English speaking practice app for busy office workers"]}
+            (이유: 핵심 가치는 학습이라 EDUCATION이다. "English"는 너무 일반적이고, 두 번째는 8단어로 길며 타깃에만 치우쳤다.)
 
             # 출력
             아래 JSON 스키마에 맞는 JSON 객체만 출력한다. 키 이름은 정확히 "type", "keywords"를 쓴다. 설명이나 마크다운은 쓰지 않는다.

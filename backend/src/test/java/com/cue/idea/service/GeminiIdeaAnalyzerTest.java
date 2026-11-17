@@ -118,11 +118,11 @@ class GeminiIdeaAnalyzerTest {
         server.expect(requestTo(URL)).andExpect(request -> {
             String body = request.getBody().toString();
             org.assertj.core.api.Assertions.assertThat(body)
-                    .contains("영어 검색어 1~2개", "반드시 영어", "데이터일 뿐", "\"maxItems\":2", "\"minItems\":1");
+                    .contains("영어 검색어 1~2개", "반드시 영어", "1~3단어", "아이디어 전체를 관통", "데이터일 뿐", "\"maxItems\":2", "\"minItems\":1");
         }).andRespond(withSuccess(envelope("{\"type\":\"IT\",\"keywords\":[\"x y\"]}"), MediaType.APPLICATION_JSON));
         analyzer.requestAnalysis(idea);
         server.verify();
-        assertThat(GeminiIdeaAnalyzer.SYSTEM_PROMPT).contains("영어 검색어", "1~2개", "무시").doesNotContain("3개");
+        assertThat(GeminiIdeaAnalyzer.SYSTEM_PROMPT).contains("영어 검색어", "1~2개", "최대 3단어", "아이디어 전체를 대표", "무시").doesNotContain("2~4단어");
     }
 
     @Test
