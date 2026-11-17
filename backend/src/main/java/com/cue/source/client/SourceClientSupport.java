@@ -46,6 +46,16 @@ final class SourceClientSupport {
         return v.isMissingNode() || v.isNull() ? "" : v.asString();
     }
 
+    /** 본문을 문자열 그대로 받는다. 모든 실패는 G002. */
+    static String getText(RestClient.RequestHeadersSpec<?> request) {
+        try {
+            String body = request.retrieve().body(String.class);
+            return body == null ? "" : body;
+        } catch (RuntimeException e) {
+            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+        }
+    }
+
     /** ISO 일시 문자열("2026-01-02T03:04:05Z" 등)에서 날짜(yyyy-MM-dd)만 뽑는다. 없으면 빈 문자열. */
     static String date(JsonNode node, String field) {
         String v = text(node, field);

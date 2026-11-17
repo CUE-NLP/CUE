@@ -1,21 +1,28 @@
 package com.cue.source.client;
 
+import com.cue.global.error.CustomException;
+import com.cue.global.error.ErrorCode;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 
-/** Hugging Face 모델 검색 (최근 수정 순). 토큰은 선택. */
+/**
+ * Hugging Face 모델 검색 — 급상승 기준: {@code sort=trendingScore}(허브의 최근 인기 점수). 원문은 모델 카드(README.md). 토큰은 선택.
+ */
 public class HuggingFaceSourceClient implements SourceClient {
-    static final int PAGE_SIZE = 5;
+    private static final Pattern MODEL_ID = Pattern.compile("[\\w.-]+(/[\\w.-]+)?");
     private final RestClient restClient;
     private final String webBaseUrl;
+    private final SearchSettings settings;
 
-    public HuggingFaceSourceClient(RestClient restClient, String webBaseUrl) {
+    public HuggingFaceSourceClient(RestClient restClient, String webBaseUrl, SearchSettings settings) {
         this.restClient = restClient;
         this.webBaseUrl = webBaseUrl;
+        this.settings = settings;
     }
 
     @Override
@@ -27,16 +34,27 @@ public class HuggingFaceSourceClient implements SourceClient {
     public List<SourceItem> search(String keyword) {
         JsonNode root = SourceClientSupport.getJson(restClient.get().uri(
                 uri -> uri.path("/api/models")
-                        .queryParam("search", "{q}").queryParam("sort", "lastModified").queryParam("direction", -1)
-                        .queryParam("limit", PAGE_SIZE).build(keyword)));
+                        .queryParam("search", "{q}").queryParam("sort", "trendingScore").queryParam("direction", -1)
+                        .queryParam("limit", settings.topN()).build(keyword)));
         List<SourceItem> items = new ArrayList<>();
         for (JsonNode n : root) {
             String id = SourceClientSupport.text(n, "id");
             String date = SourceClientSupport.date(n, "lastModified");
             items.add(new SourceItem(id, webBaseUrl + "/" + id, SourceClientSupport.text(n, "pipeline_tag"),
                     date.isEmpty() ? SourceClientSupport.date(n, "createdAt") : date,
-                    SourceClientSupport.metrics(n, "downloads", "downloads", "likes", "likes")));
+                    SourceClientSupport.metrics(n, "downloads", "downloads", "likes", "likes", "trending", "trendingScore")));
         }
         return items;
+    }
+
+    /** 모델 카드 README (YAML 머리말 제외). */
+    @Override
+    public String fetchContent(SourceItem item) {
+        if (!MODEL_ID.matcher(item.title()).matches()) {
+            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+        }
+        String card = SourceClientSupport.getText(restClient.get().uri("/" + item.title() + "/raw/main/README.md"));
+        return card.startsWith("---") && card.indexOf("\n---", 3) > 0
+                ? card.substring(card.indexOf("\n---", 3) + 4).strip() : card;
     }
 }

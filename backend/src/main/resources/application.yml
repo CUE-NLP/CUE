@@ -31,6 +31,8 @@ cue:
     model: ${GEMINI_MODEL:gemini-2.5-flash}
     base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com}
     timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:10}
+    # 평가용 호출 사이 최소 간격(ms). 무료 티어 분당 한도(약 10회)용. 0이면 제한 없음
+    min-interval-ms: ${GEMINI_MIN_INTERVAL_MS:6500}
   evaluation:
     # 일일 재평가 스케줄러. 테스트에서는 enabled=false.
     enabled: ${EVALUATION_ENABLED:true}
@@ -42,6 +44,16 @@ cue:
     # 외부 자료 API 토큰/키: 모두 선택. 없으면 익명 호출(rate limit 낮음). 값은 환경변수로만 주입하고 커밋하지 않는다.
     connect-timeout: 3s
     read-timeout: 5s
+    # source마다 읽고 요약할 상위 항목 수 (Gemini 호출 수에 비례)
+    top-n: ${SOURCE_TOP_N:5}
+    # "급상승" 판단 기간(일): 최근 N일 안의 글·저장소를 인기 순으로
+    trending-days: ${SOURCE_TRENDING_DAYS:30}
+    # 원문을 Gemini에 보내기 전 자르는 글자 수 / 웹 원문 응답 크기 상한(바이트) / 리다이렉트 최대 횟수
+    max-content-chars: ${SOURCE_MAX_CONTENT_CHARS:8000}
+    fetch-max-bytes: 1048576
+    max-redirects: 3
+    # 같은 URL의 항목 요약을 재사용하는 기간(일). 0이면 항상 다시 요약
+    summary-reuse-days: ${SOURCE_SUMMARY_REUSE_DAYS:7}
     github:
       token: ${GITHUB_TOKEN:}
     hugging-face:

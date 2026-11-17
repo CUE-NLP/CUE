@@ -14,4 +14,12 @@ public interface SourceClient {
 
     /** 키워드로 검색한 상위 결과를 안정적인 순서로 반환한다 (같은 자료면 같은 순서여야 해시가 흔들리지 않는다). */
     List<SourceItem> search(String keyword);
+
+    /**
+     * 항목의 원문(README·질문/답변 본문·기사 본문 등)을 텍스트로 읽어온다. 길이 상한은 호출하는 쪽이 적용한다.
+     * 실패하면 {@code CustomException}을 던지고 호출하는 쪽이 그 항목을 건너뛴다. 기본 구현은 원문 없음(빈 문자열).
+     */
+    default String fetchContent(SourceItem item) {
+        return "";
+    }
 }
