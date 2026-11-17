@@ -22,7 +22,7 @@ import tools.jackson.databind.ObjectMapper;
 class PromptTemplatesTest {
 
     private static final List<String> FILES =
-            List.of("trend-summary.txt", "initial-evaluation.txt", "re-evaluation.txt");
+            List.of("trend-summary.txt", "item-summary.txt", "initial-evaluation.txt", "re-evaluation.txt");
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{(\\w+)}}");
     private static final Pattern SECTION = Pattern.compile("^### (\\S+\\.txt)\\s*$");
     private static final Pattern TABLE_ROW = Pattern.compile("^\\|\\s*`\\{\\{(\\w+)}}`");

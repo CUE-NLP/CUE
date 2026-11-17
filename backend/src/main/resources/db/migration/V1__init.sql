@@ -87,7 +87,21 @@ CREATE TABLE sources (
     keyword       VARCHAR(255) NOT NULL,
     content_hash  VARCHAR(64),
     checked_at    TIMESTAMP,
-    known_urls    TEXT                 -- 직전 조회 결과의 항목 URL(줄바꿈 구분). 새로 나타난 항목을 가려내는 기준
+    summary       TEXT,          -- 상위 항목 요약들로 만든 소스 단위 최종 요약 (변경 감지 시 덮어씀)
+    summarized_at TIMESTAMP
 );
 CREATE INDEX idx_sources_idea_provider ON sources (idea_id, provider);
 CREATE INDEX idx_sources_content_hash ON sources (content_hash);
+
+-- source의 상위 N개 항목 요약. 변경이 감지되면 덮어쓰고, 같은 URL은 재평가 때 재사용한다 (원문은 저장하지 않는다).
+CREATE TABLE source_items (
+    id           BIGSERIAL PRIMARY KEY,
+    source_id    BIGINT       NOT NULL REFERENCES sources (id) ON DELETE CASCADE,
+    url          TEXT         NOT NULL,
+    title        VARCHAR(500) NOT NULL,
+    published_at VARCHAR(10),
+    metrics      VARCHAR(255),
+    summary      TEXT         NOT NULL,
+    summarized_at TIMESTAMP   NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_source_items_source_id ON source_items (source_id);

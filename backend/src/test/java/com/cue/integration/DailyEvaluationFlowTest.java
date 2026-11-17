@@ -55,6 +55,7 @@ class DailyEvaluationFlowTest {
     @Autowired EvaluationBatchService batch;
     @MockitoBean GeminiClient gemini;
     @MockitoBean SourceCheckService sourceCheck;
+    @MockitoBean com.cue.source.service.SourceSummaryService sourceSummary;
 
     private static final String FULL = "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\","
             + "\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}";
@@ -67,9 +68,11 @@ class DailyEvaluationFlowTest {
     @BeforeEach
     void reset() {
         jdbc.execute("TRUNCATE users, trends RESTART IDENTITY CASCADE");
-        org.mockito.Mockito.reset(gemini, sourceCheck);
+        org.mockito.Mockito.reset(gemini, sourceCheck, sourceSummary);
         when(gemini.available()).thenReturn(true);
         when(sourceCheck.checkAll(anyLong())).thenReturn(List.of());
+        when(sourceSummary.summarize(any())).thenAnswer(inv ->
+                new com.cue.source.dto.SourceSummary(inv.getArgument(0), "소스 단위 요약"));
         // 프롬프트에 따라 응답 선택: 초기 평가 / 재평가 / 트렌드 요약
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             Map<?, ?> props = (Map<?, ?>) ((Map<?, ?>) inv.getArgument(1)).get("properties");
@@ -209,7 +212,7 @@ class DailyEvaluationFlowTest {
                 .andExpect(status().isBadGateway())
                 .andExpect(jsonPath("$.code").value("G002"));
 
-        verify(sourceCheck).restoreHash(eq(1L), any(), any(), any());
+        verify(sourceCheck).restoreHash(eq(1L), any(), any());
         assertEquals(4, evaluationCount(id));
         assertEquals(0, count("select count(*) from trends"));
     }

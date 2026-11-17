@@ -4,6 +4,7 @@ import com.cue.global.ai.GeminiClient;
 import com.cue.global.ai.PromptLoader;
 import com.cue.source.dto.SourceCheckResult;
 import com.cue.source.dto.SourceItem;
+import com.cue.source.dto.SourceSummary;
 import com.cue.source.entity.ApiProvider;
 import com.cue.trend.entity.Trend;
 import com.cue.trend.repository.TrendRepository;
@@ -23,11 +24,11 @@ import tools.jackson.databind.JsonNode;
 @Service
 @RequiredArgsConstructor
 public class TrendService {
-    static final Map<String, Object> SCHEMA = Map.of(
+    public static final Map<String, Object> SCHEMA = Map.of(
             "type", "OBJECT",
             "properties", Map.of("summary", Map.of("type", "STRING")),
             "required", List.of("summary"));
-    static final int MAX_SUMMARY_CHARS = 150;
+    static final int MAX_SUMMARY_CHARS = 300;
     static final int MAX_TITLE_CHARS = 120;
     /** 프롬프트에 넣는 자료 항목 최대 개수 (토큰 절약). */
     public static final int MAX_ITEMS = 15;
@@ -37,25 +38,36 @@ public class TrendService {
     private final TrendRepository trends;
 
     /**
-     * 요약을 만들어 저장한다. 요약은 부가 정보라서 실패해도 평가를 막지 않도록 null을 돌려주고 로그만 남긴다.
+     * 변경된 source들의 소스 단위 요약(없으면 항목 목록)을 바탕으로 최종 트렌드 요약을 만들어 저장한다.
+     * 요약은 부가 정보라서 실패해도 평가를 막지 않도록 null을 돌려주고 로그만 남긴다.
      *
      * @return 저장된 Trend, 실패하면 null
      */
-    public Trend summarize(List<SourceCheckResult> changed) {
-        if (changed.isEmpty()) {
+    public Trend summarize(List<SourceSummary> summaries) {
+        if (summaries.isEmpty()) {
             return null;
         }
         try {
-            String prompt = prompts.render("trend-summary", Map.of(
-                    "keywords", changed.stream().map(SourceCheckResult::keyword).distinct().collect(Collectors.joining(", ")),
-                    "items", formatSources(changed)));
-            JsonNode result = gemini.generateJson(prompt, SCHEMA);
+            StringBuilder items = new StringBuilder();
+            for (SourceSummary s : summaries) {
+                SourceCheckResult r = s.result();
+                if (s.summary() != null) {
+                    items.append("[").append(r.provider()).append(" / 키워드: ").append(r.keyword()).append("] ")
+                            .append(s.summary().replaceAll("\\s+", " ")).append("\n");
+                } else {
+                    String list = formatSources(List.of(r));
+                    if (!list.isEmpty()) items.append(list).append("\n");
+                }
+            }
+            String keywords = summaries.stream().map(s -> s.result().keyword()).distinct().collect(Collectors.joining(", "));
+            JsonNode result = gemini.generateJson(prompts.render("trend-summary",
+                    Map.of("keywords", keywords, "items", items.toString().strip())), SCHEMA);
             String summary = result.path("summary").asString("").trim();
             if (summary.isEmpty()) {
                 log.warn("트렌드 요약이 비어 있어 연결하지 않습니다.");
                 return null;
             }
-            List<ApiProvider> providers = changed.stream().map(SourceCheckResult::provider).distinct().toList();
+            List<ApiProvider> providers = summaries.stream().map(s -> s.result().provider()).distinct().toList();
             return trends.save(new Trend(summary, providers));
         } catch (RuntimeException e) {
             log.warn("트렌드 요약 실패, 트렌드 없이 평가를 계속합니다: {}", e.toString());

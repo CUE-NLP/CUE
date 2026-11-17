@@ -70,27 +70,24 @@ class SourceCheckServiceTest {
     }
 
     @Test
-    void 변경이면_이전에_없던_새_항목만_반환하고_순서만_바뀐_경우는_변경이_아니다() {
-        SourceItem a = new SourceItem("a", "https://a", "s"), b = new SourceItem("b", "https://b", "s"),
-                c = new SourceItem("c", "https://c", "s");
+    void 변경이면_상위_목록_전체를_돌려주고_순서만_같고_내용이_같으면_변경_없음이며_복구하면_다시_감지한다() {
+        SourceItem a = new SourceItem("a", "https://a", "s"), b = new SourceItem("b", "https://b", "s");
         githubItems = List.of(a, b);
         Source s = new Source(null, ApiProvider.GITHUB, "kw");
         when(repo.findById(1L)).thenReturn(Optional.of(s));
         service.check(1L);
-        assertFalse(s.isFirstCheck());
-        assertEquals(java.util.Set.of("https://a", "https://b"), s.knownUrlSet());
+        String before = s.getContentHash();
+        java.time.LocalDateTime beforeAt = s.getCheckedAt();
 
-        githubItems = List.of(b, a); // 순서만 바뀜: 해시는 달라져도 새 항목이 없다
         assertFalse(service.check(1L).changed());
-
-        githubItems = List.of(c, b); // c가 새로 등장, a는 밀려남
+        githubItems = List.of(a, new SourceItem("c", "https://c", "s"));
         SourceCheckResult r = service.check(1L);
         assertTrue(r.changed());
-        assertEquals(List.of(c), r.items()); // 상위 목록 전체가 아니라 새 항목만
-        assertEquals(java.util.Set.of("https://c", "https://b"), s.knownUrlSet());
+        assertEquals(githubItems, r.items()); // 새 항목만이 아니라 상위 목록 전체
 
-        // 평가 실패 시 복구하면 같은 변화를 다시 감지한다
-        s.restore(SourceHasher.hash(List.of(b, a)), s.getCheckedAt(), "https://b\nhttps://a");
+        // 평가에 실패하면 이전 해시로 되돌려 다음 조회에서 같은 변화를 다시 감지한다
+        service.restoreHash(1L, before, beforeAt);
+        assertEquals(before, s.getContentHash());
         assertTrue(service.check(1L).changed());
     }
 

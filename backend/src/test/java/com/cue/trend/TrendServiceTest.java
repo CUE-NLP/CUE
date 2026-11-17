@@ -11,6 +11,7 @@ import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.source.dto.SourceCheckResult;
 import com.cue.source.dto.SourceItem;
+import com.cue.source.dto.SourceSummary;
 import com.cue.source.entity.ApiProvider;
 import com.cue.trend.entity.Trend;
 import com.cue.trend.repository.TrendRepository;
@@ -30,15 +31,24 @@ class TrendServiceTest {
         return SourceCheckResult.changed(1L, p, kw, List.of(new SourceItem("t", "https://u/" + p, "s")), LocalDateTime.now());
     }
 
+    private static SourceSummary summary(ApiProvider p, String kw, String text) {
+        return new SourceSummary(changed(p, kw), text);
+    }
+
     @Test
-    void 변경된_자료를_요약해_provider_목록과_함께_저장한다() {
+    void 소스_요약들을_최종_트렌드_요약으로_저장하고_소스_요약이_프롬프트에_들어간다() {
         when(gemini.generateJson(anyString(), anyMap())).thenReturn(mapper.readTree("{\"summary\":\"요즘 이런 흐름\"}"));
         when(repo.save(any(Trend.class))).thenAnswer(i -> i.getArgument(0));
 
-        Trend trend = service.summarize(List.of(changed(ApiProvider.GITHUB, "a"), changed(ApiProvider.HACKER_NEWS, "a")));
+        Trend trend = service.summarize(List.of(summary(ApiProvider.GITHUB, "a", "깃허브 요약문"),
+                summary(ApiProvider.HACKER_NEWS, "a", null)));
 
         assertEquals("요즘 이런 흐름", trend.getSummary());
         assertEquals("GITHUB,HACKER_NEWS", trend.getProviders());
+        var prompt = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(gemini).generateJson(prompt.capture(), anyMap());
+        assertTrue(prompt.getValue().contains("깃허브 요약문"));
+        assertTrue(prompt.getValue().contains("[HACKER_NEWS] t | https://u/HACKER_NEWS")); // 소스 요약이 없으면 항목 목록으로 대체
     }
 
     @Test
@@ -47,7 +57,7 @@ class TrendServiceTest {
         String text = TrendService.formatSources(List.of(SourceCheckResult.changed(1L, ApiProvider.GITHUB, "k",
                 List.of(item, new SourceItem("x", "https://u/2", "")), LocalDateTime.now())));
         String[] lines = text.split("\n");
-        assertEquals("[GITHUB] 제목/파이프 | https://u/1 | 2026-01-02 | stars=5 | " + "요".repeat(150) + "…", lines[0]);
+        assertEquals("[GITHUB] 제목/파이프 | https://u/1 | 2026-01-02 | stars=5 | " + "요".repeat(300) + "…", lines[0]);
         assertEquals("[GITHUB] x | https://u/2 | - | - | -", lines[1]);
 
         List<SourceItem> many = java.util.stream.IntStream.range(0, 40)
@@ -62,10 +72,10 @@ class TrendServiceTest {
         verifyNoInteractions(gemini);
 
         doThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR)).when(gemini).generateJson(anyString(), anyMap());
-        assertNull(service.summarize(List.of(changed(ApiProvider.GITHUB, "a"))));
+        assertNull(service.summarize(List.of(summary(ApiProvider.GITHUB, "a", "s"))));
 
         doReturn(mapper.readTree("{\"summary\":\" \"}")).when(gemini).generateJson(anyString(), anyMap());
-        assertNull(service.summarize(List.of(changed(ApiProvider.GITHUB, "a"))));
+        assertNull(service.summarize(List.of(summary(ApiProvider.GITHUB, "a", "s"))));
         verify(repo, never()).save(any());
     }
 }

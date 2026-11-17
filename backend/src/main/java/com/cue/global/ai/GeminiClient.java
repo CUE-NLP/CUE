@@ -27,9 +27,13 @@ public class GeminiClient {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final GeminiProperties props;
+    /** 호출 사이 최소 간격(ms). Gemini 무료 티어 분당 호출 한도(RPM) 대응. 0이면 제한 없음. */
+    private final long minIntervalMs;
+    private long lastCallAt;
 
     @Autowired
-    public GeminiClient(RestClient.Builder builder, ObjectMapper objectMapper, GeminiProperties props) {
+    public GeminiClient(RestClient.Builder builder, ObjectMapper objectMapper, GeminiProperties props,
+                        @org.springframework.beans.factory.annotation.Value("${cue.gemini.min-interval-ms:0}") long minIntervalMs) {
         Duration timeout = Duration.ofSeconds(props.timeoutSeconds());
         JdkClientHttpRequestFactory factory =
                 new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(timeout).build());
@@ -37,6 +41,7 @@ public class GeminiClient {
         this.restClient = builder.clone().requestFactory(factory).baseUrl(props.baseUrl()).build();
         this.objectMapper = objectMapper;
         this.props = props;
+        this.minIntervalMs = minIntervalMs;
     }
 
     /** 테스트용: 이미 구성된 RestClient(MockRestServiceServer 연결)를 쓴다. */
@@ -44,6 +49,7 @@ public class GeminiClient {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.props = props;
+        this.minIntervalMs = 0;
     }
 
     /** Gemini를 쓸 수 있는지 (활성 + API 키 있음). */
@@ -60,6 +66,7 @@ public class GeminiClient {
         if (!available()) {
             throw new CustomException(ErrorCode.AI_NOT_CONFIGURED);
         }
+        throttle();
         String body;
         try {
             body = restClient.post()
@@ -78,6 +85,22 @@ public class GeminiClient {
             throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
         }
         return parse(body);
+    }
+
+    /** 직전 호출 이후 최소 간격이 지날 때까지 기다린다 (호출 스레드가 여러 개여도 순서대로). */
+    private synchronized void throttle() {
+        if (minIntervalMs > 0) {
+            long wait = lastCallAt + minIntervalMs - System.currentTimeMillis();
+            if (wait > 0) {
+                try {
+                    Thread.sleep(wait);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+                }
+            }
+            lastCallAt = System.currentTimeMillis();
+        }
     }
 
     JsonNode parse(String responseBody) {

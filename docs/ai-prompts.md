@@ -29,7 +29,7 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 ## 프롬프트별 명세
 
 ### trend-summary.txt
-목적: 키워드와 수집 자료(provider, title, url, 스니펫)로 트렌드를 3~5문장으로 요약하고 핵심 자료를 고른다. 결과는 `Trend`로 저장되고 평가 프롬프트의 `{{trendSummary}}`로 쓰인다.
+목적: 키워드와 수집 자료로 트렌드를 3~5문장으로 요약한다. **두 단계에 같은 프롬프트를 쓴다**: ① 소스 단위 요약 — 한 source의 항목 요약들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 입력으로 → `sources.summary`에 저장, ② 최종 트렌드 요약 — 변경된 source들의 소스 요약을 입력으로 → `Trend`로 저장되고 평가 프롬프트의 `{{trendSummary}}`로 쓰인다.
 
 | 플레이스홀더 | 설명 |
 | --- | --- |
@@ -41,6 +41,22 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 {"summary":"최근 로컬 LLM 추론 최적화 관련 저장소와 논의가 늘고 있다. Hugging Face에서는 소형 모델 공개가 이어지고 있다.","highlights":[{"title":"example/llm-runtime","url":"https://github.com/example/llm-runtime","provider":"GITHUB"}]}
 ```
 - `highlights`는 최대 5개, 입력 `items`에 있는 항목만.
+
+### item-summary.txt
+목적: source 상위 항목 **한 건의 원문**(GitHub README, 모델 카드, Stack Overflow 질문+최고 득표 답변, 기사 본문/Ask HN 글)을 읽고 2~3문장으로 요약한다. 원문은 앞 8000자로 잘라 보낸다. 결과는 `source_items`에 저장되고 소스 단위 요약(`trend-summary` 프롬프트를 이 source의 항목 요약들에 적용)과 재평가의 `{{changedItems}}`에 쓰인다.
+
+| 플레이스홀더 | 설명 |
+| --- | --- |
+| `{{keyword}}` | 이 source의 검색 키워드 |
+| `{{title}}` | 항목 제목 |
+| `{{url}}` | 항목 URL |
+| `{{content}}` | 읽어 온 원문 텍스트(길이 상한 적용, 신뢰하지 않는 데이터) |
+
+출력 스키마와 예시:
+```json
+{"summary":"에이전트 워크플로를 코드로 정의해 실행하는 오픈소스 프레임워크다. 개발자 대상이며 문서화된 예제가 많지만 대규모 운영 사례는 README에 없다."}
+```
+- 원문이 비었거나 의미가 없으면 `{"summary":""}` — 서버는 그 항목을 건너뛴다.
 
 ### initial-evaluation.txt
 목적: 아이디어 등록(ACTIVE) 직후 첫 평가. 4개 기준을 한 번씩 0~100 정수로 채점하고 근거를 쓴다.

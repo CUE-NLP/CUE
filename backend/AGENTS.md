@@ -33,7 +33,7 @@ user/         controller / service / repository / entity / dto — 회원가입,
 idea/         controller / service / repository / entity / dto — 아이디어 저장·조회·리더보드·가중치
 score/        entity (Score, ScoreType)
 evaluation/   controller 없음. entity (Evaluation, EvaluationReference, IdeaScoreHistory) / repository / service (EvaluationService=저장·턴 시작, DailyEvaluationService=아이디어 1개 파이프라인, EvaluationAnalyzer=Gemini 호출·변환·클램프, EvaluationBatchService, EvaluationScheduler) / config (EvaluationProperties) / dto (ScoreChange, ReferenceInput, IdeaSnapshot, EvaluationRunResult)
-source/       entity (Source, ApiProvider) / repository / client (SourceClient + GitHub·HuggingFace·StackExchange·HackerNews) / service (SourceCheckService, SourceHasher) / dto / config (SourceApiProperties, SourceClientConfig)
+source/       entity (Source, SourceItemSummary, ApiProvider) / repository / client (SourceClient + GitHub·HuggingFace·StackExchange·HackerNews, SearchSettings) / fetch (WebContentFetcher, UrlGuard, JdkTransport, HtmlText) / service (SourceCheckService, SourceSummaryService, SourceHasher) / dto / config (SourceApiProperties, SourceClientConfig)
 trend/        entity (Trend) / repository / service (TrendService — 변경된 자료 Gemini 요약 저장)
 ```
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
@@ -49,7 +49,8 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `evaluations`: **항목(score) 단위** 평가 이력. 점수가 바뀔 때만 생성. `difference`(변화량), `score_after`(변경 후 점수), `weight`(평가 당시 가중치), `evidence_summary`(근거 요약), `created_at`(재평가 날짜), nullable `trend_id`(그 평가의 근거가 된 변경 자료 요약, `trends`).
 - `evaluation_references`: 평가 근거 출처 URL (평가 1 : N).
 - `idea_score_histories`: 평가 시점의 **총점 스냅샷**(`total_score`, `total_difference`, `evaluated_at`). 점수 이력 차트용. 가중치가 바뀌어도 당시 총점을 보존하려고 변화량 누적 대신 스냅샷으로 저장한다.
-- `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash` + `known_urls`(직전 조회 항목 URL)로 변경 감지 + `checked_at`(수집 확인 시각). 아이디어가 ACTIVE로 등록·수정될 때 종류별 API × 추출 키워드로 새로 만든다.
+- `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash`로 변경 감지 + `checked_at`(수집 확인 시각) + `summary`/`summarized_at`(소스 단위 최종 요약, 변경 시 덮어씀).
+- `source_items`: source의 상위 N개 **항목 요약**(`url`, `title`, `published_at`, `metrics`, `summary`, `summarized_at`). 원문은 저장하지 않는다. 변경 감지 시 source 단위로 삭제 후 다시 저장하고, 같은 URL의 요약이 `summary-reuse-days`(기본 7일) 안에 있으면 다시 읽지 않고 재사용한다. 아이디어가 ACTIVE로 등록·수정될 때 종류별 API × 추출 키워드로 새로 만든다.
 - `trends`: 재평가 한 번에서 **변경이 감지된 자료를 Gemini로 요약**한 결과(`summary`, 쓰인 `providers` 쉼표 목록). 그 재평가가 만든 `evaluations.trend_id`가 가리킨다. (이전 설계의 "전역 트렌드·고정 API 4개"는 아직 확정되지 않아 `ApiProvider.TREND_PROVIDERS`는 쓰지 않는다 — 열린 결정)
 - 외부 API는 6종(`ApiProvider`): 종류별 검색 조합은 `IdeaType.searchProviders()`(IT는 GitHub·HuggingFace·StackExchange·HackerNews 4개). **현재 조합은 임시 값**(TODO: 팀 확정).
 
@@ -63,6 +64,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 
 ### 에러: `ErrorCode` 하나로 관리
 - `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집, E 평가. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
+- 외부 자료(S): `S001` source 없음 / `S002` 미지원 provider / `S003` 허용되지 않는 URL(SSRF 차단).
 - 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E003` 같은 아이디어를 이미 평가 중(409). AI 통신 실패 자체는 `G002`.
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
 - JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효 `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
@@ -105,12 +107,18 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 
 ### 일일 재평가 (`evaluation`)
 - **진입점**: 스케줄러 `EvaluationScheduler`(`@Scheduled`, 기본 `0 0 3 * * *` Asia/Seoul) → `EvaluationBatchService.runAll()` → ACTIVE 아이디어 id마다 `DailyEvaluationService.evaluate(id)`. 수동 `POST /api/ideas/{id}/evaluate`도 같은 메서드를 쓴다. HOLD는 대상에서 제외(수동은 `I004`).
-- **아이디어 단위 격리**: 배치는 아이디어마다 try/catch로 로그만 남기고 계속한다. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 `DailyEvaluationService`는 `@Transactional`을 쓰지 않고 `TransactionTemplate`/`EvaluationService`의 짧은 트랜잭션으로 저장한다. 같은 아이디어는 동시에 하나만 평가(`E003`). 아이디어 사이에는 `cue.evaluation.delay-ms`(기본 15초)만큼 쉰다(Gemini를 쓰지 않은 `NO_CHANGE`는 쉬지 않음). 아이디어당 Gemini 호출은 최대 2회(트렌드 요약 + 평가).
+- **아이디어 단위 격리**: 배치는 아이디어마다 try/catch로 로그만 남기고 계속한다. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 `DailyEvaluationService`는 `@Transactional`을 쓰지 않고 `TransactionTemplate`/`EvaluationService`의 짧은 트랜잭션으로 저장한다. 같은 아이디어는 동시에 하나만 평가(`E003`). 아이디어 사이에는 `cue.evaluation.delay-ms`(기본 15초)만큼 쉰다(Gemini를 쓰지 않은 `NO_CHANGE`는 쉬지 않음). Gemini 호출 수는 아래 "호출량" 참고.
+- **호출량과 무료 티어 대응** — source = provider × 키워드 = IT 4×3=12개(그 외 종류 3×3=9개). 변경된 source만 처리하며, 변경된 source 하나당 Gemini 호출 = 항목 요약 `top-n`회 + 소스 요약 1회. 아이디어 하나의 호출 수 = Σ(변경 source)(`top-n`+1) + 최종 트렌드 1 + 재평가(또는 초기 평가) 1.
+  - **최악(12개 모두 변경, top-n=5, 재사용 없음)**: 12×6+2 = **74회/아이디어**. 변경이 3개뿐이면 3×6+2 = 20회, 변경 없으면 0회.
+  - `top-n=2`면 최악 12×3+2 = 38회. 같은 URL 요약은 `summary-reuse-days` 동안 재사용하므로 인기 목록이 겹치는 날은 실제 호출이 크게 준다.
+  - 호출 간격: `GEMINI_MIN_INTERVAL_MS`(기본 6500ms ≈ 분당 9회)로 모든 평가용 Gemini 호출 사이를 벌려 분당 한도(RPM)를 지킨다. 아이디어 사이 대기는 `EVALUATION_DELAY_MS`. 최악 74회면 한 아이디어에 약 8분이 걸린다. 일일 한도(RPD)는 키 수령 후 확인이 필요하며 한도에 닿으면 `G002`로 아이디어가 건너뛰어지고 해시가 복구되어 다음 배치에서 다시 시도한다.
+  - 열어둔 설정: `SOURCE_TOP_N`, `SOURCE_TRENDING_DAYS`, `SOURCE_MAX_CONTENT_CHARS`, `SOURCE_SUMMARY_REUSE_DAYS`, `GEMINI_MIN_INTERVAL_MS`, `EVALUATION_DELAY_MS`. **병렬/배치 호출은 구현하지 않았다**(RPM 한도 때문에 순차가 안전). 한 source의 항목들을 한 번에 요약하는 배치는 호출 수를 `top-n`배 줄일 수 있어 한도가 부족하면 다음 후보다.
+  - 수동 `POST /evaluate`는 이 호출들을 한 요청 안에서 동기로 수행하므로 오래 걸릴 수 있다(비동기 전환은 열린 결정).
 - **Gemini 사용 불가**(비활성/키 없음): 배치는 로그만 남기고 통째로 건너뛰고, 아이디어 단위 호출은 아무것도 쓰지 않고 `E001`.
-- **파이프라인** (`DailyEvaluationService`): ① 대상 확인(없음 `I001`/HOLD `I004`)·Gemini 사용 가능 확인 → ② **턴 시작** `EvaluationService.startTurn`: 예약 가중치 적용(`Idea.startNextTurn()`), 총점이 가중치만으로 바뀌면 `idea_score_histories`에 스냅샷 1행(총점·변화량)을 남긴다. 평가 이력(`evaluations`)은 만들지 않고 `last_evaluated_at`·`last_difference`도 건드리지 않는다(평가가 아니므로 "새 변화" 알림이 켜지지 않는다) → ③ `SourceCheckService.checkAll` → ④ **변경된 source도 없고 `needs_full_evaluation`도 꺼져 있으면 `NO_CHANGE`로 종료**(평가·이력·날짜 모두 갱신 없음; source 해시·`checked_at`만 갱신) → ⑤ 변경이 있으면 `TrendService.summarize`(Gemini, 실패해도 평가는 계속, trend 없이) → ⑥ 전체 평가 플래그가 켜져 있으면 `initial-evaluation`, 아니면 `re-evaluation` 호출 → ⑦ `recordChanges(ideaId, changes, trendId)`로 저장(각 `Evaluation.trend_id` 연결). Gemini·파싱 실패 시 해시를 되돌리고 예외(`G002`/`E002`)를 던진다.
+- **파이프라인** (`DailyEvaluationService`): ① 대상 확인(없음 `I001`/HOLD `I004`)·Gemini 사용 가능 확인 → ② **턴 시작** `EvaluationService.startTurn`: 예약 가중치 적용(`Idea.startNextTurn()`), 총점이 가중치만으로 바뀌면 `idea_score_histories`에 스냅샷 1행(총점·변화량)을 남긴다. 평가 이력(`evaluations`)은 만들지 않고 `last_evaluated_at`·`last_difference`도 건드리지 않는다(평가가 아니므로 "새 변화" 알림이 켜지지 않는다) → ③ `SourceCheckService.checkAll` → ④ **변경된 source도 없고 `needs_full_evaluation`도 꺼져 있으면 `NO_CHANGE`로 종료**(평가·이력·날짜 모두 갱신 없음; source 해시·`checked_at`만 갱신) → ⑤ 변경된 source마다 `SourceSummaryService.summarize`: 상위 N개 **원문 읽기 → `item-summary`로 항목 요약(DB 덮어쓰기) → 항목 요약들로 소스 단위 요약(`trend-summary` 프롬프트)**, 그 소스 요약들로 `TrendService.summarize`(최종 트렌드 요약, 실패해도 평가는 계속, trend 없이). 항목 하나의 원문 읽기·요약이 실패하면 그 항목만 건너뛴다. 재평가에 넘기는 `changedItems`는 새로 읽은 상위 N개의 **항목 요약본** → ⑥ 전체 평가 플래그가 켜져 있으면 `initial-evaluation`, 아니면 `re-evaluation` 호출 → ⑦ `recordChanges(ideaId, changes, trendId)`로 저장(각 `Evaluation.trend_id` 연결). Gemini·파싱 실패 시 해시를 되돌리고 예외(`G002`/`E002`)를 던진다.
 - **AI 응답 서버 검증** (`EvaluationAnalyzer`, 호출은 `responseMimeType=application/json`+`responseSchema`로 형식 강제): type이 4개 enum이 아니거나 같은 type 중복이면 버림 / 변화량·점수는 정수로 반올림 후 기준당 ±10(`MAX_DIFFERENCE`)으로 제한, 0이면 버림 / 재평가에서 `evidenceSummary`가 비면 그 항목을 버리고 300자(`MAX_SUMMARY_CHARS`) 초과는 `…`로 자름(초기 평가는 점수를 살리려고 빈 요약에 기본 문구) / `referenceUrls`는 입력 changedItems에 있던 URL만 남김. 프롬프트의 `{{items}}`/`{{changedItems}}`는 한 줄에 한 건 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(없는 값 `-`, 제목 120자·요약 150자 상한, 전체 15건 상한, 새로 나타난 항목만)이다. 결과는 `ScoreChange`로 `recordChanges`에 넘긴다(0~100 제한은 `Score.applyDifference`).
 - **첫 평가 / 전체 평가** (`ideas.needs_full_evaluation`): 새 아이디어(true)와 **4항목 내용이 실제로 바뀐 수정**(`Idea.edit`)에서 켜지고, 전체 평가가 성공하면 꺼진다(실패하면 켜진 채 다음 배치에서 재시도, HOLD인 동안은 평가 안 됨). 켜진 아이디어는 **자료 변화가 없어도** `initial-evaluation`(기준별 0~100 점수)을 한 번 수행한다. 기록 규칙은 기존과 같다: 점수 → `현재 점수와의 차이`로 바꿔 `recordChanges`에 넘기므로 점수가 바뀐 기준마다 `Evaluation` 행(첫 평가는 `difference = 점수`, `score_after = 점수`)이 생기고 총점 이력 스냅샷 1행과 `last_evaluated_at`이 갱신된다. 점수가 하나도 안 바뀌면(예: 수정 후 같은 점수) 아무것도 기록하지 않지만 플래그는 끈다. 이 경우 ±10 클램프는 적용하지 않는다(0~100만).
-- **프롬프트 계약**: `prompts/{trend-summary,initial-evaluation,re-evaluation}.txt`. 플레이스홀더·출력 JSON은 `docs/ai-prompts.md`가 정본이다. 코드가 채우는 값: `keywords`/`items`(trend-summary), `target/problem/solution/expectation/trendSummary/items`(initial), `…/currentScores/changedItems/trendSummary`(re). `trend-summary`의 `highlights`는 현재 스키마에 포함하지 않아 저장하지 않는다(요약 `summary`만). 출력 스키마는 `responseSchema`로 강제한다.
+- **프롬프트 계약**: `prompts/{item-summary,trend-summary,initial-evaluation,re-evaluation}.txt`. 플레이스홀더·출력 JSON은 `docs/ai-prompts.md`가 정본이다. 코드가 채우는 값: `keyword/title/url/content`(item-summary), `keywords`/`items`(trend-summary; 소스 요약·최종 요약 두 단계에 같은 프롬프트), `target/problem/solution/expectation/trendSummary/items`(initial), `…/currentScores/changedItems/trendSummary`(re). `trend-summary`의 `highlights`는 현재 스키마에 포함하지 않아 저장하지 않는다(요약 `summary`만). 출력 스키마는 `responseSchema`로 강제한다.
 - Gemini 평가 호출은 응답이 길어 `GEMINI_TIMEOUT_SECONDS` 기본 10초가 빠듯할 수 있다. 시간 초과가 잦으면 30 이상으로 올린다.
 
 ### 새 변화 알림(확인 처리)
@@ -120,8 +128,18 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `GET /api/ideas?status=ACTIVE|HOLD&sort=TOTAL|RECENT_RISE`. 기본은 `ACTIVE` + `TOTAL`(총점순). `RECENT_RISE`는 `last_difference` 내림차순(없으면 뒤). 보류 탭은 `status=HOLD`.
 
 ### 외부 자료 변경 감지
-- **변경 = 직전 조회에 없던 항목 URL이 나타남.** `sources.known_urls`(직전 조회의 항목 URL, 줄바꿈 구분)와 비교해 새 URL이 있으면 CHANGED이고 결과 `items`에는 **새로 나타난 항목만** 담긴다(상위 목록 전체가 아님). 첫 조회는 기준만 기록하고 UNCHANGED, 순서만 바뀐 경우도 UNCHANGED. `content_hash`(제목·URL·요약)는 보조 기록으로 계속 저장한다. 변경이 있을 때만 재평가를 트리거한다.
-- `SourceClient`(provider당 구현체 1개, 빈으로 등록하면 자동 인식)가 RestClient로 키워드 검색 상위 5건을 `SourceItem(title,url,summary,publishedAt,metrics)`로 반환한다(`publishedAt`=yyyy-MM-dd, `metrics`="stars=1200, forks=30" 같은 인기 지표 한 줄; 해시에는 title·url·summary만). **정렬은 최신 활동 순**으로 통일했다(인기 순은 상위 5건이 거의 안 변해 변화 감지가 안 되기 때문; 인기·최신 병행은 호출이 2배라 보류). 구현: GITHUB(저장소 `sort=updated`, pushed_at, stars/forks), HUGGING_FACE(모델 `sort=lastModified`, pipeline_tag, downloads/likes), STACK_EXCHANGE(Stack Overflow `sort=activity`, tags, votes/answers), HACKER_NEWS(Algolia `search_by_date` 스토리, 키 불필요; 외부 링크 없는 글은 `news.ycombinator.com/item?id=` URL, points/comments). 나머지 provider는 `SourceClient` 구현 빈만 추가하면 된다 (없으면 `S002`).
+- **변경 감지 = `content_hash` 비교**: `Source.updateHash(newHash)`가 이전 해시와 다르면 true(첫 조회는 해시만 기록하고 false). 해시는 상위 N개의 제목·URL·요약만 쓴다(날짜·지표 제외). 변경이 감지되면 새 항목만 가려내지 않고 **상위 N개를 전부 다시 읽고 다시 요약해 덮어쓴다**(직전 URL diff 방식은 폐기). 변경이 있을 때만 재평가를 트리거한다.
+- `SourceClient`(provider당 구현체 1개, 빈으로 등록하면 자동 인식)는 두 가지를 한다: `search(keyword)`로 상위 `cue.source.top-n`(기본 5)개를 `SourceItem(title,url,summary,publishedAt,metrics)`로 반환, `fetchContent(item)`으로 항목의 **원문**을 텍스트로 읽는다(기본 구현은 빈 문자열).
+
+| provider | 조회 정렬 (급상승 기준) | 원문 |
+| --- | --- | --- |
+| GITHUB | `q={kw} pushed:>{오늘−N일}` + `sort=stars` — 최근 N일 안에 활동한 저장소 중 인기순. (`created:>`만 쓰면 오래 유지되는 좋은 프로젝트의 활동을 놓치고 전체 stars 순은 거의 안 변하므로 pushed를 택함) | README (`/repos/{full_name}/readme`, raw 미디어 타입) |
+| HUGGING_FACE | `sort=trendingScore` (허브의 최근 인기 점수) | 모델 카드 `/{id}/raw/main/README.md` (YAML 머리말 제외) |
+| STACK_EXCHANGE | `search/advanced`는 `hot`/`week` 정렬이 없어 `fromdate={오늘−N일}` + `sort=votes` — 최근 N일 안 생성된 질문 득표순 | 질문 본문 + 최고 득표 답변 본문 (`filter=withbody`, HTML→텍스트) |
+| HACKER_NEWS | Algolia `/search` + `tags=story` + `numericFilters=created_at_i>{오늘−N일}` (관련도 뒤에 points·댓글 반영) | 연결된 기사 URL 본문(`WebContentFetcher`), 외부 링크가 없으면 글 텍스트(`/api/v1/items/{id}`) |
+
+  N일은 `cue.source.trending-days`(기본 30). 점수·댓글 수·stars 등은 `metrics`로만 전달하고 해시에서는 뺀다.
+- **웹 원문 가져오기 안전장치** (`source/fetch`: `WebContentFetcher`, `UrlGuard`, `JdkTransport`, `HtmlText`): http/https만, 사용자정보(`user:pass@`) 거부, 호스트가 가리키는 **모든** IP가 공개 주소여야 함(루프백·사설·링크로컬·멀티캐스트·미지정·CGNAT 100.64/10·IPv6 ULA 차단), 자동 리다이렉트 끄고 직접 따라가며 **매 홉마다 재검사**(`cue.source.max-redirects` 기본 3), 연결·읽기 타임아웃, 응답 `fetch-max-bytes`(1MB) 상한, `text/*`·HTML만 허용, HTML은 jsoup(`org.jsoup:jsoup:1.18.3`)으로 script/style/nav 등을 제거하고 본문 텍스트만 추출, 글자 수는 `max-content-chars`(8000). 실패는 `S003`(차단)/`G002`로 던지고 호출하는 쪽이 그 항목만 건너뛴다. **한계**: 검사와 실제 연결 사이에 DNS 응답이 바뀌는 DNS rebinding은 완전히 막지 못한다. 외부 본문은 신뢰하지 않는 데이터이며 프롬프트의 '데이터로만 취급' 문구로 방어한다.
 - `SourceCheckService.check(sourceId)`: 조회 → `SourceHasher`(제목·URL·요약의 SHA-256 hex) → `updateHash`로 `content_hash`·`checked_at` 갱신 → `SourceCheckResult`(CHANGED는 items 포함 / UNCHANGED). `checkAll(ideaId)`는 한 source가 실패해도 계속하고 실패는 `FAILED` 결과(해시·시각 유지)로 담는다. 외부 오류(4xx/5xx·타임아웃·파싱 실패)는 `G002`, 없는 source `S001`, 미지원 provider `S002`.
 - 외부 HTTP 호출 중 DB 트랜잭션을 잡지 않으려고 이 서비스만 `@Transactional`을 쓰지 않는다 (저장은 `repository.save` 단위). 해시 입력에서 별점·갱신일 등 자주 변하는 값은 뺀다.
 - 평가 연결은 아래 "일일 재평가". 평가가 실패하면 `SourceCheckService.restoreHash`로 해시를 되돌려 다음에 같은 변화를 다시 감지한다.
@@ -181,6 +199,10 @@ cd CUE/backend
 | `GITHUB_TOKEN` | 없음 | 선택. GitHub 검색 rate limit 완화 |
 | `HUGGING_FACE_TOKEN` | 없음 | 선택. Hugging Face API 토큰 |
 | `STACK_EXCHANGE_KEY` | 없음 | 선택. Stack Exchange API key (일일 쿼터 증가) |
+| `SOURCE_TOP_N` | `5` | source마다 읽고 요약할 상위 항목 수 |
+| `SOURCE_TRENDING_DAYS` | `30` | "급상승" 판단 기간(일) |
+| `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | 원문 자르는 길이 / 같은 URL 요약 재사용 기간(0이면 항상 재요약) |
+| `GEMINI_MIN_INTERVAL_MS` | `6500` | 평가용 Gemini 호출 사이 최소 간격(무료 티어 RPM) |
 | `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 (테스트는 `false`) |
 | `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 실행 시각(Spring 6필드 cron)·시간대 |
 | `EVALUATION_DELAY_MS` | `15000` | 아이디어 사이 대기(ms). Gemini 무료 티어 분당 한도용 |
@@ -199,7 +221,7 @@ cd CUE/backend
 - 프론트 연동: 아직 **CORS 설정이 없다.** 프론트가 브라우저에서 호출하기 시작하면 허용 도메인을 설정해야 한다 (TODO).
 
 ## AI 프롬프트
-- Gemini 프롬프트는 `src/main/resources/prompts/`(`trend-summary.txt`, `initial-evaluation.txt`, `re-evaluation.txt`)에 있고 플레이스홀더는 `{{name}}` 형식이다. 입력·출력 JSON 규격, 점수 앵커, 운용 팁은 [docs/ai-prompts.md](../docs/ai-prompts.md).
+- Gemini 프롬프트는 `src/main/resources/prompts/`(`item-summary.txt`, `trend-summary.txt`, `initial-evaluation.txt`, `re-evaluation.txt`)에 있고 플레이스홀더는 `{{name}}` 형식이다. 입력·출력 JSON 규격, 점수 앵커, 운용 팁은 [docs/ai-prompts.md](../docs/ai-prompts.md).
 - **프롬프트를 바꾸면 `docs/ai-prompts.md`(플레이스홀더 표·JSON 예시)와 `PromptTemplatesTest`를 함께 갱신한다.** 파일명·플레이스홀더·출력 JSON 키는 `PromptLoader`/평가 코드(`EvaluationAnalyzer`, `TrendService`)와의 계약이다.
 
 ## 실행·테스트
@@ -209,7 +231,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
 - 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`, `GEMINI_*`, `EVALUATION_*`(위 표).
-- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `global/ai/PromptLoaderTest`·`GeminiClientTest`, `evaluation/EvaluationAnalyzerTest`(클램프·필터·초기 평가 변환)·`EvaluationSchedulerConfigTest`(enabled 설정)·`EvaluationDomainTest`, `trend/TrendServiceTest`, `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/DailyEvaluationFlowTest`(Gemini·자료 조회는 목: 첫 평가·변경 없음·트렌드 연결·실패 복구·가중치 턴·수동 API 권한/에러·배치 HOLD 제외/실패 격리), `integration/GeminiEnabledBootTest`(기본 설정 부팅).
+- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer: 급상승 정렬 파라미터·원문 읽기), `source/UrlGuardTest`·`WebContentFetcherTest`(SSRF·리다이렉트·HTML 추출), `source/SourceSummaryServiceTest`(항목→소스 요약 순서·호출 수·덮어쓰기·재사용), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `global/ai/PromptLoaderTest`·`GeminiClientTest`, `evaluation/EvaluationAnalyzerTest`(클램프·필터·초기 평가 변환)·`EvaluationSchedulerConfigTest`(enabled 설정)·`EvaluationDomainTest`, `trend/TrendServiceTest`, `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/DailyEvaluationFlowTest`(Gemini·자료 조회는 목: 첫 평가·변경 없음·트렌드 연결·실패 복구·가중치 턴·수동 API 권한/에러·배치 HOLD 제외/실패 격리), `integration/GeminiEnabledBootTest`(기본 설정 부팅).
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
@@ -221,8 +243,8 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ## 미구현·TODO
 - 평가 호출 보호: 수동 `POST /api/ideas/{id}/evaluate`는 호출 횟수 제한이 없어 Gemini 무료 티어를 소진시킬 수 있다(사용자당 쿨다운/일일 횟수 제한 필요 여부는 **열린 결정**). 429 응답 재시도/백오프도 아직 없다(실패하면 다음 배치로 넘김).
 - 트렌드: 현재 `trends`는 "아이디어 1회 평가의 변경 자료 요약"이다(아이디어마다 Gemini 호출 1회 추가). 전역 트렌드(고정 API 4개, 하루 1회 요약 재사용 — `docs/ai-prompts.md`의 권장)로 갈지는 **열린 결정**. 가면 `ApiProvider.TREND_PROVIDERS`와 `trend-summary`의 `highlights` 저장을 쓰게 된다.
-- `GeminiIdeaAnalyzer`가 `GeminiClient`와 HTTP 호출 코드를 중복한다(공통화 가능).
-- 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange·Hacker News 구현. Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가; 없으면 해당 source는 `S002`로 FAILED 처리되어 건너뜀 — 종류가 IT가 아니면 이 provider들이 source에 포함되므로 구현 전에는 해당 source는 평가 근거가 되지 못한다).
+- `GeminiIdeaAnalyzer`가 `GeminiClient`와 HTTP 호출 코드를 중복한다(공통화 가능). 분석기는 `GEMINI_MIN_INTERVAL_MS` 적용 대상이 아니다.
+- 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange·Hacker News 구현(검색+원문 읽기). Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가; 없으면 해당 source는 `S002`로 FAILED 처리되어 건너뜀 — 종류가 IT가 아니면 이 provider들이 source에 포함되므로 구현 전에는 해당 source는 평가 근거가 되지 못한다).
 - **열린 결정**: 종류별 검색 API 조합(`IdeaType.searchProviders`)을 팀이 확정해야 한다. 해시에 넣는 필드(현재 제목·URL·요약, 상위 5건)도 평가 정책과 함께 재검토. 점수 앵커·±10 한도·자료 개수 상한은 `docs/ai-prompts.md` "열린 결정" 참고.
 - 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
 - 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.

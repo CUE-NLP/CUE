@@ -75,7 +75,7 @@ backend/src/main/java/com/cue
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
 ├── score/           항목별 점수 (4개 기준)
 ├── evaluation/      일일 재평가 파이프라인(스케줄러 · Gemini 평가) · 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
-├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange/Hacker News) · 해시 변경 감지
+├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange/Hacker News, 급상승 조회·원문 읽기) · 해시 변경 감지 · 항목/소스 요약
 └── trend/           변경된 외부 자료의 Gemini 요약 (평가 근거)
 ```
 
@@ -113,6 +113,9 @@ cd backend && ./gradlew bootRun
 | `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
 | `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
 | `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
+| `SOURCE_TOP_N` / `SOURCE_TRENDING_DAYS` | `5` / `30` | source마다 읽고 요약할 상위 항목 수 / "급상승" 기간(일) |
+| `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | 원문을 자르는 길이 / 같은 URL 요약 재사용 기간(일) |
+| `GEMINI_MIN_INTERVAL_MS` | `6500` | 평가용 Gemini 호출 사이 최소 간격(ms, 무료 티어 분당 한도용) |
 | `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 여부 (테스트는 `false`) |
 | `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 재평가 실행 시각(Spring 6필드 cron) · 시간대 |
 | `EVALUATION_DELAY_MS` | `15000` | 아이디어 사이 대기(ms) — Gemini 무료 티어 분당 호출 한도용 |
@@ -183,7 +186,7 @@ PATCH /api/ideas/1/weights
 | Auth | `A001~` | 인증 필요, 권한 없음, JWT 형식 오류·만료·무효·없음, 로그인 실패 |
 | User | `U001~` | 이메일 중복, 사용자 없음 |
 | Idea | `I001~` | 아이디어 없음, 접근 거부, 가중치 오류, 보류 아이디어 평가 불가 |
-| Source | `S001~` | 수집 설정 없음, 지원하지 않는 외부 API |
+| Source | `S001~` | 수집 설정 없음, 지원하지 않는 외부 API, 허용되지 않는 URL |
 | Evaluation | `E001~` | AI 평가 사용 불가(Gemini 비활성·키 없음), AI 응답 해석 불가, 이미 평가 중 |
 
 JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 재로그인 흐름으로 분기하면 됩니다.
@@ -202,7 +205,8 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
 | `evaluation_references` | 평가 근거 출처 URL |
 | `idea_score_histories` | 평가 시점의 총점 스냅샷 (점수 이력 차트용) |
-| `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각 |
+| `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각·소스 단위 요약 |
+| `source_items` | source의 상위 항목 요약 (원문은 저장 안 함, 변경 시 덮어쓰기) |
 | `trends` | 재평가 때 변경이 감지된 외부 자료의 Gemini 요약 (`evaluations.trend_id`로 연결) |
 
 ---
