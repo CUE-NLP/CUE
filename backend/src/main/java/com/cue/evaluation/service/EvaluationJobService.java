@@ -6,6 +6,7 @@ import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.entity.EvaluationStatus;
 import com.cue.idea.repository.IdeaRepository;
+import com.cue.trend.service.GlobalTrendService;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.Set;
@@ -39,13 +40,37 @@ public class EvaluationJobService {
     private final IdeaRepository ideas;
     private final DailyEvaluationService evaluation;
     private final ThreadPoolTaskExecutor executor;
+    private final GlobalTrendService globalTrend;
     private final ReentrantLock lock = new ReentrantLock(true);
 
-    public EvaluationJobService(IdeaRepository ideas, DailyEvaluationService evaluation,
+    public EvaluationJobService(IdeaRepository ideas, DailyEvaluationService evaluation, GlobalTrendService globalTrend,
                                 @Qualifier(EvaluationExecutorConfig.EXECUTOR) ThreadPoolTaskExecutor executor) {
         this.ideas = ideas;
         this.evaluation = evaluation;
         this.executor = executor;
+        this.globalTrend = globalTrend;
+    }
+
+    /**
+     * 글로벌 트렌드 수집·요약을 같은 실행기·전역 락에 넣는다 (시연 API용). 이후에 큐에 들어가는 평가는 이 작업 뒤에 실행되어 새 트렌드를 쓴다.
+     *
+     * @throws CustomException 대기열 가득 E004
+     */
+    public void submitTrendRefresh(boolean force) {
+        try {
+            executor.execute(() -> {
+                lock.lock();
+                try {
+                    globalTrend.refresh(force);
+                } catch (RuntimeException e) {
+                    log.error("글로벌 트렌드 수동 갱신 실패", e);
+                } finally {
+                    lock.unlock();
+                }
+            });
+        } catch (TaskRejectedException e) {
+            throw new CustomException(ErrorCode.EVALUATION_QUEUE_FULL);
+        }
     }
 
     /**

@@ -97,7 +97,7 @@ public class GlobalTrendService {
             return null;
         }
         try {
-            TrendSnapshot snapshot = collect(today);
+            TrendSnapshot snapshot = collect(today, false).snapshot();
             cached = snapshot;
             cachedOn = today;
             failedAt = null;
@@ -109,10 +109,46 @@ public class GlobalTrendService {
         }
     }
 
-    private TrendSnapshot collect(LocalDate today) {
+    /** 오늘의 트렌드가 이미 있는지 (메모리 또는 DB의 오늘 행). 외부 호출은 하지 않는다. */
+    public synchronized boolean isCurrent() {
+        LocalDate today = LocalDate.now();
+        if (cached != null && today.equals(cachedOn)) {
+            return true;
+        }
+        return tx.execute(s -> trends.findFirstByOrderByIdDesc()
+                .map(t -> t.getCreatedAt().toLocalDate().equals(today)).orElse(false));
+    }
+
+    /**
+     * 트렌드를 지금 다시 수집·요약한다 (시연용 수동 실행). {@code force=false}면 오늘 이미 있을 때 아무것도 하지 않는다(하루 1회·해시 규칙 그대로).
+     * {@code force=true}면 오늘 캐시와 "해시가 같으면 재사용" 규칙을 무시하고 새 행으로 다시 만든다(같은 URL 항목 요약 재사용은 유지). 실패하면 로그만 남긴다.
+     *
+     * @return 새 트렌드 행을 만들었으면 true
+     */
+    public synchronized boolean refresh(boolean force) {
+        LocalDate today = LocalDate.now();
+        if (!force && cached != null && today.equals(cachedOn)) {
+            return false;
+        }
+        try {
+            Collected c = collect(today, force);
+            cached = c.snapshot();
+            cachedOn = today;
+            failedAt = null;
+            return c.created();
+        } catch (RuntimeException e) {
+            failedAt = LocalDateTime.now();
+            log.warn("글로벌 트렌드 수동 갱신에 실패했습니다: {}", e.toString());
+            return false;
+        }
+    }
+
+    private record Collected(TrendSnapshot snapshot, boolean created) {}
+
+    private Collected collect(LocalDate today, boolean force) {
         Optional<Trend> latest = tx.execute(s -> trends.findFirstByOrderByIdDesc());
-        if (latest.isPresent() && latest.get().getCreatedAt().toLocalDate().equals(today)) {
-            return load(latest.get().getId()); // 오늘 이미 만들어 둠 (앱 재시작 등)
+        if (!force && latest.isPresent() && latest.get().getCreatedAt().toLocalDate().equals(today)) {
+            return new Collected(load(latest.get().getId()), false); // 오늘 이미 만들어 둠 (앱 재시작 등)
         }
 
         Map<ApiProvider, List<SourceItem>> found = new LinkedHashMap<>();
@@ -132,11 +168,11 @@ public class GlobalTrendService {
         }
 
         String hash = SourceHasher.hash(found.values().stream().flatMap(List::stream).toList());
-        if (latest.isPresent() && latest.get().getContentHash().equals(hash)) {
+        if (!force && latest.isPresent() && latest.get().getContentHash().equals(hash)) {
             log.info("글로벌 트렌드 상위 항목이 어제와 같아 기존 트렌드를 그대로 씁니다 trendId={}", latest.get().getId());
-            return load(latest.get().getId());
+            return new Collected(load(latest.get().getId()), false);
         }
-        return summarizeAndSave(found, hash, latest.map(Trend::getId).orElse(null));
+        return new Collected(summarizeAndSave(found, hash, latest.map(Trend::getId).orElse(null)), true);
     }
 
     private TrendSnapshot summarizeAndSave(Map<ApiProvider, List<SourceItem>> found, String hash, Long previousId) {

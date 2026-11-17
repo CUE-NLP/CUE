@@ -69,4 +69,8 @@ public interface IdeaRepository extends JpaRepository<Idea, Long> {
     /** 일일 평가 대상 id (HOLD 제외하려면 ACTIVE). */
     @Query("select i.id from Idea i where i.status = :status order by i.id")
     List<Long> findIdsByStatus(@Param("status") IdeaStatus status);
+
+    /** 한 사용자의 상태별 아이디어 id (시연 API용). */
+    @Query("select i.id from Idea i where i.user.id = :userId and i.status = :status order by i.id")
+    List<Long> findIdsByUserIdAndStatus(@Param("userId") Long userId, @Param("status") IdeaStatus status);
 }
