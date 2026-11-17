@@ -5,9 +5,16 @@ services:
       POSTGRES_DB: cue
       POSTGRES_USER: cue
       POSTGRES_PASSWORD: cue
+      TZ: Asia/Seoul
+      PGTZ: Asia/Seoul
     ports:
-      - "5433:5432"
+      - "${DB_PORT:-5433}:5432"
     volumes:
       - cue-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cue -d cue"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 volumes:
   cue-db:
