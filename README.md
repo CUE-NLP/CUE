@@ -74,7 +74,7 @@ backend/src/main/java/com/cue
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
 ├── score/           항목별 점수 (4개 기준)
 ├── evaluation/      재평가 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
-├── source/          아이디어별 외부 자료 수집 설정 · 변경 감지 (ApiProvider)
+├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange) · 해시 변경 감지
 └── trend/           고정 API 4개로 수집한 트렌드 요약
 ```
 
@@ -109,6 +109,9 @@ cd backend && ./gradlew bootRun
 | `JWT_SECRET` | 개발용 임시 값 | **운영에서는 반드시 32바이트 이상 값으로 교체** |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간(분) |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
+| `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
+| `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
+| `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
 | `DB_PORT` | `5433` | `docker-compose.yml`의 DB 호스트 포트 (`DB_URL` 포트도 함께 맞출 것) |
 
 ### 테스트
