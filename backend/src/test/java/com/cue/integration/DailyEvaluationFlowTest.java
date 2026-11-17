@@ -43,7 +43,7 @@ import tools.jackson.databind.ObjectMapper;
 @AutoConfigureMockMvc
 @Testcontainers
 @TestPropertySource(properties = {"spring.docker.compose.enabled=false", "cue.gemini.enabled=false",
-        "cue.evaluation.enabled=false", "cue.evaluation.delay-ms=0"})
+        "cue.evaluation.enabled=false", "cue.evaluation.delay-ms=0", "cue.evaluation.auto-on-save=false"})
 class DailyEvaluationFlowTest {
 
     @Container
@@ -121,9 +121,21 @@ class DailyEvaluationFlowTest {
         return mapper.readTree(res).get("data").get("id").asLong();
     }
 
+    @Autowired com.cue.evaluation.service.DailyEvaluationService dailyEvaluation;
+
+    /** 파이프라인을 직접(동기로) 실행하고 {status, changed, idea} 형태로 돌려준다. 비동기 API는 AsyncEvaluationFlowTest에서 본다. */
     private tools.jackson.databind.JsonNode evaluate(String token, long id) throws Exception {
-        return mapper.readTree(mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
-                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("data");
+        var run = dailyEvaluation.evaluate(id);
+        var out = mapper.createObjectNode();
+        out.put("status", run.status().name());
+        out.put("changed", run.changed());
+        out.set("idea", mapper.readTree(mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
+                .andReturn().getResponse().getContentAsString()).get("data"));
+        return out;
+    }
+
+    private com.cue.global.error.ErrorCode evaluateFailure(long id) {
+        return assertThrows(com.cue.global.error.CustomException.class, () -> dailyEvaluation.evaluate(id)).getErrorCode();
     }
 
     private int count(String sql, Object... args) {
@@ -240,9 +252,7 @@ class DailyEvaluationFlowTest {
         doThrow(new com.cue.global.error.CustomException(com.cue.global.error.ErrorCode.EXTERNAL_SERVER_ERROR))
                 .when(gemini).generateJson(anyString(), anyMap());
 
-        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
-                .andExpect(status().isBadGateway())
-                .andExpect(jsonPath("$.code").value("G002"));
+        assertEquals(com.cue.global.error.ErrorCode.EXTERNAL_SERVER_ERROR, evaluateFailure(id));
 
         verify(sourceCheck).restoreHash(eq(1L), any(), any());
         assertEquals(5, evaluationCount(id));
@@ -309,8 +319,7 @@ class DailyEvaluationFlowTest {
             return mapper.readTree(INITIAL);
         }).when(gemini).generateJson(anyString(), anyMap());
 
-        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
-                .andExpect(status().isBadGateway()).andExpect(jsonPath("$.code").value("G002"));
+        assertEquals(com.cue.global.error.ErrorCode.EXTERNAL_SERVER_ERROR, evaluateFailure(id));
 
         assertEquals(4, evaluationCount(id)); // 4개 기준은 저장됨
         assertFalse(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id));
@@ -334,8 +343,7 @@ class DailyEvaluationFlowTest {
             return mapper.readTree(trendReply);
         }).when(gemini).generateJson(anyString(), anyMap());
 
-        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
-                .andExpect(status().isBadGateway());
+        assertEquals(com.cue.global.error.ErrorCode.EXTERNAL_SERVER_ERROR, evaluateFailure(id));
 
         assertEquals(1, evaluationCount(id)); // TREND만 저장됨
         assertTrue(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id)); // A는 재시도 대상

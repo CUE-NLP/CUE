@@ -13,14 +13,14 @@ import org.springframework.stereotype.Service;
 
 /**
  * 일일 배치: ACTIVE 아이디어를 하나씩 재평가한다 (HOLD 제외). 아이디어마다 독립된 트랜잭션·예외 처리라서
- * 한 아이디어가 실패해도 다음 아이디어는 계속한다. 아이디어 루프 전에 글로벌 트렌드를 한 번 만든다(아이디어 수와 무관). Gemini 무료 티어 한도를 위해 아이디어 사이에 {@code cue.evaluation.delay-ms}만큼 쉰다.
+ * 한 아이디어가 실패해도 다음 아이디어는 계속한다. 아이디어 평가는 수동 요청과 같은 전역 락({@link EvaluationJobService})으로 한 번에 하나씩 돌고 같은 평가 상태 규칙(RUNNING → IDLE/FAILED)으로 기록한다. 아이디어 루프 전에 글로벌 트렌드를 한 번 만든다(아이디어 수와 무관). Gemini 무료 티어 한도를 위해 아이디어 사이에 {@code cue.evaluation.delay-ms}만큼 쉰다.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class EvaluationBatchService {
     private final IdeaRepository ideas;
-    private final DailyEvaluationService evaluation;
+    private final EvaluationJobService jobs;
     private final GeminiClient gemini;
     private final GlobalTrendService globalTrend;
     private final EvaluationProperties props;
@@ -40,7 +40,7 @@ public class EvaluationBatchService {
             Long id = ids.get(i);
             boolean aiUsed = true;
             try {
-                EvaluationRunResult r = evaluation.evaluate(id);
+                EvaluationRunResult r = jobs.execute(id, EvaluationJobService.BATCH_ALLOWED); // 전역 락·상태 기록은 수동 요청과 같다
                 if (r.status() == EvaluationRunResult.Status.NO_CHANGE) {
                     noChange++;
                     aiUsed = false;

@@ -47,7 +47,8 @@ public enum ErrorCode {
     // ===== Evaluation (재평가, E-xxx) — AI 호출 자체의 통신 오류는 G002 =====
     AI_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, "E001", "AI 평가를 사용할 수 없습니다. (Gemini 비활성 또는 API 키 없음)"),
     AI_RESPONSE_INVALID(HttpStatus.BAD_GATEWAY, "E002", "AI 평가 응답을 해석할 수 없습니다."),
-    EVALUATION_IN_PROGRESS(HttpStatus.CONFLICT, "E003", "이 아이디어는 이미 평가 중입니다. 잠시 후 다시 시도해주세요.");
+    EVALUATION_QUEUE_FULL(HttpStatus.SERVICE_UNAVAILABLE, "E004", "평가 요청이 많아 대기열이 가득 찼습니다. 잠시 후 다시 시도해주세요."),
+    EVALUATION_INTERRUPTED(HttpStatus.SERVICE_UNAVAILABLE, "E005", "서버가 재시작되어 평가가 중단되었습니다. 다시 시도해주세요.");
 
     private final HttpStatus status;
     private final String code;

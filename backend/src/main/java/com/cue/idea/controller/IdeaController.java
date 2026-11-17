@@ -60,13 +60,15 @@ public class IdeaController {
     }
 
     /**
-     * 일일 평가와 같은 재평가를 이 아이디어에 지금 실행한다. 본인 아이디어만, 보류(HOLD)면 I004.
-     * 자료 변화가 없으면 NO_CHANGE로 아무것도 기록하지 않는다. Gemini 호출 때문에 몇 초~수십 초 걸릴 수 있다.
+     * 평가를 비동기로 요청한다: 즉시 <b>202 Accepted</b>로 돌아오고(본문 code는 다른 성공 응답처럼 "200"), 평가는 서버 큐에서 돈다.
+     * 본인 아이디어만(I002), 보류는 I004, Gemini 불가는 E001, 대기열이 가득 차면 E004를 요청 시점에 바로 돌려준다.
+     * 이미 평가 대기·진행 중이면 에러 없이 현재 상태(QUEUED/RUNNING)를 돌려준다. 결과는 GET /api/ideas/{id}의 evaluationStatus를 폴링해 확인한다.
      */
     @PostMapping("/{id}/evaluate")
+    @ResponseStatus(HttpStatus.ACCEPTED)
     public CommonResponse<EvaluateIdeaResponse> evaluate(@AuthenticationPrincipal UserPrincipal principal,
                                                          @PathVariable Long id) {
-        return CommonResponse.onSuccess(ideaEvaluationService.evaluate(principal.id(), id));
+        return CommonResponse.onSuccess(ideaEvaluationService.request(principal.id(), id));
     }
 
     /** 점수 이력 차트용 총점 이력 (오래된 순). */

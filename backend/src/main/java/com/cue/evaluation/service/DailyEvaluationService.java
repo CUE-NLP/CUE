@@ -25,7 +25,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -45,7 +44,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 순서: ① 대상 확인(I001/I004)·Gemini 사용 가능 확인(E001) → ② 새 턴 시작(예약 가중치 적용) → ③ 트렌드 확보·source 조회 →
  * ④ A도 B도 필요 없으면 평가·날짜 갱신 없이 종료 → ⑤ A, B를 각자 try로 실행 → ⑥ 성공한 쪽의 결과만 한 트랜잭션으로 저장
  * (총점·이력·날짜는 합쳐서 한 번). 한 쪽이 실패해도 다른 쪽은 저장하고, 실패한 쪽(A는 source 해시를 되돌려, B는 평가 완료 표시를 안 해서)은
- * 다음 실행에서 다시 한다. 실패가 있으면 저장 뒤 그 예외를 던진다. 같은 아이디어는 동시에 하나만 평가한다.
+ * 다음 실행에서 다시 한다. 실패가 있으면 저장 뒤 그 예외를 던진다. 동시 실행 방지(평가는 한 번에 하나)와 평가 상태 기록은 {@link EvaluationJobService}가 맡는다.
  */
 @Slf4j
 @Service
@@ -62,21 +61,12 @@ public class DailyEvaluationService {
     private final GeminiClient gemini;
     private final TransactionTemplate tx;
 
-    private final Set<Long> running = ConcurrentHashMap.newKeySet();
-
     /**
-     * @throws CustomException 없는 아이디어 I001, 보류 I004, AI 사용 불가 E001, 이미 평가 중 E003,
+     * @throws CustomException 없는 아이디어 I001, 보류 I004, AI 사용 불가 E001,
      *                         AI 통신 실패 G002, AI 응답 오류 E002 (A·B 중 하나가 실패한 경우, 다른 쪽 결과는 저장된 뒤다)
      */
     public EvaluationRunResult evaluate(Long ideaId) {
-        if (!running.add(ideaId)) {
-            throw new CustomException(ErrorCode.EVALUATION_IN_PROGRESS);
-        }
-        try {
-            return run(ideaId);
-        } finally {
-            running.remove(ideaId);
-        }
+        return run(ideaId);
     }
 
     private EvaluationRunResult run(Long ideaId) {

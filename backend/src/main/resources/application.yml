@@ -40,6 +40,11 @@ cue:
     zone: ${EVALUATION_ZONE:Asia/Seoul}
     # 아이디어 사이 대기(ms). Gemini 무료 티어 분당 호출 한도용 (아이디어당 최대 2회 호출)
     delay-ms: ${EVALUATION_DELAY_MS:15000}
+    # 등록·내용 수정으로 ACTIVE가 되면 첫 평가를 자동으로 큐에 넣는다 (프론트 "분석 중" 화면용). 테스트에서는 false
+    auto-on-save: ${EVALUATION_AUTO_ON_SAVE:true}
+    # 평가 대기열 상한(가득 차면 E004) / 종료 시 진행 중 평가를 기다리는 시간(초). 평가는 한 번에 하나만 실행한다
+    queue-capacity: ${EVALUATION_QUEUE_CAPACITY:50}
+    shutdown-wait-seconds: ${EVALUATION_SHUTDOWN_WAIT_SECONDS:30}
   trend:
     # 글로벌 트렌드(5번째 평가 기준 TREND): 고정 provider(HN·GitHub·Hugging Face)를 키워드 없이 하루 1회 수집한다.
     # 최근 N일 안에 올라온 글·저장소를 인기 순으로 보고, provider마다 상위 top-n개를 읽어 요약한다 (Gemini 호출 수에 비례)
