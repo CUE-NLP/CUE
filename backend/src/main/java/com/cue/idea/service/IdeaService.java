@@ -15,6 +15,7 @@ import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaSort;
 import com.cue.idea.entity.IdeaStatus;
 import com.cue.idea.entity.IdeaType;
+import com.cue.idea.event.IdeaEvaluationRequested;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.source.entity.ApiProvider;
 import com.cue.source.entity.Source;
@@ -36,6 +37,7 @@ public class IdeaService {
     private final IdeaScoreHistoryRepository histories;
     private final SourceRepository sources;
     private final IdeaAnalyzer analyzer;
+    private final org.springframework.context.ApplicationEventPublisher events;
 
     /**
      * 프론트가 구조화한 아이디어를 저장한다. 서버가 4개 항목 채움 여부로 ACTIVE/HOLD를 정하고,
@@ -48,6 +50,7 @@ public class IdeaService {
         Idea idea = ideas.save(new Idea(user, type, req.problem(), req.target(), req.solution(), req.expectation()));
         if (idea.isActive()) {
             extractAndRegisterSources(idea);
+            events.publishEvent(new IdeaEvaluationRequested(idea.getId())); // 커밋 뒤 첫 평가 자동 시작
         }
         return toResponse(idea);
     }
@@ -56,9 +59,12 @@ public class IdeaService {
     @Transactional
     public IdeaResponse update(Long userId, Long ideaId, UpdateIdeaRequest req) {
         Idea idea = findOwned(userId, ideaId);
-        idea.edit(req.problem(), req.target(), req.solution(), req.expectation());
+        boolean contentChanged = idea.edit(req.problem(), req.target(), req.solution(), req.expectation());
         if (idea.isActive()) {
             extractAndRegisterSources(idea);
+            if (contentChanged) { // HOLD → ACTIVE 포함. 내용이 그대로면 평가를 다시 시작하지 않는다
+                events.publishEvent(new IdeaEvaluationRequested(idea.getId()));
+            }
         }
         return toResponse(idea);
     }
