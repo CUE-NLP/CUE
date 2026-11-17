@@ -108,14 +108,25 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 ### 일일 재평가 (`evaluation`)
 - **진입점**: 스케줄러 `EvaluationScheduler`(`@Scheduled`, 기본 `0 0 3 * * *` Asia/Seoul) → `EvaluationBatchService.runAll()` → ACTIVE 아이디어 id마다 `DailyEvaluationService.evaluate(id)`. 수동 `POST /api/ideas/{id}/evaluate`도 같은 메서드를 쓴다. HOLD는 대상에서 제외(수동은 `I004`).
 - **아이디어 단위 격리**: 배치는 아이디어마다 try/catch로 로그만 남기고 계속한다. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 `DailyEvaluationService`는 `@Transactional`을 쓰지 않고 `TransactionTemplate`/`EvaluationService`의 짧은 트랜잭션으로 저장한다. 같은 아이디어는 동시에 하나만 평가(`E003`). 아이디어 사이에는 `cue.evaluation.delay-ms`(기본 15초)만큼 쉰다(Gemini를 쓰지 않은 `NO_CHANGE`는 쉬지 않음). Gemini 호출 수는 아래 "호출량" 참고.
-- **호출량과 무료 티어 대응** — 하루 평가는 두 갈래라 비용도 둘로 나뉜다.
-  - **B. 글로벌 트렌드(하루 1회 고정 비용, 아이디어 수와 무관)**: provider 3개 × (항목 요약 `cue.trend.top-n`회 + provider 요약 1회) + 최종 요약 1회 = top-n=5면 **19회/일**(top-n=2면 10회). 상위 항목 해시가 어제와 같으면 0회, 같은 URL의 항목 요약은 `summary-reuse-days`(기본 7일) 동안 재사용하므로 실제로는 더 적다.
-  - **TREND 평가(아이디어당)**: 새 트렌드가 만들어진 날(또는 아이디어 첫 평가) 1회, 트렌드가 같으면 0회. 보통 하루 1회/아이디어.
-  - **A. 키워드 근거(아이디어당, 변경된 것만)**: source = provider × 키워드 = IT 4×3=12개(그 외 종류 3×3=9개). 변경된 source 하나당 항목 요약 `top-n`회 + 소스 요약 1회, 거기에 근거 평가(초기 또는 재평가) 1회. 즉 Σ(변경 source)(`top-n`+1) + 1. 변경이 없고 전체 평가 플래그도 꺼져 있으면 0회.
-  - 합계: **하루 총 호출 = 19(트렌드) + Σ아이디어[TREND 1 + A 비용]**. 최악(아이디어마다 12개 source 모두 변경, top-n=5): 아이디어당 12×6+1(A) + 1(TREND) = **74회**. 변경 3개면 3×6+1+1 = 20회, 변경 없고 새 트렌드만 있으면 1회, 둘 다 없으면 0회. `top-n=2`면 최악 12×3+2 = 38회.
-  - 호출 간격: `GEMINI_MIN_INTERVAL_MS`(기본 6500ms ≈ 분당 9회)로 모든 평가용 Gemini 호출 사이를 벌려 분당 한도(RPM)를 지킨다. 아이디어 사이 대기는 `EVALUATION_DELAY_MS`. 트렌드 수집은 약 2분(19회), 최악 아이디어 1개는 약 8분. 일일 한도(RPD)는 키 수령 후 확인이 필요하며 한도에 닿으면 `G002`로 그 갈래가 실패하고(A는 해시 복구, B는 평가 완료 미기록) 다음 배치에서 다시 시도한다.
-  - 열어둔 설정: `SOURCE_TOP_N`, `SOURCE_TRENDING_DAYS`, `SOURCE_MAX_CONTENT_CHARS`, `SOURCE_SUMMARY_REUSE_DAYS`, `TREND_DAYS`, `TREND_TOP_N`, `GEMINI_MIN_INTERVAL_MS`, `EVALUATION_DELAY_MS`. **병렬/배치 호출은 구현하지 않았다**(RPM 한도 때문에 순차가 안전). 한 source의 항목들을 한 번에 요약하는 배치는 호출 수를 `top-n`배 줄일 수 있어 한도가 부족하면 다음 후보다.
-  - 수동 `POST /evaluate`는 이 호출들을 한 요청 안에서 동기로 수행하므로 오래 걸릴 수 있다(비동기 전환은 열린 결정). 그날 첫 호출이 트렌드 수집(약 2분)까지 떠안을 수 있다.
+- **호출량과 무료 티어 대응** — source(또는 트렌드 provider) 하나의 항목은 **한 번의 일괄 호출**로 요약한다(항목마다 호출하던 방식 폐기). source당 Gemini 호출 = **일괄 항목 요약 1회 + 소스 요약 1회 = 2회**, 저장된 요약을 전부 재사용하면 소스 요약 1회뿐이다.
+  - **B. 글로벌 트렌드(하루 1회 고정, 아이디어 수와 무관)**: provider 3개 × 2 + 최종 요약 1 = **7회/일**(해시가 같으면 0회). `TREND_TOP_N`은 호출 수가 아니라 일괄 호출의 입력 크기에만 영향을 준다.
+  - **TREND 평가(아이디어당)**: 새 트렌드가 만들어진 날(또는 아이디어 첫 평가) 1회, 트렌드가 같으면 0회.
+  - **A. 키워드 근거(아이디어당, 변경된 source만)**: source = provider × 키워드(키워드 최대 3개). 변경된 source마다 2회 + 근거 평가(초기/재평가) 1회 = 2×(변경 source 수) + 1. 변경도 전체 평가 플래그도 없으면 0회.
+
+| 아이디어 종류 / 키워드 수 | source 수 | A 최악(전부 변경) | + TREND 1 | 하루 총합 (트렌드 7 + 아이디어당) |
+| --- | --- | --- | --- | --- |
+| IT (provider 4) / 3개 | 12 | 12×2+1 = 25 | **26** | 7 + 26×N |
+| IT / 2개 | 8 | 8×2+1 = 17 | **18** | 7 + 18×N |
+| 그 외 (provider 3) / 3개 | 9 | 9×2+1 = 19 | **20** | 7 + 20×N |
+| 그 외 / 2개 | 6 | 6×2+1 = 13 | **14** | 7 + 14×N |
+
+  - 예: IT·키워드 3개에서 변경이 3개뿐이면 3×2+1 = 7, 새 트렌드만 있으면 1(TREND), 둘 다 없으면 0. (이전 방식은 최악 74회였다.)
+  - 호출 간격: `GEMINI_MIN_INTERVAL_MS`(기본 6500ms ≈ 분당 9회)는 **호출당** 적용되므로 소요 시간 ≈ 호출 수 × 6.5초. 트렌드 수집 7회 ≈ 45초, 최악 아이디어(26회) ≈ 2분 50초, IT·키워드 2개 최악(18회) ≈ 2분. 아이디어 사이 대기는 `EVALUATION_DELAY_MS`. 일일 한도(RPD)는 키 수령 후 확인이 필요하며 한도에 닿으면 `G002`로 그 갈래가 실패하고(A는 해시 복구, B는 평가 완료 미기록) 다음 배치에서 다시 시도한다.
+  - **일괄 요약의 입력 크기**: 항목당 원문은 `SOURCE_BATCH_CONTENT_CHARS`(기본 4000자, 단건 모드의 8000보다 작게), 한 호출 합계는 `SOURCE_BATCH_TOTAL_CHARS`(기본 16000자)로 자른다(넘으면 항목당 길이를 균등하게 줄임, 최소 200자). 응답은 `{"items":[{"url","summary"}]}`이며 서버가 검증한다(입력에 있던 URL만·중복 제거·500자 제한, 빠진 항목은 건너뛰고 원래 조회한 짧은 요약 사용).
+  - **항목 요약과 소스 요약을 한 호출로 합치지 않은 이유**: 호출이 source당 1회로 줄지만 ① 응답이 길어져 JSON이 잘리거나 항목 요약 품질이 떨어질 위험이 있고 ② 항목 요약이 전부 재사용된 날에도 소스 요약은 따로 필요해 결국 호출 경로가 둘로 갈라진다. 한도가 더 부족하면 다음 후보다.
+  - **일괄 호출 실패 처리**: 그 source는 원래 조회한 항목(제목·URL·짧은 요약)으로 평가를 계속하고(`SourceSummary.degraded`), 평가 저장이 끝난 뒤 source 해시를 되돌려 다음 실행에서 다시 읽고 요약한다(`source_items`·`sources.summary`는 건드리지 않음). 글로벌 트렌드는 일괄 호출이 실패한 provider를 그날 트렌드에서 뺀다(재사용 항목만 남기고 진행, 전부 비면 그날은 만들지 못함 → 다음 배치에서 재시도). 원문 읽기에 실패한 항목은 건너뛰고 나머지로 일괄 호출한다.
+  - 열어둔 설정: `SOURCE_TOP_N`, `SOURCE_TRENDING_DAYS`, `SOURCE_MAX_CONTENT_CHARS`, `SOURCE_BATCH_CONTENT_CHARS`, `SOURCE_BATCH_TOTAL_CHARS`, `SOURCE_SUMMARY_REUSE_DAYS`, `TREND_DAYS`, `TREND_TOP_N`, `GEMINI_MIN_INTERVAL_MS`, `EVALUATION_DELAY_MS`. 병렬 호출은 구현하지 않았다(RPM 한도 때문에 순차가 안전).
+  - 수동 `POST /evaluate`는 이 호출들을 한 요청 안에서 동기로 수행하므로 오래 걸릴 수 있다(비동기 전환은 열린 결정). 그날 첫 호출이 트렌드 수집(약 45초)까지 떠안을 수 있다.
 - **Gemini 사용 불가**(비활성/키 없음): 배치는 로그만 남기고 통째로 건너뛰고, 아이디어 단위 호출은 아무것도 쓰지 않고 `E001`.
 - **파이프라인** (`DailyEvaluationService`) — 하루 평가는 서로 독립인 두 갈래다.
 
@@ -127,20 +138,20 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
                  ③ 트렌드 확보(today) · source 조회(checkAll, 해시 변경 감지)
                  ④ runA = 변경된 source 있음 or needs_full_evaluation / runB = 트렌드 있음 and last_trend_id ≠ 오늘 트렌드
                     둘 다 아니면 NO_CHANGE (평가·이력·날짜 갱신 없음)
-                 ⑤ A: 변경 source마다 원문→항목 요약→소스 요약 → 근거 4개 기준 초기/재평가 (trend_id 없음)
+                 ⑤ A: 변경 source마다 원문 읽기→항목 일괄 요약 1회→소스 요약 1회 → 근거 4개 기준 초기/재평가 (trend_id 없음)
                     B: TrendEvaluator — 4항목 + 오늘 트렌드 → TREND 첫 평가(0~100)/재평가(±10) (trend_id = 오늘 트렌드)
                  ⑥ 성공한 쪽의 결과를 한 트랜잭션(recordResults)으로 저장: 총점 재계산·이력 1행·last_evaluated_at은 합쳐서 한 번
 ```
 
   - **독립 실패**: A와 B를 각자 try로 실행한다. 한 쪽이 실패해도 다른 쪽 결과는 저장하고(그 뒤 실패 예외를 던진다 → 배치는 failed로 센다), 실패한 쪽은 다음 실행에서 다시 한다: A는 source 해시를 되돌리고 `needs_full_evaluation`을 유지, B는 `last_trend_id`를 갱신하지 않는다. 둘 다 실패하면 둘 다 재시도 대상이다.
   - 변경 감지 이전의 `SourceCheckService.checkAll`은 Gemini를 쓰지 않는다. 트렌드를 만들지 못한 날(`today()`가 null)은 B만 건너뛰고 A는 정상 진행하며, 30분 안에는 수집을 다시 시도하지 않는다.
-  - A의 항목 하나가 원문 읽기·요약에서 실패하면 그 항목만 건너뛴다. 재평가에 넘기는 `changedItems`는 새로 읽은 상위 N개의 **항목 요약본**이다(소스 요약은 `sources.summary`에 저장만 한다).
+  - A의 항목 하나가 원문 읽기에서 실패하면 그 항목만 건너뛰고, 일괄 호출이 실패하면 그 source는 원래 조회한 항목으로 대체한다(위 "일괄 호출 실패 처리"). 재평가에 넘기는 `changedItems`는 새로 읽은 상위 N개의 **항목 요약본**이다(소스 요약은 `sources.summary`에 저장만 한다).
   - B에서 점수가 안 바뀌어도(차이 0) 그 트렌드로 평가했다는 표시(`last_trend_id`)는 남겨 같은 트렌드로 다시 호출하지 않는다.
 - **AI 응답 서버 검증** (호출은 `responseMimeType=application/json`+`responseSchema`로 형식 강제). 공통: 변화량·점수는 정수로 반올림 / 근거 요약 300자(`MAX_SUMMARY_CHARS`) 초과는 `…`로 자름 / `referenceUrls`는 **입력으로 준 자료의 URL만** 남김(그 밖은 버림) / 0~100 제한은 `Score.applyDifference`.
   - 키워드 근거 4개 기준(`EvaluationAnalyzer`): type이 근거 4개 enum이 아니면(TREND 포함) 버림, 같은 type 중복 버림 / 재평가는 기준당 ±10(`MAX_DIFFERENCE`) 클램프, 0이면 버림, 근거 요약이 비면 그 항목 버림(초기 평가는 점수를 살리려고 빈 요약에 기본 문구) / 초기 평가는 점수를 0~100으로 제한해 현재 점수와의 차이로 기록(±10 미적용). 프롬프트의 `{{items}}`/`{{changedItems}}`는 한 줄에 한 건 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(없는 값 `-`, 제목 120자·요약 300자 상한, 전체 15건 상한, `SourceTextFormat`)이다.
   - TREND(`TrendEvaluator`): 첫 평가(`last_trend_id`가 null)는 `score`만 읽어 0~100으로 제한하고 현재 점수와의 차이로 기록, 재평가는 `difference`만 읽어 ±10 클램프(0이거나 근거 요약이 비면 변화 없음). 모드에 맞지 않는 필드는 무시한다. 근거 URL은 그날 트렌드 항목의 URL만.
 - **첫 평가 / 전체 평가**: 두 갈래 각각 플래그가 있다. 근거 4개 기준은 `ideas.needs_full_evaluation`, TREND는 `ideas.last_trend_id`가 null인지다. 새 아이디어와 **4항목 내용이 실제로 바뀐 수정**(`Idea.edit`)에서 둘 다 "첫 평가 필요"로 돌아간다. 근거 쪽은 **자료 변화가 없어도** `initial-evaluation`(기준별 0~100)을 한 번 수행하고, TREND 쪽은 오늘 트렌드가 있으면 `trend-evaluation` 첫 평가를 한다. 기록 규칙은 같다: 점수 → `현재 점수와의 차이`로 바꿔 `recordResults`에 넘기므로 점수가 바뀐 기준마다 `Evaluation` 행(첫 평가는 `difference = 점수`, `score_after = 점수`)이 생기고 총점 이력 스냅샷 1행과 `last_evaluated_at`이 갱신된다. 점수가 하나도 안 바뀌면(수정 후 같은 점수) 아무것도 기록하지 않지만 완료 표시는 남긴다. 실패하면 표시를 남기지 않아 다음 배치에서 재시도한다(HOLD인 동안은 평가 안 됨).
-- **프롬프트 계약**: `prompts/{item-summary,trend-summary,initial-evaluation,re-evaluation,trend-item-summary,global-trend-summary,trend-evaluation}.txt`. 플레이스홀더·출력 JSON은 `docs/ai-prompts.md`가 정본이다. 코드가 채우는 값: `keyword/title/url/content`(item-summary), `keywords`/`items`(trend-summary = 키워드 소스 단위 요약), `title/url/content`(trend-item-summary), `items`(global-trend-summary; provider 요약·최종 요약 두 단계에 같은 프롬프트), `target/problem/solution/expectation/items`(initial — 4개 기준만), `…/currentScores/changedItems`(re — 4개 기준만), `target/problem/solution/expectation/currentTrendScore/trendSummary/trendItems`(trend-evaluation). `trend-summary`의 `highlights`는 스키마에 포함하지 않아 저장하지 않는다. 출력 스키마는 `responseSchema`로 강제한다.
+- **프롬프트 계약**: `prompts/{item-summary-batch,trend-summary,initial-evaluation,re-evaluation,trend-item-summary-batch,global-trend-summary,trend-evaluation}.txt`. 플레이스홀더·출력 JSON은 `docs/ai-prompts.md`가 정본이다. 코드가 채우는 값: `keyword/items`(item-summary-batch), `keywords`/`items`(trend-summary = 키워드 소스 단위 요약), `items`(trend-item-summary-batch), `items`(global-trend-summary; provider 요약·최종 요약 두 단계에 같은 프롬프트), `target/problem/solution/expectation/items`(initial — 4개 기준만), `…/currentScores/changedItems`(re — 4개 기준만), `target/problem/solution/expectation/currentTrendScore/trendSummary/trendItems`(trend-evaluation). `trend-summary`의 `highlights`는 스키마에 포함하지 않아 저장하지 않는다. 출력 스키마는 `responseSchema`로 강제한다.
 - Gemini 평가 호출은 응답이 길어 `GEMINI_TIMEOUT_SECONDS` 기본 10초가 빠듯할 수 있다. 시간 초과가 잦으면 30 이상으로 올린다.
 
 ### 글로벌 트렌드 (`trend`, 5번째 평가 기준 TREND의 근거)
@@ -153,7 +164,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | GITHUB | `q=created:>{오늘−N일}` + `sort=stars` — 최근 N일 안에 **새로 만들어진** 저장소 중 stars 순 | 키워드 검색(`pushed`)과 달리 키워드가 없으므로 "갓 뜨는 프로젝트"를 보려고 최근 생성으로 한정(오래된 인기 저장소가 항상 상위를 차지하지 않게) |
 | HUGGING_FACE | `sort=trendingScore` 내림차순, 검색어 없음 | 허브가 이미 계산하는 최근 인기 점수 |
 
-- **흐름**: 3개 provider 조회(한 곳이 실패해도 나머지로 진행, 전부 실패하면 만들지 못함) → 항목들의 `SourceHasher` 해시가 **가장 최근 트렌드와 같으면 재요약 없이 그 행을 그대로 사용** → 다르면 상위 항목 원문 읽기(`WebContentFetcher` 등 키워드 소스와 같은 안전장치) → 항목 요약(`trend-item-summary`) → provider별 요약(`global-trend-summary`) → 최종 요약(같은 프롬프트) → `trends`·`trend_sources`·`trend_items` 저장(원문은 저장 안 함, 같은 URL 항목 요약은 `summary-reuse-days` 동안 재사용).
+- **흐름**: 3개 provider 조회(한 곳이 실패해도 나머지로 진행, 전부 실패하면 만들지 못함) → 항목들의 `SourceHasher` 해시가 **가장 최근 트렌드와 같으면 재요약 없이 그 행을 그대로 사용** → 다르면 상위 항목 원문 읽기(`WebContentFetcher` 등 키워드 소스와 같은 안전장치) → provider당 항목 일괄 요약(`trend-item-summary-batch`) → provider별 요약(`global-trend-summary`) → 최종 요약(같은 프롬프트) → `trends`·`trend_sources`·`trend_items` 저장(원문은 저장 안 함, 같은 URL 항목 요약은 `summary-reuse-days` 동안 재사용).
 - **실패**: 항목 하나가 실패하면 그 항목만 건너뛰고, 요약할 항목이 하나도 없거나 최종 요약이 비면 그날은 만들지 못한다(`today()`가 null → TREND 평가만 건너뛰고 30분 뒤부터 다시 시도, 근거 4개 기준 평가는 영향 없음). 어제 행이 있어도 오늘 조회가 전부 실패하면 오래된 트렌드로 평가하지 않고 null을 돌려준다.
 - **TREND 평가**: `TrendEvaluator`가 아이디어 4항목 + 오늘 트렌드 요약 + 항목 목록을 `trend-evaluation` 프롬프트에 대입한다(검증 규칙은 위 "AI 응답 서버 검증"). 결과는 `ScoreChange(trendId=오늘 트렌드)`로 `recordResults`에 들어가 `evaluations.trend_id`가 된다. 아이디어가 이미 오늘 트렌드(`last_trend_id`)로 평가됐으면 호출하지 않는다.
 
@@ -239,6 +250,7 @@ cd CUE/backend
 | `SOURCE_TRENDING_DAYS` | `30` | "급상승" 판단 기간(일) |
 | `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | 원문 자르는 길이 / 같은 URL 요약 재사용 기간(0이면 항상 재요약) |
 | `GEMINI_MIN_INTERVAL_MS` | `6500` | 평가용 Gemini 호출 사이 최소 간격(무료 티어 RPM) |
+| `SOURCE_BATCH_CONTENT_CHARS` / `SOURCE_BATCH_TOTAL_CHARS` | `4000` / `16000` | 항목 일괄 요약: 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자) |
 | `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 (테스트는 `false`) |
 | `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 실행 시각(Spring 6필드 cron)·시간대 |
 | `EVALUATION_DELAY_MS` | `15000` | 아이디어 사이 대기(ms). Gemini 무료 티어 분당 한도용 |
@@ -257,7 +269,7 @@ cd CUE/backend
 - 프론트 연동: 아직 **CORS 설정이 없다.** 프론트가 브라우저에서 호출하기 시작하면 허용 도메인을 설정해야 한다 (TODO).
 
 ## AI 프롬프트
-- Gemini 프롬프트는 `src/main/resources/prompts/`(`item-summary.txt`, `trend-summary.txt`, `trend-item-summary.txt`, `global-trend-summary.txt`, `initial-evaluation.txt`, `re-evaluation.txt`, `trend-evaluation.txt`)에 있고 플레이스홀더는 `{{name}}` 형식이다. 입력·출력 JSON 규격, 점수 앵커, 운용 팁은 [docs/ai-prompts.md](../docs/ai-prompts.md).
+- Gemini 프롬프트는 `src/main/resources/prompts/`(`item-summary-batch.txt`, `trend-summary.txt`, `trend-item-summary-batch.txt`, `global-trend-summary.txt`, `initial-evaluation.txt`, `re-evaluation.txt`, `trend-evaluation.txt`)에 있고 플레이스홀더는 `{{name}}` 형식이다. 입력·출력 JSON 규격, 점수 앵커, 운용 팁은 [docs/ai-prompts.md](../docs/ai-prompts.md).
 - **프롬프트를 바꾸면 `docs/ai-prompts.md`(플레이스홀더 표·JSON 예시)와 `PromptTemplatesTest`를 함께 갱신한다.** 파일명·플레이스홀더·출력 JSON 키는 `PromptLoader`/평가 코드(`EvaluationAnalyzer`, `TrendEvaluator`, `GlobalTrendService`)와의 계약이다.
 
 ## 실행·테스트
