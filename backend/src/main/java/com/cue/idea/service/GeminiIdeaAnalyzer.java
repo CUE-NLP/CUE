@@ -40,6 +40,8 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
             입력은 아이디어의 타깃·문제·해결·기대효과다. 아래 JSON 스키마로만 답한다.
             - type: 아이디어 종류 중 정확히 하나.
             - keywords: 경쟁 제품·기술·시장 동향을 검색하기 좋은 핵심 키워드 3개 (짧은 명사구, 중복 없이).
+            키워드는 아이디어가 한국어여도 **반드시 영어 검색어**로 쓴다. GitHub·Hacker News·Stack Overflow 등
+            영어 중심 서비스에서 검색되도록 영어권에서 통용되는 용어를 쓰고, 한글·번역투 표현은 쓰지 않는다.
             """;
 
     private final RestClient restClient;

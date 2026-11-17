@@ -3,6 +3,7 @@ package com.cue.idea.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
@@ -53,14 +54,16 @@ class GeminiIdeaAnalyzerTest {
         server.expect(requestTo(URL))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header("x-goog-api-key", "test-key"))
+                .andExpect(jsonPath("$.systemInstruction.parts[0].text").value(org.hamcrest.Matchers.containsString("영어 검색어")))
+                .andExpect(jsonPath("$.generationConfig.responseSchema.properties.keywords.maxItems").value(3))
                 .andRespond(withSuccess(
-                        envelope("{\"type\":\"EDUCATION\",\"keywords\":[\"학습 앱\",\"대학생 시간관리\",\"스터디 플래너\"]}"),
+                        envelope("{\"type\":\"EDUCATION\",\"keywords\":[\"study planner app\",\"student time management\",\"pomodoro\"]}"),
                         MediaType.APPLICATION_JSON));
 
         IdeaAnalysis result = analyzer.analyze(idea);
 
         assertThat(result.type()).isEqualTo(IdeaType.EDUCATION);
-        assertThat(result.keywords()).containsExactly("학습 앱", "대학생 시간관리", "스터디 플래너");
+        assertThat(result.keywords()).containsExactly("study planner app", "student time management", "pomodoro");
         server.verify();
     }
 
