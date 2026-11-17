@@ -9,8 +9,12 @@
 
 1. **기록**: 텍스트·음성으로 자유롭게 입력 (음성은 프론트에서 STT 후 전달)
 2. **구조화**: 프론트에서 AI가 타깃·문제·해결·기대효과 4개 항목으로 정리 → **사용자가 검증·수정한 뒤에만 서버에 저장**. 4개가 모두 채워지면 평가 대상(`ACTIVE`), 하나라도 비면 `보류(HOLD)`로 저장됩니다.
-3. **평가**: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성 4개 기준으로 점수화
-4. **갱신(Idea Delta)**: 매일(기본 03:00 KST) 외부 API 자료를 재확인해 변화가 있을 때만 Gemini가 재평가하고, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
+3. **평가**: 5개 기준으로 점수화합니다.
+   - **키워드 근거 자료**로 판단하는 4개: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성
+   - **글로벌 트렌드**로 판단하는 1개: **트렌디함(`TREND`)** — 아이디어와 무관하게 하루 1회 모은 Hacker News · GitHub · Hugging Face 급상승 자료를 아이디어에 대입해 판단
+4. **갱신(Idea Delta)**: 매일(기본 03:00 KST) 두 갈래로 재평가합니다. 변화가 있을 때만 Gemini를 호출하고, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
+   - **A. 키워드 근거 자료 → 4개 기준**: 아이디어 종류별 외부 API를 아이디어 키워드로 조회 → 변경 감지 → 상위 항목 원문 읽기 → 항목·소스 요약 → 재평가
+   - **B. 글로벌 트렌드 → TREND**: 하루 1회(아이디어 수와 무관) 키워드 없이 급상승 자료를 수집·요약 → 각 아이디어에 대입해 TREND 점수 갱신 (트렌드가 어제와 같으면 호출하지 않음)
 
 ## 저장소 구조
 
@@ -48,12 +52,13 @@ CUE
 ## 프론트가 맡는 역할
 - 아이디어 입력(텍스트·음성): **음성 인식(STT)은 프론트에서 처리**하고, 서버에는 텍스트만 보냅니다.
 - AI 구조화(타깃 · 문제 · 해결 · 기대효과)와 사용자 확인·수정 후 저장 요청 (서버는 구조화하지 않고 저장만 합니다. 항목이 비어 있으면 `보류`로 저장됩니다)
-- 리더보드(점수 · 순위 · 변화량), Idea Delta, 항목별 가중치 조절 화면
+- 리더보드(점수 · 순위 · 변화량), Idea Delta, 항목별 가중치 조절 화면 (**슬라이더 5개**: 4개 근거 기준 + 트렌디함)
 
 ## 백엔드 연동 참고
 - **응답 형식**: 모든 응답이 `CommonResponse` 래퍼입니다 (`result`, `code`, `message`, `data`, `timestamp`). 자세한 형식은 [응답 형식](#응답-형식)을 참고하세요.
 - **인증**: 로그인(`POST /api/auth/login`)으로 받은 `accessToken`을 `Authorization: Bearer {accessToken}` 헤더로 보냅니다.
 - **에러 처리**: `code` 값으로 분기합니다. 토큰 만료는 `A004`입니다. 전체 목록은 [에러 코드](#에러-코드)를 참고하세요.
+- **5개 기준(`TREND` 추가) — 프론트 영향**: `scores`가 아이디어마다 **5행**(`PROBLEM_IMPORTANCE`·`MARKET_DEMAND`·`MARKET_DIFFERENTIATION`·`TECH_FEASIBILITY`·`TREND`)으로 내려오고 가중치 기본값은 각 20%입니다. 가중치 슬라이더를 4개 → 5개로 늘리고, `PATCH /api/ideas/{id}/weights` 요청에 `TREND`를 **반드시 포함**해야 합니다(5개 모두 필요, 합 100). 예전 4개짜리 요청은 `I003`으로 거절됩니다. `/evaluations`의 `scoreType`에도 `TREND`가 나옵니다.
 - **API 문서**: 백엔드 실행 후 `http://localhost:8080/swagger-ui.html`
 - **CORS**: 아직 설정되어 있지 않습니다. 브라우저에서 호출을 시작할 때 백엔드와 허용 도메인을 맞춰야 합니다.
 
@@ -73,10 +78,10 @@ backend/src/main/java/com/cue
 ├── auth/            로그인 (JWT 발급)
 ├── user/            회원가입 · 내 정보
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
-├── score/           항목별 점수 (4개 기준)
-├── evaluation/      일일 재평가 파이프라인(스케줄러 · Gemini 평가) · 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
-├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange/Hacker News, 급상승 조회·원문 읽기) · 해시 변경 감지 · 항목/소스 요약
-└── trend/           변경된 외부 자료의 Gemini 요약 (평가 근거)
+├── score/           항목별 점수 (5개 기준: 4개 근거 기준 + TREND)
+├── evaluation/      일일 평가 파이프라인(스케줄러 · 근거 4개 기준 평가 · TREND 평가) · 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
+├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange/Hacker News, 키워드 급상승 조회·원문 읽기) · 해시 변경 감지 · 항목/소스 요약
+└── trend/           글로벌 트렌드(키워드 없음, 하루 1회 수집·요약) — TREND 평가의 근거
 ```
 
 각 도메인은 `controller / service / repository / entity / dto` 로 나누고, 보일러플레이트는 Lombok(`@Getter`, `@RequiredArgsConstructor` 등)으로 줄입니다.
@@ -112,6 +117,7 @@ cd backend && ./gradlew bootRun
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
 | `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
 | `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
+| `TREND_DAYS` / `TREND_TOP_N` | `7` / `5` | 글로벌 트렌드: "급상승" 기간(일) / provider(HN·GitHub·Hugging Face)마다 읽고 요약할 상위 항목 수 |
 | `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
 | `SOURCE_TOP_N` / `SOURCE_TRENDING_DAYS` | `5` / `30` | source마다 읽고 요약할 상위 항목 수 / "급상승" 기간(일) |
 | `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | 원문을 자르는 길이 / 같은 URL 요약 재사용 기간(일) |
@@ -150,16 +156,16 @@ cd backend && ./gradlew test
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순) |
 | POST | `/api/ideas/{id}/evaluate` | ✓ | 지금 재평가 실행 (본인 아이디어만, 보류는 `I004`). 자료 변화가 없으면 `NO_CHANGE`로 아무것도 기록하지 않음. 응답: `status`, `changed`, 갱신된 `idea` |
-| PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
+| PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — **5개 항목(TREND 포함) 모두**, 합 100, **다음 평가 턴부터 적용** |
 
 ### 가중치
 
-- 평가 항목 4개(문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성)의 가중치는 아이디어별로 조절하며, 합이 **100%** 여야 합니다. 기본값은 각 25%입니다.
+- 평가 항목 5개(문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성 · 트렌디함)의 가중치는 아이디어별로 조절하며, 합이 **100%** 여야 합니다. 기본값은 각 20%입니다.
 - 변경하면 `pendingWeightPercent`에 예약되고, 현재 점수·순위에는 바로 반영되지 않습니다. 다음 평가 턴 시작 시(`Idea.startNextTurn()`) 적용되고 총점이 다시 계산됩니다.
 
 ```json
 PATCH /api/ideas/1/weights
-{ "weights": { "PROBLEM_IMPORTANCE": 30, "MARKET_DEMAND": 30, "MARKET_DIFFERENTIATION": 20, "TECH_FEASIBILITY": 20 } }
+{ "weights": { "PROBLEM_IMPORTANCE": 30, "MARKET_DEMAND": 25, "MARKET_DIFFERENTIATION": 20, "TECH_FEASIBILITY": 15, "TREND": 10 } }
 ```
 
 ### 응답 형식
@@ -200,14 +206,15 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | 테이블 | 설명 |
 | --- | --- |
 | `users` | 사용자 |
-| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 · 전체 평가 필요 플래그(`needs_full_evaluation`) |
-| `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
-| `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
+| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 · 전체 평가 필요 플래그(`needs_full_evaluation`) · TREND를 마지막으로 평가한 트렌드(`last_trend_id`) |
+| `scores` | 아이디어별 5개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
+| `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜). TREND 평가만 `trend_id`로 그날 트렌드에 연결 |
 | `evaluation_references` | 평가 근거 출처 URL |
 | `idea_score_histories` | 평가 시점의 총점 스냅샷 (점수 이력 차트용) |
 | `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각·소스 단위 요약 |
 | `source_items` | source의 상위 항목 요약 (원문은 저장 안 함, 변경 시 덮어쓰기) |
-| `trends` | 재평가 때 변경이 감지된 외부 자료의 Gemini 요약 (`evaluations.trend_id`로 연결) |
+| `trends` | 글로벌 트렌드 1행/일 (아이디어·키워드와 무관): 최종 요약 · provider · 상위 항목 해시 |
+| `trend_sources` / `trend_items` | 트렌드의 provider별 요약 / 상위 항목과 항목 요약 (원문은 저장 안 함) |
 
 ---
 
