@@ -67,12 +67,18 @@ cue:
     # 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자)
     batch-content-chars: ${SOURCE_BATCH_CONTENT_CHARS:4000}
     batch-total-chars: ${SOURCE_BATCH_TOTAL_CHARS:16000}
+    # Semantic Scholar: 최근 N년(올해 포함) 논문만 / Wikipedia: 문서 조회수를 합산할 최근 일수 / Wikimedia 필수 User-Agent(개인 이메일 금지)
+    papers-years: ${SOURCE_PAPERS_YEARS:2}
+    pageviews-days: ${SOURCE_PAGEVIEWS_DAYS:30}
+    wikimedia-user-agent: ${WIKIMEDIA_USER_AGENT:CUE-idea-portfolio/1.0 (student project; non-commercial)}
     github:
       token: ${GITHUB_TOKEN:}
     hugging-face:
       token: ${HUGGING_FACE_TOKEN:}
     stack-exchange:
       token: ${STACK_EXCHANGE_KEY:}
+    semantic-scholar:
+      token: ${SEMANTIC_SCHOLAR_API_KEY:}
 
   demo:
     # 시연용 "지금 조회·평가" API(POST /api/demo/evaluations/run). 기본 꺼짐: 호출이 Gemini 무료 한도를 소진시킬 수 있다

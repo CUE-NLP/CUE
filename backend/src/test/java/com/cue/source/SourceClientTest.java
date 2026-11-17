@@ -241,4 +241,99 @@ class SourceClientTest {
         assertEquals(ErrorCode.SOURCE_PROVIDER_NOT_SUPPORTED,
                 assertThrows(CustomException.class, () -> stack.trending(SETTINGS)).getErrorCode());
     }
+
+    // ===== Semantic Scholar =====
+
+    private static final String PAPERS = "{\"total\":3,\"data\":["
+            + "{\"paperId\":\"p1\",\"title\":\"Low cited\",\"abstract\":\"Short abstract.\",\"url\":\"https://www.semanticscholar.org/paper/p1\",\"year\":2026,\"citationCount\":3,\"publicationDate\":\"2026-02-03\"},"
+            + "{\"paperId\":\"p2\",\"title\":\"Highly cited\",\"abstract\":\"Long  abstract\\nwith whitespace.\",\"url\":null,\"year\":2025,\"citationCount\":120,\"publicationDate\":null},"
+            + "{\"paperId\":\"p3\",\"title\":\"No abstract\",\"abstract\":null,\"url\":\"https://www.semanticscholar.org/paper/p3\",\"year\":2026,\"citationCount\":50,\"publicationDate\":\"2026-01-01\"}]}";
+
+    @Test
+    void SemanticScholar는_최근_연도_범위로_검색하고_인용_수_순으로_정리하며_키가_있으면_헤더를_보낸다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://ss.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://ss.test/graph/v1/paper/search?query=ai%20agent")))
+                .andExpect(queryParam("limit", "5")).andExpect(queryParam("year", "2025-")) // 2026 − (2−1)
+                .andExpect(queryParam("fields", "title,abstract,url,year,citationCount,publicationDate"))
+                .andExpect(header("x-api-key", "secret"))
+                .andRespond(withSuccess(PAPERS, MediaType.APPLICATION_JSON));
+        List<SourceItem> items = new SemanticScholarSourceClient(b.build(), "secret", SETTINGS, 2).search("ai agent");
+
+        assertEquals(List.of("Highly cited", "No abstract", "Low cited"), items.stream().map(SourceItem::title).toList()); // 인용 수 내림차순
+        // url이 없으면 paperId 기반, 발행일이 없으면 연도, 초록 공백 정리, metrics는 인용 수
+        assertEquals(new SourceItem("Highly cited", "https://www.semanticscholar.org/paper/p2", "Long abstract with whitespace.", "2025", "citations=120"), items.get(0));
+        assertEquals(new SourceItem("Low cited", "https://www.semanticscholar.org/paper/p1", "Short abstract.", "2026-02-03", "citations=3"), items.get(2));
+        server.verify();
+    }
+
+    @Test
+    void SemanticScholar는_키가_없으면_헤더를_생략하고_초록을_원문으로_쓰며_연도_기간은_설정을_따른다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://ss.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://ss.test/graph/v1/paper/search")))
+                .andExpect(headerDoesNotExist("x-api-key")).andExpect(queryParam("year", "2024-")) // 3년
+                .andRespond(withSuccess(PAPERS, MediaType.APPLICATION_JSON));
+        SemanticScholarSourceClient client = new SemanticScholarSourceClient(b.build(), "", SETTINGS, 3);
+        List<SourceItem> items = client.search("x");
+        assertEquals("Short abstract.", client.fetchContent(items.get(2)));
+        assertEquals("", client.fetchContent(items.get(1))); // 초록이 없는 논문은 원문이 없어 호출한 쪽이 건너뛴다
+        server.verify();
+    }
+
+    @Test
+    void SemanticScholar의_429와_4xx는_G002로_변환된다() {
+        for (HttpStatus status : List.of(HttpStatus.TOO_MANY_REQUESTS, HttpStatus.BAD_REQUEST, HttpStatus.INTERNAL_SERVER_ERROR)) {
+            RestClient.Builder b = RestClient.builder().baseUrl("https://ss.test");
+            bind(b).expect(requestTo(org.hamcrest.Matchers.startsWith("https://ss.test/"))).andRespond(withStatus(status));
+            assertEquals(ErrorCode.EXTERNAL_SERVER_ERROR,
+                    assertThrows(CustomException.class, () -> new SemanticScholarSourceClient(b.build(), "", SETTINGS, 2).search("x")).getErrorCode(), status.toString());
+        }
+    }
+
+    // ===== Wikipedia pageviews =====
+
+    private static final String WIKI_SEARCH = "{\"query\":{\"search\":["
+            + "{\"title\":\"Foo bar\",\"snippet\":\"A <span class=\\\"searchmatch\\\">foo</span> &quot;bar&quot; thing\",\"timestamp\":\"2026-06-01T10:00:00Z\"},"
+            + "{\"title\":\"AC/DC\",\"snippet\":\"Band\",\"timestamp\":\"2026-05-01T00:00:00Z\"}]}}";
+
+    @Test
+    void Wikipedia는_검색_결과의_최근_30일_조회수를_합산하고_User_Agent를_보내며_HTML_snippet을_정리한다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://wiki.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://wiki.test/w/api.php?action=query&list=search&srsearch=foo%20bar")))
+                .andExpect(queryParam("srlimit", "5")).andExpect(queryParam("format", "json")).andExpect(queryParam("srnamespace", "0"))
+                .andExpect(header("User-Agent", "test-ua"))
+                .andRespond(withSuccess(WIKI_SEARCH, MediaType.APPLICATION_JSON));
+        // 2026-06-30 기준 어제(06-29)까지 30일 = 05-31 ~ 06-29
+        server.expect(requestTo("https://wm.test/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/Foo_bar/daily/20260531/20260629"))
+                .andExpect(header("User-Agent", "test-ua"))
+                .andRespond(withSuccess("{\"items\":[{\"views\":100},{\"views\":250},{\"views\":50}]}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://wm.test/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/AC%2FDC/daily/20260531/20260629"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)); // 조회수 데이터가 없어도 문서는 남는다
+
+        List<SourceItem> items = new WikipediaPageviewsSourceClient(b.build(), "test-ua", "https://wm.test", SETTINGS, 30).search("foo bar");
+
+        assertEquals(new SourceItem("Foo bar", "https://en.wikipedia.org/wiki/Foo_bar", "A foo \"bar\" thing", "2026-06-01", "views_30d=400"), items.get(0));
+        assertEquals(new SourceItem("AC/DC", "https://en.wikipedia.org/wiki/AC%2FDC", "Band", "2026-05-01", ""), items.get(1));
+        server.verify();
+    }
+
+    @Test
+    void Wikipedia_원문은_문서_소개이고_검색_실패는_G002이다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://wiki.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo("https://wiki.test/api/rest_v1/page/summary/Foo_bar")).andExpect(header("User-Agent", "test-ua"))
+                .andRespond(withSuccess("{\"title\":\"Foo bar\",\"extract\":\"Foo bar is a placeholder name.\"}", MediaType.APPLICATION_JSON));
+        WikipediaPageviewsSourceClient client = new WikipediaPageviewsSourceClient(b.build(), "test-ua", "https://wm.test", SETTINGS, 30);
+        assertEquals("Foo bar is a placeholder name.", client.fetchContent(new SourceItem("Foo bar", "https://en.wikipedia.org/wiki/Foo_bar", "", "", "")));
+        server.verify();
+
+        for (HttpStatus status : List.of(HttpStatus.TOO_MANY_REQUESTS, HttpStatus.FORBIDDEN)) {
+            RestClient.Builder b2 = RestClient.builder().baseUrl("https://wiki.test");
+            bind(b2).expect(requestTo(org.hamcrest.Matchers.startsWith("https://wiki.test/"))).andRespond(withStatus(status));
+            assertEquals(ErrorCode.EXTERNAL_SERVER_ERROR, assertThrows(CustomException.class,
+                    () -> new WikipediaPageviewsSourceClient(b2.build(), "test-ua", "https://wm.test", SETTINGS, 30).search("x")).getErrorCode());
+        }
+    }
 }

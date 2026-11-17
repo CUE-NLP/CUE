@@ -4,6 +4,8 @@ import com.cue.source.client.GithubSourceClient;
 import com.cue.source.client.HackerNewsSourceClient;
 import com.cue.source.client.HuggingFaceSourceClient;
 import com.cue.source.client.SearchSettings;
+import com.cue.source.client.SemanticScholarSourceClient;
+import com.cue.source.client.WikipediaPageviewsSourceClient;
 import com.cue.source.client.StackExchangeSourceClient;
 import com.cue.source.fetch.JdkTransport;
 import com.cue.source.fetch.WebContentFetcher;
@@ -21,6 +23,8 @@ public class SourceClientConfig {
     private static final String HUGGING_FACE_URL = "https://huggingface.co";
     private static final String STACK_EXCHANGE_URL = "https://api.stackexchange.com";
     private static final String HACKER_NEWS_URL = "https://hn.algolia.com";
+    private static final String SEMANTIC_SCHOLAR_URL = "https://api.semanticscholar.org";
+    private static final String WIKIPEDIA_URL = "https://en.wikipedia.org";
 
     @Bean
     SearchSettings searchSettings(SourceApiProperties props) {
@@ -61,6 +65,20 @@ public class SourceClientConfig {
     HackerNewsSourceClient hackerNewsSourceClient(RestClient.Builder builder, SourceApiProperties props,
                                                   SearchSettings settings, WebContentFetcher fetcher) {
         return new HackerNewsSourceClient(base(builder, props, url(props.hackerNews(), HACKER_NEWS_URL)).build(), settings, fetcher);
+    }
+
+    /** 논문 검색. API 키(선택)는 x-api-key 헤더로 보낸다. 키가 없으면 익명 한도라 429가 잦을 수 있다. */
+    @Bean
+    SemanticScholarSourceClient semanticScholarSourceClient(RestClient.Builder builder, SourceApiProperties props, SearchSettings settings) {
+        return new SemanticScholarSourceClient(base(builder, props, url(props.semanticScholar(), SEMANTIC_SCHOLAR_URL)).build(),
+                props.semanticScholar().token(), settings, props.papersYears());
+    }
+
+    /** 위키백과 검색 + Wikimedia 조회수. Wikimedia 정책상 User-Agent가 필수다. */
+    @Bean
+    WikipediaPageviewsSourceClient wikipediaPageviewsSourceClient(RestClient.Builder builder, SourceApiProperties props, SearchSettings settings) {
+        return new WikipediaPageviewsSourceClient(base(builder, props, url(props.wikipedia(), WIKIPEDIA_URL)).build(),
+                props.wikimediaUserAgent(), props.pageviewsBaseUrl(), settings, props.pageviewsDays());
     }
 
     private static String url(SourceApiProperties.Api api, String defaultUrl) {
