@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Primary;
@@ -46,6 +47,7 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
     private final GeminiProperties props;
     private final SimpleIdeaAnalyzer fallback;
 
+    @Autowired
     GeminiIdeaAnalyzer(RestClient.Builder builder, ObjectMapper objectMapper, GeminiProperties props,
                        SimpleIdeaAnalyzer fallback) {
         Duration timeout = Duration.ofSeconds(props.timeoutSeconds());
