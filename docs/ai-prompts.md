@@ -22,8 +22,8 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 앞 4개는 **아이디어 키워드로 모은 근거 자료**(`initial-evaluation`/`re-evaluation`)로, `TREND`는 **아이디어와 무관한 글로벌 트렌드**(`trend-evaluation`)로 평가한다. 두 갈래는 프롬프트도 입력도 따로다.
 
 ```
-[A 근거 4개 기준]  키워드 × 종류별 provider → 조회 → 원문 → item-summary → trend-summary(소스 단위) → initial/re-evaluation
-[B TREND]          (키워드 없음, 하루 1회) HN·GitHub·HF 급상승 → 원문 → trend-item-summary → global-trend-summary(provider별→최종) → trend-evaluation(아이디어마다)
+[A 근거 4개 기준]  키워드 × 종류별 provider → 조회 → 원문 → item-summary-batch(source당 1회) → trend-summary(소스 단위) → initial/re-evaluation
+[B TREND]          (키워드 없음, 하루 1회) HN·GitHub·HF 급상승 → 원문 → trend-item-summary-batch(provider당 1회) → global-trend-summary(provider별→최종) → trend-evaluation(아이디어마다)
 ```
 
 점수 앵커(0~100 정수): 0~20 매우 낮음 / 21~40 낮음 / 41~60 보통 / 61~80 높음 / 81~100 매우 높음. 자료가 빈약하면 40~60 근처로 보수적으로 준다. (수치는 임시 — "열린 결정" 참고)
@@ -50,24 +50,8 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 ```
 - `highlights`는 최대 5개, 입력 `items`에 있는 항목만.
 
-### item-summary.txt
-목적: source 상위 항목 **한 건의 원문**(GitHub README, 모델 카드, Stack Overflow 질문+최고 득표 답변, 기사 본문/Ask HN 글)을 읽고 2~3문장으로 요약한다. 원문은 앞 8000자로 잘라 보낸다. 결과는 `source_items`에 저장되고 소스 단위 요약(`trend-summary` 프롬프트를 이 source의 항목 요약들에 적용)과 재평가의 `{{changedItems}}`에 쓰인다.
-
-| 플레이스홀더 | 설명 |
-| --- | --- |
-| `{{keyword}}` | 이 source의 검색 키워드 |
-| `{{title}}` | 항목 제목 |
-| `{{url}}` | 항목 URL |
-| `{{content}}` | 읽어 온 원문 텍스트(길이 상한 적용, 신뢰하지 않는 데이터) |
-
-출력 스키마와 예시:
-```json
-{"summary":"에이전트 워크플로를 코드로 정의해 실행하는 오픈소스 프레임워크다. 개발자 대상이며 문서화된 예제가 많지만 대규모 운영 사례는 README에 없다."}
-```
-- 원문이 비었거나 의미가 없으면 `{"summary":""}` — 서버는 그 항목을 건너뛴다.
-
 ### item-summary-batch.txt
-목적: **키워드 근거 자료**의 source 하나의 상위 항목 N개를 **한 번의 호출로** 요약한다(항목마다 호출하던 `item-summary.txt` 대체). 항목마다 번호·제목·URL·날짜·지표·원문 일부를 넣는다. 원문은 항목당 `cue.source.batch-content-chars`(4000자), 한 호출 합계 `batch-total-chars`(16000자)로 자른다. 결과는 `source_items`에 저장된다.
+목적: **키워드 근거 자료**의 source 하나의 상위 항목 N개를 **한 번의 호출로** 요약한다(항목마다 호출하던 단건 프롬프트를 대체). 항목마다 번호·제목·URL·날짜·지표·원문 일부를 넣는다. 원문은 항목당 `cue.source.batch-content-chars`(4000자), 한 호출 합계 `batch-total-chars`(16000자)로 자른다. 결과는 `source_items`에 저장된다.
 
 | 플레이스홀더 | 설명 |
 | --- | --- |
@@ -91,21 +75,6 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 ```json
 {"items":[{"url":"https://news.ycombinator.com/item?id=1","summary":"브라우저에서 돌아가는 소형 음성 인식 모델의 오픈소스 구현이다. 서버 없이 기기 안에서 추론하려는 흐름을 보여준다."}]}
 ```
-
-### trend-item-summary.txt
-목적: **글로벌 트렌드**(키워드 없음)의 상위 항목 **한 건의 원문**을 읽고 2~3문장으로 요약한다. `item-summary.txt`와 같은 규칙에서 `{{keyword}}`만 뺐다. 결과는 `trend_items`에 저장된다(같은 URL은 `summary-reuse-days` 안이면 재사용).
-
-| 플레이스홀더 | 설명 |
-| --- | --- |
-| `{{title}}` | 항목 제목 |
-| `{{url}}` | 항목 URL |
-| `{{content}}` | 읽어 온 원문 텍스트(길이 상한 적용, 신뢰하지 않는 데이터) |
-
-출력 스키마와 예시:
-```json
-{"summary":"브라우저에서 돌아가는 소형 음성 인식 모델의 오픈소스 구현이다. 서버 없이 기기 안에서 추론하려는 흐름을 보여준다."}
-```
-- 원문이 비었거나 의미가 없으면 `{"summary":""}` — 서버는 그 항목을 건너뛴다.
 
 ### global-trend-summary.txt
 목적: **글로벌 트렌드**를 3~5문장으로 요약한다. **두 단계에 같은 프롬프트를 쓴다**: ① provider별 요약 — 한 provider의 항목 요약들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 입력으로 → `trend_sources`에 저장, ② 최종 트렌드 요약 — provider별 요약들을 입력으로 → `trends.summary`에 저장되고 TREND 평가 프롬프트의 `{{trendSummary}}`로 쓰인다.
