@@ -67,7 +67,6 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 | `{{problem}}` | 아이디어 문제 |
 | `{{solution}}` | 아이디어 해결 |
 | `{{expectation}}` | 아이디어 기대효과 |
-| `{{trendSummary}}` | 트렌드 요약 (없으면 빈 문자열) |
 | `{{items}}` | 아이디어 관련 수집 자료 목록 (provider, title, url, 스니펫) |
 
 출력 스키마와 예시:
@@ -87,7 +86,6 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 | `{{expectation}}` | 아이디어 기대효과 |
 | `{{currentScores}}` | 기준별 현재 점수 (예: `MARKET_DEMAND: 55` 한 줄씩) |
 | `{{changedItems}}` | 변경 감지된 자료 목록 (provider, title, url, 스니펫) |
-| `{{trendSummary}}` | 최신 트렌드 요약 |
 
 출력 스키마와 예시:
 ```json

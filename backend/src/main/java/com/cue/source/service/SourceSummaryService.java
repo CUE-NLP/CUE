@@ -12,7 +12,6 @@ import com.cue.source.entity.Source;
 import com.cue.source.entity.SourceItemSummary;
 import com.cue.source.repository.SourceItemSummaryRepository;
 import com.cue.source.repository.SourceRepository;
-import com.cue.trend.service.TrendService;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -34,11 +33,6 @@ import tools.jackson.databind.JsonNode;
 @Slf4j
 @Service
 public class SourceSummaryService {
-    static final Map<String, Object> SCHEMA = Map.of(
-            "type", "OBJECT",
-            "properties", Map.of("summary", Map.of("type", "STRING")),
-            "required", List.of("summary"));
-
     private final Map<ApiProvider, SourceClient> clients = new EnumMap<>(ApiProvider.class);
     private final GeminiClient gemini;
     private final PromptLoader prompts;
@@ -85,7 +79,7 @@ public class SourceSummaryService {
                     continue;
                 }
                 JsonNode result = gemini.generateJson(prompts.render("item-summary", Map.of(
-                        "keyword", changed.keyword(), "title", item.title(), "url", item.url(), "content", content)), SCHEMA);
+                        "keyword", changed.keyword(), "title", item.title(), "url", item.url(), "content", content)), SourceTextFormat.SUMMARY_SCHEMA);
                 String summary = result.path("summary").asString("").strip();
                 if (summary.isEmpty()) {
                     continue;
@@ -105,8 +99,8 @@ public class SourceSummaryService {
         String sourceSummary = null;
         try {
             JsonNode result = gemini.generateJson(prompts.render("trend-summary", Map.of(
-                    "keywords", changed.keyword(), "items", TrendService.formatSources(List.of(enriched)))),
-                    TrendService.SCHEMA);
+                    "keywords", changed.keyword(), "items", SourceTextFormat.formatSources(List.of(enriched)))),
+                    SourceTextFormat.SUMMARY_SCHEMA);
             String text = result.path("summary").asString("").strip();
             sourceSummary = text.isEmpty() ? null : text;
         } catch (RuntimeException e) {

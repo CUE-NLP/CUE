@@ -15,8 +15,6 @@ import com.cue.source.entity.Source;
 import com.cue.source.repository.SourceRepository;
 import com.cue.source.service.SourceCheckService;
 import com.cue.source.service.SourceSummaryService;
-import com.cue.trend.entity.Trend;
-import com.cue.trend.service.TrendService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.EnumMap;
@@ -38,8 +36,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   <li>(HOLD 아니어야 함, Gemini 사용 가능해야 함) 새 턴 시작: 예약 가중치 적용, 총점이 바뀌면 이력 스냅샷</li>
  *   <li>모든 source 조회 → 해시 비교로 변경 감지</li>
  *   <li>변경도 없고 전체 평가 요청도 없으면 평가·날짜 갱신 없이 종료</li>
- *   <li>변경된 source마다 상위 N개 원문 읽기→항목 요약→소스 요약({@link SourceSummaryService}) → 최종 트렌드 요약 → 전체 평가 요청이면 초기 평가, 아니면 재평가를 Gemini에 요청</li>
- *   <li>결과를 {@code recordChanges}로 저장 (trend 연결). 실패하면 해시를 되돌려 다음에 같은 변경을 다시 감지한다</li>
+ *   <li>변경된 source마다 상위 N개 원문 읽기→항목 요약→소스 요약({@link SourceSummaryService}) → 전체 평가 요청이면 초기 평가, 아니면 재평가를 Gemini에 요청 (기존 4개 기준)</li>
+ *   <li>결과를 {@code recordChanges}로 저장 (trend_id 없음). 실패하면 해시를 되돌려 다음에 같은 변경을 다시 감지한다</li>
  * </ol>
  * 예외(CustomException)는 호출한 쪽(배치/API)이 처리한다. 같은 아이디어는 동시에 하나만 평가한다.
  */
@@ -52,7 +50,6 @@ public class DailyEvaluationService {
     private final SourceCheckService sourceCheckService;
     private final EvaluationService evaluationService;
     private final EvaluationAnalyzer analyzer;
-    private final TrendService trendService;
     private final SourceSummaryService sourceSummaryService;
     private final GeminiClient gemini;
     private final TransactionTemplate tx;
@@ -95,15 +92,12 @@ public class DailyEvaluationService {
             // 변경된 source마다: 상위 N개 원문 읽기 → 항목 요약 → 소스 요약(DB 덮어쓰기). 그 요약들로 최종 트렌드 요약.
             List<SourceSummary> summaries = changed.stream().map(sourceSummaryService::summarize).toList();
             List<SourceCheckResult> enriched = summaries.stream().map(SourceSummary::result).toList();
-            Trend trend = trendService.summarize(summaries);
-            String trendSummary = trend == null ? null : trend.getSummary();
             List<ScoreChange> changes = snapshot.needsFullEvaluation()
-                    ? analyzer.initialEvaluate(snapshot, enriched, trendSummary)
-                    : analyzer.reEvaluate(snapshot, enriched, trendSummary);
+                    ? analyzer.initialEvaluate(snapshot, enriched)
+                    : analyzer.reEvaluate(snapshot, enriched);
             boolean full = snapshot.needsFullEvaluation();
-            Long trendId = trend == null ? null : trend.getId();
             Boolean updated = tx.execute(status -> {
-                boolean result = evaluationService.recordChanges(ideaId, changes, trendId);
+                boolean result = evaluationService.recordChanges(ideaId, changes); // 키워드 근거 평가: trend_id는 null
                 if (full) {
                     ideas.findById(ideaId).orElseThrow().completeFullEvaluation();
                 }

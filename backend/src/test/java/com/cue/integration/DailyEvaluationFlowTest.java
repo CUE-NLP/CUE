@@ -171,7 +171,7 @@ class DailyEvaluationFlowTest {
     // ===== 자료 변화 → 재평가 =====
 
     @Test
-    void 자료가_바뀌면_트렌드를_저장하고_변화량을_10으로_제한해_평가에_연결한다() throws Exception {
+    void 근거_자료가_바뀌면_변화량을_10으로_제한해_평가하고_트렌드와는_연결하지_않는다() throws Exception {
         String token = signUpAndLogin("change@cue.com");
         long id = createIdea(token, FULL);
         evaluate(token, id); // 초기 평가: 70/60/40/80
@@ -190,9 +190,8 @@ class DailyEvaluationFlowTest {
         assertEquals(70.0, demand); // 60 + min(35, 10)
         assertEquals(77.0, tech);   // 80 - 3
 
-        assertEquals(1, count("select count(*) from trends"));
-        assertEquals("GITHUB", jdbc.queryForObject("select providers from trends", String.class));
-        assertEquals(2, count("select count(*) from evaluations where trend_id is not null"));
+        assertEquals(0, count("select count(*) from trends")); // 키워드 근거 평가는 trend와 무관하다
+        assertEquals(0, count("select count(*) from evaluations where trend_id is not null"));
         assertEquals(2, count("select count(*) from idea_score_histories where idea_id = ?", id));
         mvc.perform(get("/api/ideas/" + id + "/evaluations").header("Authorization", token))
                 .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND' && @.difference==10.0)].references[0].url")

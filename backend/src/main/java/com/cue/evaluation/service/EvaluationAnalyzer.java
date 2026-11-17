@@ -10,7 +10,7 @@ import com.cue.global.error.ErrorCode;
 import com.cue.score.entity.ScoreType;
 import com.cue.source.dto.SourceCheckResult;
 import com.cue.source.dto.SourceItem;
-import com.cue.trend.service.TrendService;
+import com.cue.source.service.SourceTextFormat;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -25,9 +25,10 @@ import tools.jackson.databind.JsonNode;
 /**
  * Gemini로 아이디어를 평가해 {@link ScoreChange} 목록으로 바꾼다. 트랜잭션과 무관한 순수 호출·변환 계층이다.
  *
- * <p>프롬프트(resources/prompts, 설계는 docs/ai-prompts.md) 플레이스홀더: {@code problem, target, solution, expectation}(아이디어 4항목),
- * {@code currentScores}(현재 점수 "TYPE: 점수" 줄바꿈 목록), {@code changedItems}/{@code items}(변경된 자료 목록, 없으면 "(변경된 자료 없음)"),
- * {@code trendSummary}(변경 자료 요약, 없으면 "(없음)"). 프롬프트가 쓰지 않는 값은 무시된다.
+ * <p>키워드 근거 자료로 <b>기존 4개 기준</b>({@link ScoreType#EVIDENCE_TYPES})만 평가한다. TREND는 {@link TrendEvaluator}가 맡는다.
+ * 프롬프트(resources/prompts, 설계는 docs/ai-prompts.md) 플레이스홀더: {@code problem, target, solution, expectation}(아이디어 4항목),
+ * {@code currentScores}(현재 점수 "TYPE: 점수" 줄바꿈 목록), {@code changedItems}/{@code items}(근거 자료 목록, 없으면 "(변경된 자료 없음)").
+ * 프롬프트가 쓰지 않는 값은 무시된다.
  * <ul>
  *   <li>re-evaluation: {@code {"changes":[{"type","difference","evidenceSummary","referenceUrls":[]}]}} — 기준당 ±{@value #MAX_DIFFERENCE}로 서버에서 다시 제한</li>
  *   <li>initial-evaluation: {@code {"scores":[{"type","score","evidenceSummary","referenceUrls":[]}]}} — 0~100, 현재 점수와의 차이로 바꿔 기록</li>
@@ -74,9 +75,9 @@ public class EvaluationAnalyzer {
     private final PromptLoader prompts;
 
     /** 변경된 자료를 근거로 기준별 점수 변화를 받는다. 변화가 0인 기준은 빠진다. */
-    public List<ScoreChange> reEvaluate(IdeaSnapshot idea, List<SourceCheckResult> changed, String trendSummary) {
+    public List<ScoreChange> reEvaluate(IdeaSnapshot idea, List<SourceCheckResult> changed) {
         JsonNode result = gemini.generateJson(
-                prompts.render("re-evaluation", variables(idea, changed, trendSummary)), RE_EVALUATION_SCHEMA);
+                prompts.render("re-evaluation", variables(idea, changed)), RE_EVALUATION_SCHEMA);
         JsonNode changes = result.path("changes");
         if (!changes.isArray()) {
             throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
@@ -98,9 +99,9 @@ public class EvaluationAnalyzer {
     }
 
     /** 아이디어 내용 전체를 보고 기준별 0~100 점수를 받아, 현재 점수와의 차이를 {@link ScoreChange}로 돌려준다. */
-    public List<ScoreChange> initialEvaluate(IdeaSnapshot idea, List<SourceCheckResult> changed, String trendSummary) {
+    public List<ScoreChange> initialEvaluate(IdeaSnapshot idea, List<SourceCheckResult> changed) {
         JsonNode result = gemini.generateJson(
-                prompts.render("initial-evaluation", variables(idea, changed, trendSummary)), INITIAL_EVALUATION_SCHEMA);
+                prompts.render("initial-evaluation", variables(idea, changed)), INITIAL_EVALUATION_SCHEMA);
         JsonNode scores = result.path("scores");
         if (!scores.isArray()) {
             throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
@@ -122,7 +123,7 @@ public class EvaluationAnalyzer {
         return List.copyOf(out.values());
     }
 
-    private Map<String, String> variables(IdeaSnapshot idea, List<SourceCheckResult> changed, String trendSummary) {
+    private Map<String, String> variables(IdeaSnapshot idea, List<SourceCheckResult> changed) {
         StringBuilder scores = new StringBuilder();
         for (ScoreType type : ScoreType.EVIDENCE_TYPES) {
             scores.append(type).append(": ").append(idea.scores().getOrDefault(type, BigDecimal.ZERO)).append("\n");
@@ -132,11 +133,10 @@ public class EvaluationAnalyzer {
         vars.put("target", nullToEmpty(idea.target()));
         vars.put("solution", nullToEmpty(idea.solution()));
         vars.put("expectation", nullToEmpty(idea.expectation()));
-        String items = changed.isEmpty() ? "(변경된 자료 없음)" : TrendService.formatSources(changed);
+        String items = changed.isEmpty() ? "(변경된 자료 없음)" : SourceTextFormat.formatSources(changed);
         vars.put("currentScores", scores.toString().strip());
         vars.put("changedItems", items); // re-evaluation
         vars.put("items", items);        // initial-evaluation
-        vars.put("trendSummary", trendSummary == null || trendSummary.isBlank() ? "(없음)" : trendSummary);
         return vars;
     }
 
