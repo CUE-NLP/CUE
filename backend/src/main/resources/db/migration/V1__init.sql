@@ -13,6 +13,7 @@ CREATE TABLE ideas (
     id                BIGSERIAL PRIMARY KEY,
     user_id           BIGINT        NOT NULL REFERENCES users (id),
     type              VARCHAR(30)   NOT NULL,
+    it_category       VARCHAR(30)   NOT NULL,
     status            VARCHAR(20)   NOT NULL,
     problem           TEXT,
     target            TEXT,

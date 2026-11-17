@@ -3,7 +3,7 @@ package com.cue.idea.service;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.entity.Idea;
-import com.cue.idea.entity.IdeaType;
+import com.cue.idea.entity.ItCategory;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.Arrays;
@@ -48,18 +48,16 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
             - 기대효과: 해결 후 기대하는 변화
             입력은 한국어일 수 있다.
 
-            # type 판단 기준
-            아래 값 중 정확히 하나를 고른다. 값은 영문 대문자 상수를 그대로 쓴다.
-            - IT: 소프트웨어·AI·데이터·개발자 도구·보안·인프라가 제품의 핵심 가치인 경우
-            - HEALTHCARE: 의료·건강·운동·정신건강·돌봄이 핵심 가치인 경우
-            - EDUCATION: 학습·교육·교육 콘텐츠·역량 개발이 핵심 가치인 경우
-            - FINANCE: 결제·투자·대출·보험·자산관리·핀테크가 핵심 가치인 경우
-            - COMMERCE: 상품 판매·유통·중개·구독·마켓플레이스·물류가 핵심 가치인 경우
-            - CONTENT: 영상·음악·글·게임·SNS 등 콘텐츠 제작·소비·유통이 핵심 가치인 경우
-            - OTHER: 위 어디에도 뚜렷이 속하지 않는 경우 (억지로 끼워 맞추지 않는다)
-            경계 사례: 여러 분야에 걸치면 "사용자가 얻는 가장 핵심 가치"가 속한 하나만 고른다.
-            앱·AI로 구현했다는 사실만으로 IT를 고르지 않는다. 예) AI로 운동 자세를 교정하는 앱은 HEALTHCARE,
-            AI 코드 리뷰 도구는 IT, 영어 회화 학습 앱은 EDUCATION.
+            # itCategory 판단 기준
+            모든 아이디어는 IT 분야다. 아래 네 가지 세부 종류 중 정확히 하나를 고른다. 값은 영문 대문자 상수를 그대로 쓴다.
+            - AI_ML (AI·머신러닝): 모델·알고리즘·학습·추론 성능 자체가 제품의 핵심 가치인 경우
+            - DEV_TOOLS_INFRA (개발자 도구·인프라): 개발 생산성, 개발·배포·운영 환경, 보안, 클라우드·인프라가 핵심 가치인 경우
+            - WEB_APP_SERVICE (웹·앱 서비스): 일반 사용자가 쓰는 웹·모바일 서비스의 경험·기능이 핵심 가치인 경우
+            - DATA_ANALYTICS (데이터·분석): 데이터 수집·가공·시각화·분석과 인사이트 도출이 핵심 가치인 경우
+            경계 사례: 여러 종류에 걸치면 "사용자가 얻는 가장 핵심 가치"가 속한 하나만 고른다.
+            예) LLM 기반 개발자 코드 리뷰 도구는 사용자가 얻는 핵심 가치가 개발 생산성이면 DEV_TOOLS_INFRA,
+            모델·알고리즘 자체의 성능이 핵심이면 AI_ML이다. AI를 쓴다는 사실만으로 AI_ML을 고르지 않는다.
+            어디에도 뚜렷이 속하지 않거나 판단이 어려우면 DEV_TOOLS_INFRA를 고른다.
 
             # keywords 규칙
             - 영어 검색어 1~2개를 뽑는다. 아이디어가 한국어여도 반드시 영어 검색어로 쓰고, 한글·번역투 표현은 쓰지 않는다.
@@ -79,24 +77,24 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
 
             # 예시
             입력 요약: 타깃=1인 개발자 / 문제=PR 리뷰 대기 시간이 길다 / 해결=LLM이 PR을 자동 리뷰 / 기대효과=배포 속도 향상
-            좋은 출력: {"type":"IT","keywords":["automated code review","developer productivity"]}
-            나쁜 출력: {"type":"IT","keywords":["code review","LLM-based pull request review latency reduction tool"]}
-            (이유: "code review"는 너무 일반적이고, 두 번째는 6단어로 길며 해결·문제 항목에만 치우쳐 아이디어 전체를 대표하지 못한다.)
+            좋은 출력: {"itCategory":"DEV_TOOLS_INFRA","keywords":["automated code review","developer productivity"]}
+            나쁜 출력: {"itCategory":"AI_ML","keywords":["code review","LLM-based pull request review latency reduction tool"]}
+            (이유: 핵심 가치가 개발 생산성이라 DEV_TOOLS_INFRA다. "code review"는 너무 일반적이고, 두 번째는 6단어로 길며 아이디어 전체를 대표하지 못한다.)
 
-            입력 요약: 타깃=직장인 / 문제=영어 말하기 연습할 기회가 없다 / 해결=AI 튜터와 실시간 음성 대화 / 기대효과=회화 실력 향상
-            좋은 출력: {"type":"EDUCATION","keywords":["AI speaking tutor","conversational English practice"]}
-            나쁜 출력: {"type":"IT","keywords":["English","English speaking practice app for busy office workers"]}
-            (이유: 핵심 가치는 학습이라 EDUCATION이다. "English"는 너무 일반적이고, 두 번째는 8단어로 길며 타깃에만 치우쳤다.)
+            입력 요약: 타깃=데이터 분석가 / 문제=이미지 분류 모델 정확도가 낮다 / 해결=새 파인튜닝 기법으로 정확도 향상 / 기대효과=오분류 감소
+            좋은 출력: {"itCategory":"AI_ML","keywords":["image classification fine-tuning","model accuracy improvement"]}
+            나쁜 출력: {"itCategory":"DATA_ANALYTICS","keywords":["AI","fine-tuning method for image classification models used by analysts"]}
+            (이유: 모델 성능 자체가 핵심이라 AI_ML이다. "AI"는 너무 일반적이고, 두 번째는 10단어로 길며 타깃에 치우쳤다.)
 
             # 출력
-            아래 JSON 스키마에 맞는 JSON 객체만 출력한다. 키 이름은 정확히 "type", "keywords"를 쓴다. 설명이나 마크다운은 쓰지 않는다.
+            아래 JSON 스키마에 맞는 JSON 객체만 출력한다. 키 이름은 정확히 "itCategory", "keywords"를 쓴다. 설명이나 마크다운은 쓰지 않는다.
             """;
 
-    /** 사용자가 키워드를 직접 정한 경우 프롬프트 끝에 붙인다: 키워드는 만들지 않고 type만 답한다. */
+    /** 사용자가 키워드를 직접 정한 경우 프롬프트 끝에 붙인다: 키워드는 만들지 않고 itCategory만 답한다. */
     static final String TYPE_ONLY_NOTICE = """
 
             # 이번 요청의 모드
-            이번에는 type만 판단한다. 키워드는 사용자가 이미 정했으므로 만들지 않는다. 출력 JSON에는 "type" 키만 쓴다.
+            이번에는 itCategory만 판단한다. 키워드는 사용자가 이미 정했으므로 만들지 않는다. 출력 JSON에는 "itCategory" 키만 쓴다.
             """;
 
     private final RestClient restClient;
@@ -140,16 +138,16 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
     }
 
     @Override
-    public IdeaType analyzeType(Idea idea) {
+    public ItCategory analyzeCategory(Idea idea) {
         if (props.apiKey() == null || props.apiKey().isBlank()) {
             log.warn("GEMINI_API_KEY가 없어 임시 분석기로 대체합니다.");
-            return fallback.analyzeType(idea);
+            return fallback.analyzeCategory(idea);
         }
         try {
-            return requestAnalysis(idea, true).type();
+            return requestAnalysis(idea, true).itCategory();
         } catch (RuntimeException e) {
             log.warn("Gemini 종류 분류 실패, 임시 분석기로 대체합니다: {}", e.toString());
-            return fallback.analyzeType(idea);
+            return fallback.analyzeCategory(idea);
         }
     }
 
@@ -188,7 +186,7 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
             }
             JsonNode result = objectMapper.readTree(text.asString());
             if (typeOnly) {
-                return new IdeaAnalysis(IdeaType.fromAi(result.path("type").asString(null)), List.of());
+                return new IdeaAnalysis(ItCategory.fromAi(result.path("itCategory").asString(null)), List.of());
             }
             LinkedHashSet<String> keywords = new LinkedHashSet<>();
             for (JsonNode k : result.path("keywords")) {
@@ -206,7 +204,7 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
             if (keywords.isEmpty()) {
                 throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
             }
-            return new IdeaAnalysis(IdeaType.fromAi(result.path("type").asString(null)), List.copyOf(keywords));
+            return new IdeaAnalysis(ItCategory.fromAi(result.path("itCategory").asString(null)), List.copyOf(keywords));
         } catch (CustomException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -217,16 +215,16 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
     private Map<String, Object> buildRequest(Idea idea, boolean typeOnly) {
         String userText = "타깃: " + idea.getTarget() + "\n문제: " + idea.getProblem()
                 + "\n해결: " + idea.getSolution() + "\n기대효과: " + idea.getExpectation();
-        List<String> types = Arrays.stream(IdeaType.values()).map(Enum::name).toList();
-        Map<String, Object> typeSchema = Map.of("type", "STRING", "enum", types);
+        List<String> types = Arrays.stream(ItCategory.values()).map(Enum::name).toList();
+        Map<String, Object> categorySchema = Map.of("type", "STRING", "enum", types);
         Map<String, Object> schema = typeOnly
-                ? Map.of("type", "OBJECT", "properties", Map.of("type", typeSchema), "required", List.of("type"))
+                ? Map.of("type", "OBJECT", "properties", Map.of("itCategory", categorySchema), "required", List.of("itCategory"))
                 : Map.of("type", "OBJECT",
                         "properties", Map.of(
-                                "type", typeSchema,
+                                "itCategory", categorySchema,
                                 "keywords", Map.of("type", "ARRAY", "items", Map.of("type", "STRING"),
                                         "minItems", 1, "maxItems", MAX_KEYWORDS)),
-                        "required", List.of("type", "keywords"));
+                        "required", List.of("itCategory", "keywords"));
         String systemPrompt = typeOnly ? SYSTEM_PROMPT + TYPE_ONLY_NOTICE : SYSTEM_PROMPT;
         return Map.of(
                 "systemInstruction", Map.of("parts", List.of(Map.of("text", systemPrompt))),

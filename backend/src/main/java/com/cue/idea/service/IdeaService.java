@@ -15,6 +15,7 @@ import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaSort;
 import com.cue.idea.entity.IdeaStatus;
 import com.cue.idea.entity.IdeaType;
+import com.cue.idea.entity.ItCategory;
 import com.cue.idea.entity.KeywordOrigin;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.source.entity.ApiProvider;
@@ -79,20 +80,20 @@ public class IdeaService {
      * 없으면 AI가 종류·키워드를 함께 추출한다. 이후 종류별 검색 API × 키워드로 수집 설정을 새로 만든다 (해시는 초기화된다).
      */
     private void extractAndRegisterSources(Idea idea) {
-        IdeaType type;
+        ItCategory category;
         List<String> keywords;
         if (idea.hasUserKeywords()) {
-            type = analyzer.analyzeType(idea);
+            category = analyzer.analyzeCategory(idea);
             keywords = idea.keywordList();
         } else {
             IdeaAnalysis analysis = analyzer.analyze(idea);
-            type = analysis.type();
+            category = analysis.itCategory();
             keywords = analysis.keywords().stream().limit(MAX_KEYWORDS).toList();
             idea.applyKeywords(keywords, KeywordOrigin.AI);
         }
-        idea.changeType(type);
+        idea.changeItCategory(category);
         sources.deleteUnlinkedByIdeaId(idea.getId());
-        for (ApiProvider provider : type.searchProviders()) {
+        for (ApiProvider provider : category.searchProviders()) {
             for (String keyword : keywords) {
                 sources.save(new Source(idea, provider, keyword));
             }
@@ -177,7 +178,7 @@ public class IdeaService {
                         evaluations.findFirstByScoreIdOrderByCreatedAtDesc(s.getId())
                                 .map(e -> e.getDifference()).orElse(null)))
                 .toList();
-        return new IdeaResponse(idea.getId(), idea.getType(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
+        return new IdeaResponse(idea.getId(), idea.getType(), idea.getItCategory(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
                 idea.getSolution(), idea.getExpectation(), idea.getTotalScore(), idea.getLastDifference(),
                 idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores,
                 idea.keywordList(), idea.getKeywordOrigin());

@@ -195,8 +195,14 @@ class AuthIdeaFlowTest {
         long id = createIdea(token, FULL);
 
         mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
-                .andExpect(jsonPath("$.data.status").value("ACTIVE"));
+                .andExpect(jsonPath("$.data.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.data.type").value("IT"))
+                .andExpect(jsonPath("$.data.itCategory").value("DEV_TOOLS_INFRA"));
         org.junit.jupiter.api.Assertions.assertEquals(6, sourceCount(id)); // 3 providers x 2 keywords
+        org.junit.jupiter.api.Assertions.assertEquals(
+                new java.util.HashSet<>(com.cue.idea.entity.ItCategory.DEV_TOOLS_INFRA.searchProviders()),
+                sourceRepository.findAll().stream().filter(x -> x.getIdea().getId() == id)
+                        .map(com.cue.source.entity.Source::getProvider).collect(java.util.stream.Collectors.toSet()));
     }
 
     // ===== 사용자 키워드 우선 =====
@@ -232,7 +238,7 @@ class AuthIdeaFlowTest {
         long id = mapper.readTree(res).get("data").get("id").asLong();
 
         org.mockito.Mockito.verify(analyzerSpy, org.mockito.Mockito.never()).analyze(org.mockito.ArgumentMatchers.any());
-        org.mockito.Mockito.verify(analyzerSpy).analyzeType(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(analyzerSpy).analyzeCategory(org.mockito.ArgumentMatchers.any());
         org.junit.jupiter.api.Assertions.assertEquals(6, sourceCount(id));
         org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("code review", "코드 리뷰"), sourceKeywords(id));
     }
@@ -247,7 +253,7 @@ class AuthIdeaFlowTest {
                 .andExpect(jsonPath("$.data.keywords.length()").value(2))
                 .andReturn().getResponse().getContentAsString();
         org.mockito.Mockito.verify(analyzerSpy).analyze(org.mockito.ArgumentMatchers.any());
-        org.mockito.Mockito.verify(analyzerSpy, org.mockito.Mockito.never()).analyzeType(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(analyzerSpy, org.mockito.Mockito.never()).analyzeCategory(org.mockito.ArgumentMatchers.any());
         org.junit.jupiter.api.Assertions.assertEquals(2, mapper.readTree(res).get("data").get("keywords").size());
     }
 

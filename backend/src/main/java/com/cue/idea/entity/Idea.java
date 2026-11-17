@@ -33,6 +33,11 @@ public class Idea {
     @Column(nullable = false, length = 30)
     private IdeaType type;
 
+    /** IT 세부 종류. 검색에 쓰는 외부 API 조합을 결정한다. AI가 분류하며 분류 전(HOLD 등)에는 기본값. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "it_category", nullable = false, length = 30)
+    private ItCategory itCategory = ItCategory.DEFAULT;
+
     /** 서버가 4개 항목 채움 여부로 결정한다. 클라이언트가 보낸 값은 쓰지 않는다. */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -135,9 +140,9 @@ public class Idea {
         return keywordOrigin == KeywordOrigin.USER && keywords != null;
     }
 
-    /** AI가 다시 추출한 아이디어 종류를 반영한다. */
-    public void changeType(IdeaType type) {
-        this.type = type;
+    /** AI가 다시 분류한 IT 세부 종류를 반영한다. */
+    public void changeItCategory(ItCategory itCategory) {
+        this.itCategory = itCategory;
     }
 
     public Score score(ScoreType type) {
