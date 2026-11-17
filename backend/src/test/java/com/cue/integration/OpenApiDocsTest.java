@@ -22,7 +22,7 @@ import tools.jackson.databind.ObjectMapper;
 class OpenApiDocsTest extends PostgresIntegrationTest {
 
     static final Set<String> PUBLIC_OPERATIONS = Set.of(
-            "post /api/users", "post /api/auth/login", "post /api/auth/refresh", "post /api/auth/logout");
+            "post /api/users", "post /api/auth/login", "post /api/auth/refresh");
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;

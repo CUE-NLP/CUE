@@ -24,6 +24,12 @@ jwt:
   access-token-minutes: ${JWT_ACCESS_MINUTES:60}
   refresh-token-days: ${JWT_REFRESH_DAYS:14}
 
+cue:
+  auth:
+    cleanup:
+      # 만료된 리프레시 토큰·폐기 액세스 토큰 정리 주기(cron). "-" 면 비활성화
+      cron: ${AUTH_CLEANUP_CRON:0 0 4 * * *}
+
 cors:
   # 쉼표로 여러 개 지정. 운영에서는 실제 프론트 도메인으로 제한한다.
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}

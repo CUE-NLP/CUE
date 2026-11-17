@@ -59,6 +59,7 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
     static List<Endpoint> protectedEndpoints() {
         return List.of(
                 new Endpoint(HttpMethod.GET, "/api/users/me", null),
+                new Endpoint(HttpMethod.POST, "/api/auth/logout", "{\"refreshToken\":\"x\"}"),
                 new Endpoint(HttpMethod.POST, "/api/ideas", IDEA_BODY),
                 new Endpoint(HttpMethod.GET, "/api/ideas", null),
                 new Endpoint(HttpMethod.GET, "/api/ideas/{id}", null),
@@ -113,7 +114,7 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
     }
 
     private String signedToken(JwtEncoder encoder, String subject, Instant issuedAt, Instant expiresAt) {
-        JwtClaimsSet claims = JwtClaimsSet.builder().subject(subject).issuedAt(issuedAt).expiresAt(expiresAt)
+        JwtClaimsSet claims = JwtClaimsSet.builder().id(java.util.UUID.randomUUID().toString()).subject(subject).issuedAt(issuedAt).expiresAt(expiresAt)
                 .claim("email", "x@cue.com").claim("nickname", "x").build();
         return "Bearer " + encoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims))
                 .getTokenValue();
@@ -228,9 +229,9 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
     // ---------- 열린 경로 범위 ----------
 
     @Test
-    void 인증_없이_열린_API는_가입_로그인_재발급_로그아웃뿐이다() throws Exception {
+    void 인증_없이_열린_API는_가입_로그인_재발급뿐이다() throws Exception {
         // 열린 경로는 토큰이 없어도 인증 에러(A00x)가 아니라 입력 검증(G004)까지 도달한다.
-        for (String path : List.of("/api/users", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout")) {
+        for (String path : List.of("/api/users", "/api/auth/login", "/api/auth/refresh")) {
             mvc.perform(post(path).contentType(MediaType.APPLICATION_JSON).content("{}"))
                     .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("G004"));
         }

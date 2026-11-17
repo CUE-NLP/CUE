@@ -26,7 +26,7 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Testcontainers
-@TestPropertySource(properties = "spring.docker.compose.enabled=false")
+@TestPropertySource(properties = {"spring.docker.compose.enabled=false", "cue.auth.cleanup.cron=-"})
 class RefreshTokenCorsTest {
 
     @Container
@@ -36,6 +36,8 @@ class RefreshTokenCorsTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
     @Autowired JdbcTemplate jdbc;
+    @Autowired com.cue.auth.service.AuthService authService;
+    @Autowired org.springframework.security.oauth2.jwt.JwtEncoder jwtEncoder;
 
     private JsonNode login(String email) throws Exception {
         mvc.perform(post("/api/users").contentType(MediaType.APPLICATION_JSON)
@@ -113,17 +115,94 @@ class RefreshTokenCorsTest {
         refresh(refresh2).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("A010"));
     }
 
+    private org.springframework.test.web.servlet.ResultActions logout(String access, String refresh) throws Exception {
+        return mvc.perform(post("/api/auth/logout").header("Authorization", "Bearer " + access)
+                .contentType(MediaType.APPLICATION_JSON).content(body(refresh)));
+    }
+
     @Test
-    void 로그아웃하면_리프레시_토큰이_폐기된다() throws Exception {
-        String refresh = login("logout@cue.com").get("refreshToken").asString();
-        mvc.perform(post("/api/auth/logout").contentType(MediaType.APPLICATION_JSON).content(body(refresh)))
+    void 로그아웃하면_현재_액세스_토큰과_리프레시_토큰이_모두_폐기되고_다른_기기는_유지된다() throws Exception {
+        JsonNode deviceA = login("logout@cue.com");
+        JsonNode deviceB = mapper.readTree(mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"logout@cue.com\",\"password\":\"password123\"}"))
+                .andReturn().getResponse().getContentAsString()).get("data");
+        String accessA = deviceA.get("accessToken").asString();
+        String refreshA = deviceA.get("refreshToken").asString();
+        mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + accessA)).andExpect(status().isOk());
+
+        logout(accessA, refreshA).andExpect(status().isOk());
+
+        // 같은 액세스 토큰은 즉시 무효(A005), 같은 리프레시 토큰은 재발급 거부
+        mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + accessA))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("A005"));
+        // 폐기된 액세스 토큰으로는 다시 로그아웃할 수 없다 (인증 단계에서 A005)
+        logout(accessA, refreshA).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("A005"));
+
+        // 다른 기기(B)의 액세스·리프레시 토큰은 영향 없음
+        mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + deviceB.get("accessToken").asString()))
                 .andExpect(status().isOk());
-        refresh(refresh).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("A010"));
-        // 멱등: 다시 로그아웃해도, 모르는 토큰으로 로그아웃해도 성공
-        mvc.perform(post("/api/auth/logout").contentType(MediaType.APPLICATION_JSON).content(body(refresh)))
-                .andExpect(status().isOk());
-        mvc.perform(post("/api/auth/logout").contentType(MediaType.APPLICATION_JSON).content(body("unknown")))
-                .andExpect(status().isOk());
+        refresh(deviceB.get("refreshToken").asString()).andExpect(status().isOk());
+
+        // 폐기된 리프레시 토큰 재사용 → A010
+        refresh(refreshA).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("A010"));
+        Integer revoked = jdbc.queryForObject("select count(*) from revoked_access_tokens", Integer.class);
+        org.junit.jupiter.api.Assertions.assertTrue(revoked >= 1);
+    }
+
+    @Test
+    void 토큰_없이_로그아웃하면_A006() throws Exception {
+        mvc.perform(post("/api/auth/logout").contentType(MediaType.APPLICATION_JSON).content(body("x")))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("A006"));
+    }
+
+    @Test
+    void 로그아웃은_멱등이고_남의_리프레시_토큰은_폐기하지_않는다() throws Exception {
+        JsonNode owner = login("owner-lo@cue.com");
+        JsonNode other = login("other-lo@cue.com");
+        // other 가 owner 의 리프레시 토큰을 넣어 로그아웃해도 owner 의 토큰은 유지된다
+        logout(other.get("accessToken").asString(), owner.get("refreshToken").asString()).andExpect(status().isOk());
+        refresh(owner.get("refreshToken").asString()).andExpect(status().isOk());
+
+        // 모르는 리프레시 토큰으로도 성공 (액세스 토큰은 폐기됨)
+        JsonNode third = login("third-lo@cue.com");
+        logout(third.get("accessToken").asString(), "unknown").andExpect(status().isOk());
+        mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + third.get("accessToken").asString()))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("A005"));
+    }
+
+    @Test
+    void jti가_없는_액세스_토큰은_A005() throws Exception {
+        var claims = org.springframework.security.oauth2.jwt.JwtClaimsSet.builder().subject("1")
+                .issuedAt(java.time.Instant.now()).expiresAt(java.time.Instant.now().plusSeconds(600)).build();
+        String noJti = jwtEncoder.encode(org.springframework.security.oauth2.jwt.JwtEncoderParameters.from(
+                org.springframework.security.oauth2.jwt.JwsHeader.with(
+                        org.springframework.security.oauth2.jose.jws.MacAlgorithm.HS256).build(), claims)).getTokenValue();
+        mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + noJti))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("A005"));
+    }
+
+    @Test
+    void 정리_작업은_만료된_토큰_행만_삭제한다() throws Exception {
+        JsonNode keep = login("cleanup-keep@cue.com");
+        JsonNode expired = login("cleanup-old@cue.com");
+        logout(expired.get("accessToken").asString(), expired.get("refreshToken").asString()).andExpect(status().isOk());
+        JsonNode revokedYetValid = login("cleanup-revoked@cue.com");
+        mvc.perform(post("/api/auth/refresh").contentType(MediaType.APPLICATION_JSON)
+                .content(body(revokedYetValid.get("refreshToken").asString()))).andExpect(status().isOk()); // 회전: 이전 행은 폐기됨, 아직 만료 전
+
+        // cleanup-old 의 리프레시 토큰·폐기된 액세스 토큰만 만료시킨다
+        jdbc.update("update refresh_tokens set expires_at = now() - interval '1 day' where user_id = (select id from users where email = 'cleanup-old@cue.com')");
+        jdbc.update("update revoked_access_tokens set expires_at = now() - interval '1 minute' where user_id = (select id from users where email = 'cleanup-old@cue.com')");
+
+        int deleted = authService.cleanupExpired(java.time.LocalDateTime.now());
+        org.junit.jupiter.api.Assertions.assertTrue(deleted >= 2); // 다른 테스트가 남긴 만료 행도 지워질 수 있다
+        org.junit.jupiter.api.Assertions.assertEquals(0, jdbc.queryForObject(
+                "select count(*) from refresh_tokens r join users u on u.id = r.user_id where u.email = 'cleanup-old@cue.com'", Integer.class));
+        org.junit.jupiter.api.Assertions.assertEquals(0, jdbc.queryForObject("select count(*) from revoked_access_tokens where user_id = (select id from users where email = 'cleanup-old@cue.com')", Integer.class));
+        // 폐기됐지만 만료 전인 리프레시 행(재사용 탐지용)과 정상 토큰은 남는다
+        org.junit.jupiter.api.Assertions.assertEquals(2, jdbc.queryForObject(
+                "select count(*) from refresh_tokens r join users u on u.id = r.user_id where u.email = 'cleanup-revoked@cue.com'", Integer.class));
+        refresh(keep.get("refreshToken").asString()).andExpect(status().isOk());
     }
 
     @Test

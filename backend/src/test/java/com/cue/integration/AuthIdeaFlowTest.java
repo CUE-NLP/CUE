@@ -23,7 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Testcontainers
-@TestPropertySource(properties = "spring.docker.compose.enabled=false")
+@TestPropertySource(properties = {"spring.docker.compose.enabled=false", "cue.auth.cleanup.cron=-"})
 class AuthIdeaFlowTest {
 
     @Container

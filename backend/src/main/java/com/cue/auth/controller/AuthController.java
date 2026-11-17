@@ -8,13 +8,17 @@ import com.cue.global.docs.ApiErrors;
 import com.cue.global.docs.PublicApi;
 import com.cue.global.error.ErrorCode;
 import com.cue.global.response.CommonResponse;
+import com.cue.global.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 import lombok.RequiredArgsConstructor;
 
-@Tag(name = "인증", description = "로그인, 액세스 토큰 재발급(리프레시 토큰 회전), 로그아웃. 세 API 모두 액세스 토큰 없이 호출한다.")
+@Tag(name = "인증", description = "로그인, 액세스 토큰 재발급(리프레시 토큰 회전)은 액세스 토큰 없이, 로그아웃은 액세스 토큰이 필요하다.")
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
@@ -44,13 +48,16 @@ public class AuthController {
     }
 
     @Operation(summary = "로그아웃",
-            description = "리프레시 토큰을 폐기한다. 없거나 이미 폐기된 토큰이어도 성공(멱등)으로 응답한다. "
-                    + "리프레시 토큰을 가진 것이 곧 자격이므로 액세스 토큰 없이 호출할 수 있다(액세스 토큰이 이미 만료돼도 로그아웃 가능). "
-                    + "액세스 토큰은 서버에서 무효화하지 않으므로 만료(기본 60분)까지 유효하다 — 클라이언트가 두 토큰을 모두 지운다.")
-    @PublicApi
+            description = "**현재 액세스 토큰**(`Authorization` 헤더)을 즉시 무효화하고(이후 같은 토큰은 `A005`), "
+                    + "요청 본문의 리프레시 토큰을 폐기한다(현재 기기만, 다른 기기의 로그인은 유지). "
+                    + "리프레시 토큰이 없거나 이미 폐기됐거나 본인 것이 아니어도 성공(멱등)이며, 본인 것이 아닌 토큰은 폐기하지 않는다. "
+                    + "액세스 토큰이 이미 만료됐다면(`A004`) 먼저 `/api/auth/refresh`로 재발급한 뒤 로그아웃한다. "
+                    + "성공 후 클라이언트는 두 토큰을 모두 지운다.")
     @PostMapping("/logout")
-    public CommonResponse<Void> logout(@Valid @RequestBody RefreshRequest req) {
-        authService.logout(req.refreshToken());
+    public CommonResponse<Void> logout(@AuthenticationPrincipal UserPrincipal principal, Authentication authentication,
+                                       @Valid @RequestBody RefreshRequest req) {
+        Jwt jwt = (Jwt) authentication.getDetails();
+        authService.logout(principal.id(), jwt.getId(), jwt.getExpiresAt(), req.refreshToken());
         return CommonResponse.onSuccess();
     }
 }
