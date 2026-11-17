@@ -6,7 +6,7 @@ import org.springframework.http.HttpStatus;
 
 /**
  * 서비스 전체 에러 코드. 새 에러는 도메인 구분 주석 아래에 추가한다.
- * 코드 형식: {도메인 영문자 1자}{3자리 번호} (G: 공통, A: 인증, U: 사용자, I: 아이디어, S: 외부 자료 수집). 코드는 전체에서 유일해야 한다.
+ * 코드 형식: {도메인 영문자 1자}{3자리 번호} (G: 공통, A: 인증, U: 사용자, I: 아이디어, S: 외부 자료 수집, E: 평가). 코드는 전체에서 유일해야 한다.
  */
 @Getter
 @RequiredArgsConstructor
@@ -41,7 +41,12 @@ public enum ErrorCode {
 
     // ===== Source (외부 자료 수집, S-xxx) — 외부 API 통신 오류 자체는 G002 =====
     SOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "S001", "수집 설정(source)을 찾을 수 없습니다."),
-    SOURCE_PROVIDER_NOT_SUPPORTED(HttpStatus.NOT_IMPLEMENTED, "S002", "아직 지원하지 않는 외부 API입니다.");
+    SOURCE_PROVIDER_NOT_SUPPORTED(HttpStatus.NOT_IMPLEMENTED, "S002", "아직 지원하지 않는 외부 API입니다."),
+
+    // ===== Evaluation (재평가, E-xxx) — AI 호출 자체의 통신 오류는 G002 =====
+    AI_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, "E001", "AI 평가를 사용할 수 없습니다. (Gemini 비활성 또는 API 키 없음)"),
+    AI_RESPONSE_INVALID(HttpStatus.BAD_GATEWAY, "E002", "AI 평가 응답을 해석할 수 없습니다."),
+    EVALUATION_IN_PROGRESS(HttpStatus.CONFLICT, "E003", "이 아이디어는 이미 평가 중입니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus status;
     private final String code;
