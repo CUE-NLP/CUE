@@ -42,6 +42,7 @@ public enum ErrorCode {
     // ===== Source (외부 자료 수집, S-xxx) — 외부 API 통신 오류 자체는 G002 =====
     SOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "S001", "수집 설정(source)을 찾을 수 없습니다."),
     SOURCE_PROVIDER_NOT_SUPPORTED(HttpStatus.NOT_IMPLEMENTED, "S002", "아직 지원하지 않는 외부 API입니다."),
+    SOURCE_URL_BLOCKED(HttpStatus.BAD_REQUEST, "S003", "허용되지 않는 URL입니다. (http/https 공개 주소만 가져올 수 있습니다)"),
 
     // ===== Evaluation (재평가, E-xxx) — AI 호출 자체의 통신 오류는 G002 =====
     AI_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, "E001", "AI 평가를 사용할 수 없습니다. (Gemini 비활성 또는 API 키 없음)"),
