@@ -11,7 +11,8 @@ public record SourceApiProperties(
         @DefaultValue("5s") Duration readTimeout,
         @DefaultValue Api github,
         @DefaultValue Api huggingFace,
-        @DefaultValue Api stackExchange) {
+        @DefaultValue Api stackExchange,
+        @DefaultValue Api hackerNews) {
 
     public record Api(@DefaultValue("") String baseUrl, @DefaultValue("") String token) {}
 }

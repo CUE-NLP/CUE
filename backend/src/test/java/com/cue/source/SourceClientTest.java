@@ -63,6 +63,30 @@ class SourceClientTest {
     }
 
     @Test
+    void HackerNews_스토리를_변환하고_외부_링크가_없으면_토론_페이지_URL을_쓴다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://hn.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://hn.test/api/v1/search?query=ai%20agent")))
+                .andExpect(queryParam("tags", "story"))
+                .andExpect(queryParam("hitsPerPage", "5"))
+                .andRespond(withSuccess("{\"hits\":[{\"title\":\"Show HN: Agent\",\"url\":\"https://a.dev\",\"objectID\":\"1\",\"points\":9},"
+                        + "{\"title\":\"Ask HN: Agents?\",\"url\":null,\"objectID\":\"42\"}]}", MediaType.APPLICATION_JSON));
+        List<SourceItem> items = new HackerNewsSourceClient(b.build()).search("ai agent");
+        assertEquals(List.of(new SourceItem("Show HN: Agent", "https://a.dev", ""),
+                new SourceItem("Ask HN: Agents?", "https://news.ycombinator.com/item?id=42", "")), items);
+        server.verify();
+    }
+
+    @Test
+    void HackerNews_서버_오류는_G002로_변환된다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://hn.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://hn.test"))).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+        CustomException e = assertThrows(CustomException.class, () -> new HackerNewsSourceClient(b.build()).search("x"));
+        assertEquals(ErrorCode.EXTERNAL_SERVER_ERROR, e.getErrorCode());
+    }
+
+    @Test
     void 외부_서버_오류는_G002로_변환된다() {
         RestClient.Builder b = RestClient.builder().baseUrl("https://gh.test");
         MockRestServiceServer server = bind(b);

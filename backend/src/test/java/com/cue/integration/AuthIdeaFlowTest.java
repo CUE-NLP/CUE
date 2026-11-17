@@ -196,7 +196,7 @@ class AuthIdeaFlowTest {
 
         mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
                 .andExpect(jsonPath("$.data.status").value("ACTIVE"));
-        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id)); // 3 providers x 3 keywords
+        org.junit.jupiter.api.Assertions.assertEquals(12, sourceCount(id)); // 4 providers x 3 keywords
     }
 
     @Test
@@ -209,13 +209,13 @@ class AuthIdeaFlowTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.data.problem").value("개발 질문이 흩어져 있다"));
-        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id));
+        org.junit.jupiter.api.Assertions.assertEquals(12, sourceCount(id));
 
         // 다시 수정해도 수집 설정이 중복되지 않는다
         mvc.perform(patch("/api/ideas/" + id).header("Authorization", token)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"solution\":\"새로운 해결 방법 제안\"}"))
                 .andExpect(status().isOk());
-        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id));
+        org.junit.jupiter.api.Assertions.assertEquals(12, sourceCount(id));
 
         mvc.perform(patch("/api/ideas/" + id).header("Authorization", token)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"target\":\"\"}"))
