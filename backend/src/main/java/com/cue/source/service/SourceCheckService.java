@@ -29,7 +29,7 @@ public class SourceCheckService {
         clientList.forEach(c -> clients.put(c.provider(), c));
     }
 
-    /** source 하나를 조회한다. 외부 오류·미지원 provider는 예외로 던진다 (해시·시각은 그대로). */
+    /** source 하나를 조회한다. 변경이면 결과의 items는 **새로 나타난 항목만**이다. 외부 오류·미지원 provider는 예외로 던진다 (해시·시각은 그대로). */
     public SourceCheckResult check(Long sourceId) {
         Source source = sourceRepository.findById(sourceId)
                 .orElseThrow(() -> new CustomException(ErrorCode.SOURCE_NOT_FOUND));
@@ -42,9 +42,9 @@ public class SourceCheckService {
     }
 
     /** 평가가 실패해 변경을 반영하지 못했을 때, 해시·시각을 조회 이전 값으로 되돌린다 (다음 조회에서 다시 변경으로 감지). */
-    public void restoreHash(Long sourceId, String contentHash, java.time.LocalDateTime checkedAt) {
+    public void restoreHash(Long sourceId, String contentHash, java.time.LocalDateTime checkedAt, String knownUrls) {
         sourceRepository.findById(sourceId).ifPresent(s -> {
-            s.restore(contentHash, checkedAt);
+            s.restore(contentHash, checkedAt, knownUrls);
             sourceRepository.save(s);
         });
     }
@@ -69,10 +69,14 @@ public class SourceCheckService {
             throw new CustomException(ErrorCode.SOURCE_PROVIDER_NOT_SUPPORTED);
         }
         List<SourceItem> items = client.search(source.getKeyword());
-        boolean changed = source.updateHash(SourceHasher.hash(items));
+        // 변경 = 직전 조회에 없던 URL이 나타남. 처음 조회는 기준만 기록하고, 순서만 바뀐 경우는 변경으로 보지 않는다.
+        boolean first = source.isFirstCheck();
+        java.util.Set<String> known = source.knownUrlSet();
+        List<SourceItem> fresh = first ? List.of() : items.stream().filter(i -> !known.contains(i.url())).toList();
+        source.recordSnapshot(SourceHasher.hash(items), items.stream().map(SourceItem::url).toList());
         sourceRepository.save(source);
-        return changed
-                ? SourceCheckResult.changed(source.getId(), source.getProvider(), source.getKeyword(), items, source.getCheckedAt())
+        return !fresh.isEmpty()
+                ? SourceCheckResult.changed(source.getId(), source.getProvider(), source.getKeyword(), fresh, source.getCheckedAt())
                 : SourceCheckResult.unchanged(source.getId(), source.getProvider(), source.getKeyword(), source.getCheckedAt());
     }
 }

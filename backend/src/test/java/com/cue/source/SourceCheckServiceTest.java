@@ -70,6 +70,31 @@ class SourceCheckServiceTest {
     }
 
     @Test
+    void 변경이면_이전에_없던_새_항목만_반환하고_순서만_바뀐_경우는_변경이_아니다() {
+        SourceItem a = new SourceItem("a", "https://a", "s"), b = new SourceItem("b", "https://b", "s"),
+                c = new SourceItem("c", "https://c", "s");
+        githubItems = List.of(a, b);
+        Source s = new Source(null, ApiProvider.GITHUB, "kw");
+        when(repo.findById(1L)).thenReturn(Optional.of(s));
+        service.check(1L);
+        assertFalse(s.isFirstCheck());
+        assertEquals(java.util.Set.of("https://a", "https://b"), s.knownUrlSet());
+
+        githubItems = List.of(b, a); // 순서만 바뀜: 해시는 달라져도 새 항목이 없다
+        assertFalse(service.check(1L).changed());
+
+        githubItems = List.of(c, b); // c가 새로 등장, a는 밀려남
+        SourceCheckResult r = service.check(1L);
+        assertTrue(r.changed());
+        assertEquals(List.of(c), r.items()); // 상위 목록 전체가 아니라 새 항목만
+        assertEquals(java.util.Set.of("https://c", "https://b"), s.knownUrlSet());
+
+        // 평가 실패 시 복구하면 같은 변화를 다시 감지한다
+        s.restore(SourceHasher.hash(List.of(b, a)), s.getCheckedAt(), "https://b\nhttps://a");
+        assertTrue(service.check(1L).changed());
+    }
+
+    @Test
     void 한_source가_실패해도_나머지는_계속_조회하고_실패한_해시는_유지한다() {
         Source ok = new Source(null, ApiProvider.GITHUB, "a");
         Source bad = new Source(null, ApiProvider.STACK_EXCHANGE, "b");

@@ -109,7 +109,7 @@ public class DailyEvaluationService {
             for (SourceCheckResult r : changed) {
                 PreviousHash prev = previous.get(r.sourceId());
                 if (prev != null) {
-                    sourceCheckService.restoreHash(r.sourceId(), prev.hash(), prev.checkedAt());
+                    sourceCheckService.restoreHash(r.sourceId(), prev.hash(), prev.checkedAt(), prev.knownUrls());
                 }
             }
             throw e;
@@ -132,10 +132,10 @@ public class DailyEvaluationService {
     private Map<Long, PreviousHash> previousHashes(Long ideaId) {
         Map<Long, PreviousHash> map = new HashMap<>();
         for (Source s : sources.findByIdeaId(ideaId)) {
-            map.put(s.getId(), new PreviousHash(s.getContentHash(), s.getCheckedAt()));
+            map.put(s.getId(), new PreviousHash(s.getContentHash(), s.getCheckedAt(), s.getKnownUrls()));
         }
         return map;
     }
 
-    private record PreviousHash(String hash, LocalDateTime checkedAt) {}
+    private record PreviousHash(String hash, LocalDateTime checkedAt, String knownUrls) {}
 }

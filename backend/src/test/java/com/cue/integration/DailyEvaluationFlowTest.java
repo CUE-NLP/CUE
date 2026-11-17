@@ -209,7 +209,7 @@ class DailyEvaluationFlowTest {
                 .andExpect(status().isBadGateway())
                 .andExpect(jsonPath("$.code").value("G002"));
 
-        verify(sourceCheck).restoreHash(eq(1L), any(), any());
+        verify(sourceCheck).restoreHash(eq(1L), any(), any(), any());
         assertEquals(4, evaluationCount(id));
         assertEquals(0, count("select count(*) from trends"));
     }

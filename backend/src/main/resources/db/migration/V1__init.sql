@@ -86,7 +86,8 @@ CREATE TABLE sources (
     provider      VARCHAR(30)  NOT NULL,
     keyword       VARCHAR(255) NOT NULL,
     content_hash  VARCHAR(64),
-    checked_at    TIMESTAMP
+    checked_at    TIMESTAMP,
+    known_urls    TEXT                 -- 직전 조회 결과의 항목 URL(줄바꿈 구분). 새로 나타난 항목을 가려내는 기준
 );
 CREATE INDEX idx_sources_idea_provider ON sources (idea_id, provider);
 CREATE INDEX idx_sources_content_hash ON sources (content_hash);
