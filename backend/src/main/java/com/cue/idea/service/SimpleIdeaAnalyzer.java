@@ -8,8 +8,8 @@ import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 
 /**
- * 임시 구현: AI 없이 종류는 IT, 키워드는 본문에서 긴 단어 3개를 고른다.
- * TODO: Gemini 연동 구현으로 교체한다 (이 클래스는 삭제).
+ * AI 없이 종류는 IT, 키워드는 본문에서 긴 단어 3개를 고른다.
+ * Gemini 비활성/키 없음/호출·파싱 실패 시의 폴백 구현이다 ({@link GeminiIdeaAnalyzer}).
  */
 @Component
 class SimpleIdeaAnalyzer implements IdeaAnalyzer {
