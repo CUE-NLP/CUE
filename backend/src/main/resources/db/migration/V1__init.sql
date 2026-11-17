@@ -18,6 +18,8 @@ CREATE TABLE ideas (
     target            TEXT,
     solution          TEXT,
     expectation       TEXT,
+    keywords          TEXT,
+    keyword_origin    VARCHAR(20),
     total_score       DECIMAL(7, 2) NOT NULL DEFAULT 0,
     last_difference   DECIMAL(7, 2),
     last_evaluated_at TIMESTAMP,

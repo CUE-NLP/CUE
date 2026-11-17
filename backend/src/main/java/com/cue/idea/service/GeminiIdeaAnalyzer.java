@@ -92,6 +92,13 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
             아래 JSON 스키마에 맞는 JSON 객체만 출력한다. 키 이름은 정확히 "type", "keywords"를 쓴다. 설명이나 마크다운은 쓰지 않는다.
             """;
 
+    /** 사용자가 키워드를 직접 정한 경우 프롬프트 끝에 붙인다: 키워드는 만들지 않고 type만 답한다. */
+    static final String TYPE_ONLY_NOTICE = """
+
+            # 이번 요청의 모드
+            이번에는 type만 판단한다. 키워드는 사용자가 이미 정했으므로 만들지 않는다. 출력 JSON에는 "type" 키만 쓴다.
+            """;
+
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final GeminiProperties props;
@@ -132,24 +139,47 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         }
     }
 
+    @Override
+    public IdeaType analyzeType(Idea idea) {
+        if (props.apiKey() == null || props.apiKey().isBlank()) {
+            log.warn("GEMINI_API_KEY가 없어 임시 분석기로 대체합니다.");
+            return fallback.analyzeType(idea);
+        }
+        try {
+            return requestAnalysis(idea, true).type();
+        } catch (RuntimeException e) {
+            log.warn("Gemini 종류 분류 실패, 임시 분석기로 대체합니다: {}", e.toString());
+            return fallback.analyzeType(idea);
+        }
+    }
+
     /** Gemini를 호출해 결과를 파싱한다. 실패하면 G002(CustomException). */
     IdeaAnalysis requestAnalysis(Idea idea) {
+        return requestAnalysis(idea, false);
+    }
+
+    /** typeOnly면 키워드 없이 종류만 요청한다 (사용자가 키워드를 직접 정한 경우). */
+    IdeaAnalysis requestAnalysis(Idea idea, boolean typeOnly) {
         String body;
         try {
             body = restClient.post()
                     .uri("/v1beta/models/{model}:generateContent", props.model())
                     .header("x-goog-api-key", props.apiKey())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(buildRequest(idea))
+                    .body(buildRequest(idea, typeOnly))
                     .retrieve()
                     .body(String.class);
         } catch (RuntimeException e) {
             throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
         }
-        return parse(body);
+        return parse(body, typeOnly);
     }
 
     IdeaAnalysis parse(String responseBody) {
+        return parse(responseBody, false);
+    }
+
+    IdeaAnalysis parse(String responseBody, boolean typeOnly) {
         try {
             JsonNode text = objectMapper.readTree(responseBody)
                     .path("candidates").path(0).path("content").path("parts").path(0).path("text");
@@ -157,6 +187,9 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
                 throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
             }
             JsonNode result = objectMapper.readTree(text.asString());
+            if (typeOnly) {
+                return new IdeaAnalysis(IdeaType.fromAi(result.path("type").asString(null)), List.of());
+            }
             LinkedHashSet<String> keywords = new LinkedHashSet<>();
             for (JsonNode k : result.path("keywords")) {
                 String keyword = k.asString("").trim();
@@ -181,19 +214,22 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         }
     }
 
-    private Map<String, Object> buildRequest(Idea idea) {
+    private Map<String, Object> buildRequest(Idea idea, boolean typeOnly) {
         String userText = "타깃: " + idea.getTarget() + "\n문제: " + idea.getProblem()
                 + "\n해결: " + idea.getSolution() + "\n기대효과: " + idea.getExpectation();
         List<String> types = Arrays.stream(IdeaType.values()).map(Enum::name).toList();
-        Map<String, Object> schema = Map.of(
-                "type", "OBJECT",
-                "properties", Map.of(
-                        "type", Map.of("type", "STRING", "enum", types),
-                        "keywords", Map.of("type", "ARRAY", "items", Map.of("type", "STRING"),
-                                "minItems", 1, "maxItems", MAX_KEYWORDS)),
-                "required", List.of("type", "keywords"));
+        Map<String, Object> typeSchema = Map.of("type", "STRING", "enum", types);
+        Map<String, Object> schema = typeOnly
+                ? Map.of("type", "OBJECT", "properties", Map.of("type", typeSchema), "required", List.of("type"))
+                : Map.of("type", "OBJECT",
+                        "properties", Map.of(
+                                "type", typeSchema,
+                                "keywords", Map.of("type", "ARRAY", "items", Map.of("type", "STRING"),
+                                        "minItems", 1, "maxItems", MAX_KEYWORDS)),
+                        "required", List.of("type", "keywords"));
+        String systemPrompt = typeOnly ? SYSTEM_PROMPT + TYPE_ONLY_NOTICE : SYSTEM_PROMPT;
         return Map.of(
-                "systemInstruction", Map.of("parts", List.of(Map.of("text", SYSTEM_PROMPT))),
+                "systemInstruction", Map.of("parts", List.of(Map.of("text", systemPrompt))),
                 "contents", List.of(Map.of("role", "user", "parts", List.of(Map.of("text", userText)))),
                 "generationConfig", Map.of(
                         "responseMimeType", "application/json",

@@ -43,7 +43,7 @@ trend/        entity (Trend)
 - `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 V1도 같은 PR에서 고친다.
 
 ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea_score_histories, scores 1:N evaluations, trends 0..1:N evaluations, evaluations 1:N evaluation_references, evaluations 0..1:N sources.
-- `ideas`: `type`(`IdeaType`: IT/HEALTHCARE/EDUCATION/FINANCE/COMMERCE/CONTENT/OTHER, varchar30에 문자열 저장; 종류별 검색 API 조합은 `IdeaType.searchProviders()`, IT 외 조합은 임시 값), `status`(`ACTIVE`/`HOLD`), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각).
+- `ideas`: `type`(`IdeaType`: IT/HEALTHCARE/EDUCATION/FINANCE/COMMERCE/CONTENT/OTHER, varchar30에 문자열 저장; 종류별 검색 API 조합은 `IdeaType.searchProviders()`, IT 외 조합은 임시 값), `status`(`ACTIVE`/`HOLD`), `keywords`(TEXT, 줄바꿈 구분, 최대 2개)·`keyword_origin`(`USER`/`AI`, varchar20; 키워드가 없으면 둘 다 null), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각).
 - `scores`: 아이디어당 4행(`ScoreType`), `(idea_id, type)` 유니크. `weight`는 0~1 비율(DECIMAL 4,3), `pending_weight`는 변경 예약.
 - `evaluations`: **항목(score) 단위** 평가 이력. 점수가 바뀔 때만 생성. `difference`(변화량), `score_after`(변경 후 점수), `weight`(평가 당시 가중치), `evidence_summary`(근거 요약), `created_at`(재평가 날짜), nullable `trend_id`.
 - `evaluation_references`: 평가 근거 출처 URL (평가 1 : N).
@@ -101,6 +101,13 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - **실패 방침: 폴백.** 호출 실패·타임아웃·파싱 실패·API 키 없음이면 `SimpleIdeaAnalyzer`(종류 IT, 긴 단어 2개)로 대체한다. 근거: 키워드 추출은 등록의 부가 단계이고 AI 장애 때문에 사용자가 쓴 아이디어 저장이 실패하면 안 된다. 내부적으로는 `requestAnalysis()`가 `G002`(`EXTERNAL_SERVER_ERROR`)를 던지고 `analyze()`가 잡아 로그(warn)만 남긴다. 폴백 결과는 품질이 낮으므로 이후 수정(PATCH) 시 다시 추출된다.
 - 설정은 `cue.gemini.*`(`GEMINI_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_BASE_URL`, `GEMINI_TIMEOUT_SECONDS`). `enabled=false`면 `GeminiIdeaAnalyzer` 빈이 없어 `SimpleIdeaAnalyzer`만 쓴다. 통합 테스트는 `cue.gemini.enabled=false`.
 
+### 검색 키워드 우선순위 (USER > AI)
+- 요청 `keywords`(선택, `POST /api/ideas`·`PATCH /api/ideas/{id}`): 최대 2개, 각 항목 trim 후 1~50자, 빈 문자열 불가, 중복은 제거, 언어 제한 없음. 위반은 `G004`(DTO `@Size`/`@NotBlank` 검증, PATCH에도 `@Valid`).
+- 등록: ACTIVE이고 키워드가 없거나 `[]`이면 `IdeaAnalyzer.analyze`로 종류·키워드(출처 `AI`) 추출. 사용자 키워드가 있으면(출처 `USER`) 키워드 추출은 건너뛰고 `IdeaAnalyzer.analyzeType`으로 **종류만** 분류한다(검색 provider 조합이 종류에 의존). Gemini는 type만 받는 경량 스키마/프롬프트(`TYPE_ONLY_NOTICE`)를 쓰고 실패하면 IT 폴백.
+- 수정: `keywords` 생략(null)이면 유지. 단 출처가 `AI`(또는 없음)면 ACTIVE에서 기존대로 재추출, `USER`면 내용이 바뀌어도 유지. `[]`는 사용자 키워드를 지우고 AI 재추출, 1~2개는 교체(출처 `USER`). HOLD는 키워드를 저장만 하고 sources·AI 호출 없이, ACTIVE가 될 때 위 규칙을 적용한다.
+- `sources`는 종류별 provider × 키워드(최대 2개)로 새로 만든다. 응답 `IdeaResponse`에 `keywords`(없으면 `[]`)·`keywordOrigin`.
+- AI 키워드 프롬프트 규칙: 영어 검색어 1~2개, 각 1~3단어, 아이디어 전체를 대표(한 항목에 치우치지 않음), 너무 일반적이지 않게. 한글이 섞여 오면 경고 로그만 남기고 그대로 쓴다.
+
 ### 새 변화 알림(확인 처리)
 - `Idea.hasNewChange()` = `lastEvaluatedAt`이 `lastCheckedAt`보다 늦음. 사용자가 최신 점수를 확인하면 `POST /api/ideas/{id}/check`로 `lastCheckedAt`을 갱신한다 (행 단위 is_checked 없음).
 
@@ -116,10 +123,10 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | POST | `/api/users` | ✕ | 회원가입 |
 | POST | `/api/auth/login` | ✕ | 로그인 (JWT 발급) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD) |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD). 선택 `keywords`(최대 2개)가 있으면 AI 키워드 추출 생략 |
 | GET | `/api/ideas` | ✓ | 리더보드. `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태·점수·가중치·최근 변화량·hasNewChange) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 키워드 재추출) |
+| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 출처가 AI일 때 키워드 재추출). `keywords`: 생략=유지, `[]`=삭제 후 AI, 1~2개=교체 |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 가중치 변경 예약 |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 (새 변화 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순) |

@@ -50,6 +50,14 @@ public class Idea {
     @Column(columnDefinition = "TEXT")
     private String expectation;
 
+    /** 검색 키워드(줄바꿈 구분, 최대 2개). 키워드가 없으면 null. */
+    @Column(columnDefinition = "TEXT")
+    private String keywords;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "keyword_origin", length = 20)
+    private KeywordOrigin keywordOrigin;
+
     @Column(name = "total_score", nullable = false, precision = 7, scale = 2)
     private BigDecimal totalScore = BigDecimal.ZERO;
 
@@ -105,6 +113,26 @@ public class Idea {
         if (solution != null) this.solution = blankToNull(solution);
         if (expectation != null) this.expectation = blankToNull(expectation);
         refreshStatus();
+    }
+
+    /** 키워드 목록. 없으면 빈 리스트. */
+    public List<String> keywordList() {
+        return keywords == null ? List.of() : List.of(keywords.split("\\n"));
+    }
+
+    /** 키워드와 출처를 저장한다. 빈 목록이면 키워드를 지운다. */
+    public void applyKeywords(List<String> values, KeywordOrigin origin) {
+        if (values == null || values.isEmpty()) {
+            keywords = null;
+            keywordOrigin = null;
+        } else {
+            keywords = String.join("\n", values);
+            keywordOrigin = origin;
+        }
+    }
+
+    public boolean hasUserKeywords() {
+        return keywordOrigin == KeywordOrigin.USER && keywords != null;
     }
 
     /** AI가 다시 추출한 아이디어 종류를 반영한다. */

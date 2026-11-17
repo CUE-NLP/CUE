@@ -26,4 +26,9 @@ class SimpleIdeaAnalyzer implements IdeaAnalyzer {
                 .toList();
         return new IdeaAnalysis(IdeaType.IT, keywords);
     }
+
+    @Override
+    public IdeaType analyzeType(Idea idea) {
+        return IdeaType.IT;
+    }
 }

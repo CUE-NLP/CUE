@@ -46,7 +46,7 @@ public class IdeaController {
     /** 아이디어 수정. 보낸 항목만 바꾸고(null은 유지, 빈 문자열은 비움), 모두 채워진 상태면 키워드를 다시 추출한다. */
     @PatchMapping("/{id}")
     public CommonResponse<IdeaResponse> update(@AuthenticationPrincipal UserPrincipal principal, @PathVariable Long id,
-                                               @RequestBody UpdateIdeaRequest req) {
+                                               @Valid @RequestBody UpdateIdeaRequest req) {
         return CommonResponse.onSuccess(ideaService.update(principal.id(), id, req));
     }
 

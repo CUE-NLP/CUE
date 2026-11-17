@@ -126,6 +126,24 @@ class GeminiIdeaAnalyzerTest {
     }
 
     @Test
+    void 종류만_요청하면_스키마에_keywords가_없고_AI가_키워드를_줘도_무시한다() {
+        server.expect(requestTo(URL)).andExpect(request -> {
+            String body = request.getBody().toString();
+            assertThat(body).contains("이번에는 type만 판단한다").doesNotContain("maxItems");
+        }).andRespond(withSuccess(
+                envelope("{\"type\":\"HEALTHCARE\",\"keywords\":[\"ignored\"]}"), MediaType.APPLICATION_JSON));
+
+        assertThat(analyzer.analyzeType(idea)).isEqualTo(IdeaType.HEALTHCARE);
+        server.verify();
+    }
+
+    @Test
+    void 종류_분류_실패는_IT로_폴백한다() {
+        server.expect(requestTo(URL)).andRespond(withServerError());
+        assertThat(analyzer.analyzeType(idea)).isEqualTo(IdeaType.IT);
+    }
+
+    @Test
     void API_키가_없으면_호출_없이_폴백한다() {
         RestClient.Builder builder = RestClient.builder().baseUrl("https://gemini.test");
         MockRestServiceServer noCall = MockRestServiceServer.bindTo(builder).build();

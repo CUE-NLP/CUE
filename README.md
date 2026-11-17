@@ -132,14 +132,26 @@ cd backend && ./gradlew test
 | POST | `/api/users` | ✕ | 회원가입 |
 | POST | `/api/auth/login` | ✕ | 로그인, 액세스 토큰 발급 |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD` |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
 | GET | `/api/ideas` | ✓ | 리더보드. `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태 · 항목별 점수 · 가중치 · 최근 변화량 · `hasNewChange`) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출 |
+| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출. `keywords`: 생략=유지(출처가 AI면 재추출), `[]`=사용자 키워드 삭제 후 AI 재추출, 1~2개=교체 |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순) |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
+
+### 검색 키워드
+
+`POST /api/ideas`, `PATCH /api/ideas/{id}`의 선택 필드 `keywords`는 문자열 배열(최대 2개, 각 항목 trim 후 1~50자, 중복 제거, 언어 제한 없음)이며 위반하면 `G004`입니다. 응답에는 `keywords`(없으면 `[]`)와 `keywordOrigin`(`USER`/`AI`, 키워드가 없으면 `null`)이 담깁니다.
+
+```json
+POST /api/ideas
+{ "problem": "...", "target": "...", "solution": "...", "expectation": "...", "keywords": ["automated code review"] }
+```
+
+- 사용자 키워드가 있으면 그 값으로 `sources`를 만들고 AI는 종류(type)만 분류합니다. 없으면 AI가 종류와 키워드(영어 1~2개)를 함께 추출합니다.
+- 수정 시 출처가 `USER`이면 내용이 바뀌어도 키워드를 유지하고, `AI`이면 다시 추출합니다. `HOLD`는 키워드를 저장만 하고 `ACTIVE`가 될 때 적용합니다.
 
 ### 가중치
 
@@ -187,7 +199,7 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | 테이블 | 설명 |
 | --- | --- |
 | `users` | 사용자 |
-| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 |
+| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 검색 키워드(`keywords`, 줄바꿈 구분)와 출처(`keyword_origin`) · 총점 · 최근 변화량 · 확인 시각 |
 | `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
 | `evaluation_references` | 평가 근거 출처 URL |
