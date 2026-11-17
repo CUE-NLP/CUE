@@ -59,6 +59,9 @@ CUE
 - **인증**: 로그인(`POST /api/auth/login`)으로 받은 `accessToken`을 `Authorization: Bearer {accessToken}` 헤더로 보냅니다.
 - **에러 처리**: `code` 값으로 분기합니다. 토큰 만료는 `A004`입니다. 전체 목록은 [에러 코드](#에러-코드)를 참고하세요.
 - **5개 기준(`TREND` 추가) — 프론트 영향**: `scores`가 아이디어마다 **5행**(`PROBLEM_IMPORTANCE`·`MARKET_DEMAND`·`MARKET_DIFFERENTIATION`·`TECH_FEASIBILITY`·`TREND`)으로 내려오고 가중치 기본값은 각 20%입니다. 가중치 슬라이더를 4개 → 5개로 늘리고, `PATCH /api/ideas/{id}/weights` 요청에 `TREND`를 **반드시 포함**해야 합니다(5개 모두 필요, 합 100). 예전 4개짜리 요청은 `I003`으로 거절됩니다. `/evaluations`의 `scoreType`에도 `TREND`가 나옵니다.
+- **평가는 비동기입니다 (프론트 흐름)**: 아이디어를 저장(`POST /api/ideas`, ACTIVE)하거나 내용을 수정(`PATCH`)하면 서버가 커밋 뒤 **첫 평가를 자동으로 큐에 넣습니다**(`EVALUATION_AUTO_ON_SAVE`). 프론트는 "가능성을 분석하고 있어요" 로딩 화면에서 `GET /api/ideas/{id}`를 **몇 초 간격으로 폴링**하고, `evaluationStatus`가 `IDLE`이면 점수를 보여주고 `FAILED`면 `lastEvaluationErrorCode`로 안내합니다. 수동으로 다시 돌리려면 `POST /api/ideas/{id}/evaluate`(즉시 `202`)를 호출하고 같은 방식으로 폴링합니다.
+  - `evaluationStatus`: `IDLE`(대기·완료) → `QUEUED`(대기열) → `RUNNING`(평가 중) → `IDLE`(완료, 점수·`hasNewChange` 갱신) 또는 `FAILED`(`lastEvaluationErrorCode`에 `G002` 등). `FAILED`는 다시 요청하면 재시도됩니다. 보류(HOLD) 아이디어와 평가 전 상태는 `IDLE`입니다.
+  - 서버는 평가를 한 번에 하나씩만 돌리므로 대기열이 길면 `QUEUED`가 오래 갈 수 있고(수 분), 대기열이 가득 차면 요청이 `E004`로 거절됩니다. 서버 재시작으로 중단된 평가는 `FAILED`(`E005`)가 됩니다.
 - **API 문서**: 백엔드 실행 후 `http://localhost:8080/swagger-ui.html`
 - **CORS**: 아직 설정되어 있지 않습니다. 브라우저에서 호출을 시작할 때 백엔드와 허용 도메인을 맞춰야 합니다.
 
@@ -126,6 +129,8 @@ cd backend && ./gradlew bootRun
 | `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 여부 (테스트는 `false`) |
 | `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 재평가 실행 시각(Spring 6필드 cron) · 시간대 |
 | `EVALUATION_DELAY_MS` | `15000` | 아이디어 사이 대기(ms) — Gemini 무료 티어 분당 호출 한도용 |
+| `EVALUATION_AUTO_ON_SAVE` | `true` | ACTIVE로 저장·내용 수정 시 첫 평가를 자동으로 큐에 넣음 (테스트는 `false`) |
+| `EVALUATION_QUEUE_CAPACITY` / `EVALUATION_SHUTDOWN_WAIT_SECONDS` | `50` / `30` | 평가 대기열 상한(가득 차면 `E004`) / 종료 시 진행 중 평가를 기다리는 시간(초) |
 | `GEMINI_API_KEY` | (없음) | Gemini API 키(키워드 추출 · 재평가). 커밋 금지. 없으면 키워드 추출은 임시 분석기로 대체되어 등록은 계속 동작하고, 일일 재평가는 건너뜀 |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
 | `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성(테스트 등) |
@@ -156,7 +161,7 @@ cd backend && ./gradlew test
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순) |
-| POST | `/api/ideas/{id}/evaluate` | ✓ | 지금 재평가 실행 (본인 아이디어만, 보류는 `I004`). 자료 변화가 없으면 `NO_CHANGE`로 아무것도 기록하지 않음. 응답: `status`, `changed`, 갱신된 `idea` |
+| POST | `/api/ideas/{id}/evaluate` | ✓ | 평가를 **비동기로** 요청 — 즉시 **`202 Accepted`**(본문 `code`는 다른 성공 응답처럼 `"200"`). 응답 `data`: `status`(`QUEUED` 방금 큐에 넣음 / `RUNNING` 이미 진행 중이라 그대로 둠 — 중복 요청은 에러 없이 멱등), `idea`. 본인 아이디어만(`I002`), 보류 `I004`, Gemini 불가 `E001`, 대기열 가득 `E004`는 요청 시점에 바로 반환. 결과는 `GET /api/ideas/{id}`의 `evaluationStatus`를 폴링해 확인 |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — **5개 항목(TREND 포함) 모두**, 합 100, **다음 평가 턴부터 적용** |
 
 ### 가중치
@@ -194,7 +199,7 @@ PATCH /api/ideas/1/weights
 | User | `U001~` | 이메일 중복, 사용자 없음 |
 | Idea | `I001~` | 아이디어 없음, 접근 거부, 가중치 오류, 보류 아이디어 평가 불가 |
 | Source | `S001~` | 수집 설정 없음, 지원하지 않는 외부 API, 허용되지 않는 URL |
-| Evaluation | `E001~` | AI 평가 사용 불가(Gemini 비활성·키 없음), AI 응답 해석 불가, 이미 평가 중 |
+| Evaluation | `E001~` | AI 평가 사용 불가(Gemini 비활성·키 없음), AI 응답 해석 불가, 평가 대기열 가득(`E004`, 503), 재시작으로 평가 중단(`E005`, 상태로만 노출) |
 
 JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 재로그인 흐름으로 분기하면 됩니다.
 
@@ -207,7 +212,7 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | 테이블 | 설명 |
 | --- | --- |
 | `users` | 사용자 |
-| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 · 전체 평가 필요 플래그(`needs_full_evaluation`) · TREND를 마지막으로 평가한 트렌드(`last_trend_id`) |
+| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 · 전체 평가 필요 플래그(`needs_full_evaluation`) · TREND를 마지막으로 평가한 트렌드(`last_trend_id`) · 평가 실행 상태(`evaluation_status`·시작/종료 시각·`last_evaluation_error_code`) |
 | `scores` | 아이디어별 5개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜). TREND 평가만 `trend_id`로 그날 트렌드에 연결 |
 | `evaluation_references` | 평가 근거 출처 URL |

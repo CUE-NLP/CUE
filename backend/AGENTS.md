@@ -32,7 +32,7 @@ auth/         controller / service / dto   — 로그인(JWT 발급)
 user/         controller / service / repository / entity / dto — 회원가입, 내 정보
 idea/         controller / service / repository / entity / dto — 아이디어 저장·조회·리더보드·가중치
 score/        entity (Score, ScoreType — 5개 기준: 근거 4개 + TREND)
-evaluation/   controller 없음. entity (Evaluation, EvaluationReference, IdeaScoreHistory) / repository / service (EvaluationService=저장·턴 시작, DailyEvaluationService=아이디어 1개 파이프라인(근거 4개 기준 + TREND 두 갈래), EvaluationAnalyzer=키워드 근거 4개 기준 Gemini 호출·변환·클램프, TrendEvaluator=TREND 호출·변환·클램프, EvaluationBatchService, EvaluationScheduler) / config (EvaluationProperties) / dto (ScoreChange, ReferenceInput, IdeaSnapshot, EvaluationRunResult)
+evaluation/   controller 없음. (EvaluationJobService=비동기 직렬 실행·상태 기록, AutoEvaluationStarter=저장 직후 자동 큐 투입, EvaluationStateRecovery=부팅 시 상태 정리, config/EvaluationExecutorConfig=단일 스레드 실행기) entity (Evaluation, EvaluationReference, IdeaScoreHistory) / repository / service (EvaluationService=저장·턴 시작, DailyEvaluationService=아이디어 1개 파이프라인(근거 4개 기준 + TREND 두 갈래), EvaluationAnalyzer=키워드 근거 4개 기준 Gemini 호출·변환·클램프, TrendEvaluator=TREND 호출·변환·클램프, EvaluationBatchService, EvaluationScheduler) / config (EvaluationProperties) / dto (ScoreChange, ReferenceInput, IdeaSnapshot, EvaluationRunResult)
 source/       entity (Source, SourceItemSummary, ApiProvider) / repository / client (SourceClient + GitHub·HuggingFace·StackExchange·HackerNews, SearchSettings) / fetch (WebContentFetcher, UrlGuard, JdkTransport, HtmlText) / service (SourceCheckService, SourceSummaryService, SourceHasher) / dto / config (SourceApiProperties, SourceClientConfig)
 trend/        entity (Trend, TrendSource, TrendItem) / repository / service (GlobalTrendService — 글로벌 트렌드 하루 1회 수집·요약·저장) / config (TrendProperties) / dto (TrendSnapshot)
 ```
@@ -44,7 +44,7 @@ trend/        entity (Trend, TrendSource, TrendItem) / repository / service (Glo
 - `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 V1도 같은 PR에서 고친다.
 
 ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea_score_histories, scores 1:N evaluations, trends 1:N trend_sources, trends 1:N trend_items, trends 0..1:N evaluations(TREND 평가만 연결), trends 0..1:N ideas(`last_trend_id`), evaluations 1:N evaluation_references, evaluations 0..1:N sources.
-- `ideas`: `needs_full_evaluation`(전체 평가 필요 플래그, 아래 "일일 재평가" 참고), `type`(`IdeaType`: IT/HEALTHCARE/EDUCATION/FINANCE/COMMERCE/CONTENT/OTHER, varchar30에 문자열 저장; 종류별 검색 API 조합은 `IdeaType.searchProviders()`, IT 외 조합은 임시 값), `status`(`ACTIVE`/`HOLD`), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각), `last_trend_id`(TREND를 마지막으로 평가한 글로벌 트렌드 `trends.id`. null이면 TREND 첫 평가 전이고, 내용이 바뀐 수정에서도 null로 돌아가 첫 평가부터 다시 한다. 같은 트렌드면 TREND 평가를 다시 하지 않는 근거).
+- `ideas`: `needs_full_evaluation`(전체 평가 필요 플래그, 아래 "일일 재평가" 참고), `type`(`IdeaType`: IT/HEALTHCARE/EDUCATION/FINANCE/COMMERCE/CONTENT/OTHER, varchar30에 문자열 저장; 종류별 검색 API 조합은 `IdeaType.searchProviders()`, IT 외 조합은 임시 값), `status`(`ACTIVE`/`HOLD`), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각), `evaluation_status`(IDLE/QUEUED/RUNNING/FAILED)·`evaluation_started_at`·`evaluation_finished_at`·`last_evaluation_error_code`(비동기 평가 상태, 아래 "비동기 평가 실행"), `last_trend_id`(TREND를 마지막으로 평가한 글로벌 트렌드 `trends.id`. null이면 TREND 첫 평가 전이고, 내용이 바뀐 수정에서도 null로 돌아가 첫 평가부터 다시 한다. 같은 트렌드면 TREND 평가를 다시 하지 않는 근거).
 - `scores`: 아이디어당 **5행**(`ScoreType`: 근거 4개 + `TREND`, 기본 가중치 각 0.200), `(idea_id, type)` 유니크. `weight`는 0~1 비율(DECIMAL 4,3), `pending_weight`는 변경 예약.
 - `evaluations`: **항목(score) 단위** 평가 이력. 점수가 바뀔 때만 생성. `difference`(변화량), `score_after`(변경 후 점수), `weight`(평가 당시 가중치), `evidence_summary`(근거 요약), `created_at`(재평가 날짜), nullable `trend_id`(TREND 평가가 근거로 쓴 그날의 글로벌 트렌드, `trends`. 키워드 근거 4개 기준 평가는 항상 null).
 - `evaluation_references`: 평가 근거 출처 URL (평가 1 : N).
@@ -65,7 +65,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 ### 에러: `ErrorCode` 하나로 관리
 - `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집, E 평가. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
 - 외부 자료(S): `S001` source 없음 / `S002` 미지원 provider / `S003` 허용되지 않는 URL(SSRF 차단).
-- 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E003` 같은 아이디어를 이미 평가 중(409). AI 통신 실패 자체는 `G002`.
+- 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E004` 평가 대기열 가득(503) / `E005` 재시작으로 평가 중단(503, `FAILED` 상태의 `last_evaluation_error_code`로만 노출). AI 통신 실패 자체는 `G002`. (`E003`은 비동기 전환으로 없앴다: 이미 진행 중이면 에러 없이 현재 상태를 돌려준다.)
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
 - JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효 `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
 - 필터 단계 에러(401/403)는 `SecurityErrorWriter`가 CommonResponse로 응답한다.
@@ -106,8 +106,8 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 설정은 `cue.gemini.*`(`GEMINI_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_BASE_URL`, `GEMINI_TIMEOUT_SECONDS`). `enabled=false`면 `GeminiIdeaAnalyzer` 빈이 없어 `SimpleIdeaAnalyzer`만 쓴다. 통합 테스트는 `cue.gemini.enabled=false`.
 
 ### 일일 재평가 (`evaluation`)
-- **진입점**: 스케줄러 `EvaluationScheduler`(`@Scheduled`, 기본 `0 0 3 * * *` Asia/Seoul) → `EvaluationBatchService.runAll()` → ACTIVE 아이디어 id마다 `DailyEvaluationService.evaluate(id)`. 수동 `POST /api/ideas/{id}/evaluate`도 같은 메서드를 쓴다. HOLD는 대상에서 제외(수동은 `I004`).
-- **아이디어 단위 격리**: 배치는 아이디어마다 try/catch로 로그만 남기고 계속한다. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 `DailyEvaluationService`는 `@Transactional`을 쓰지 않고 `TransactionTemplate`/`EvaluationService`의 짧은 트랜잭션으로 저장한다. 같은 아이디어는 동시에 하나만 평가(`E003`). 아이디어 사이에는 `cue.evaluation.delay-ms`(기본 15초)만큼 쉰다(Gemini를 쓰지 않은 `NO_CHANGE`는 쉬지 않음). Gemini 호출 수는 아래 "호출량" 참고.
+- **진입점**: 스케줄러 `EvaluationScheduler`(`@Scheduled`, 기본 `0 0 3 * * *` Asia/Seoul) → `EvaluationBatchService.runAll()` → ACTIVE 아이디어 id마다 `EvaluationJobService.execute(id)` → `DailyEvaluationService.evaluate(id)`. 수동 `POST /api/ideas/{id}/evaluate`와 저장 직후 자동 평가는 `EvaluationJobService.submit`으로 큐에 넣어 같은 `execute`를 탄다. HOLD는 대상에서 제외(수동은 `I004`).
+- **아이디어 단위 격리**: 배치는 아이디어마다 try/catch로 로그만 남기고 계속한다. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 `DailyEvaluationService`는 `@Transactional`을 쓰지 않고 `TransactionTemplate`/`EvaluationService`의 짧은 트랜잭션으로 저장한다. 아이디어 사이에는 `cue.evaluation.delay-ms`(기본 15초)만큼 쉰다(Gemini를 쓰지 않은 `NO_CHANGE`는 쉬지 않음). Gemini 호출 수는 아래 "호출량" 참고.
 - **호출량과 무료 티어 대응** — source(또는 트렌드 provider) 하나의 항목은 **한 번의 일괄 호출**로 요약한다(항목마다 호출하던 방식 폐기). source당 Gemini 호출 = **일괄 항목 요약 1회 + 소스 요약 1회 = 2회**, 저장된 요약을 전부 재사용하면 소스 요약 1회뿐이다.
   - **B. 글로벌 트렌드(하루 1회 고정, 아이디어 수와 무관)**: provider 3개 × 2 + 최종 요약 1 = **7회/일**(해시가 같으면 0회). `TREND_TOP_N`은 호출 수가 아니라 일괄 호출의 입력 크기에만 영향을 준다.
   - **TREND 평가(아이디어당)**: 새 트렌드가 만들어진 날(또는 아이디어 첫 평가) 1회, 트렌드가 같으면 0회.
@@ -126,7 +126,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
   - **항목 요약과 소스 요약을 한 호출로 합치지 않은 이유**: 호출이 source당 1회로 줄지만 ① 응답이 길어져 JSON이 잘리거나 항목 요약 품질이 떨어질 위험이 있고 ② 항목 요약이 전부 재사용된 날에도 소스 요약은 따로 필요해 결국 호출 경로가 둘로 갈라진다. 한도가 더 부족하면 다음 후보다.
   - **일괄 호출 실패 처리**: 그 source는 원래 조회한 항목(제목·URL·짧은 요약)으로 평가를 계속하고(`SourceSummary.degraded`), 평가 저장이 끝난 뒤 source 해시를 되돌려 다음 실행에서 다시 읽고 요약한다(`source_items`·`sources.summary`는 건드리지 않음). 글로벌 트렌드는 일괄 호출이 실패한 provider를 그날 트렌드에서 뺀다(재사용 항목만 남기고 진행, 전부 비면 그날은 만들지 못함 → 다음 배치에서 재시도). 원문 읽기에 실패한 항목은 건너뛰고 나머지로 일괄 호출한다.
   - 열어둔 설정: `SOURCE_TOP_N`, `SOURCE_TRENDING_DAYS`, `SOURCE_MAX_CONTENT_CHARS`, `SOURCE_BATCH_CONTENT_CHARS`, `SOURCE_BATCH_TOTAL_CHARS`, `SOURCE_SUMMARY_REUSE_DAYS`, `TREND_DAYS`, `TREND_TOP_N`, `GEMINI_MIN_INTERVAL_MS`, `EVALUATION_DELAY_MS`. 병렬 호출은 구현하지 않았다(RPM 한도 때문에 순차가 안전).
-  - 수동 `POST /evaluate`는 이 호출들을 한 요청 안에서 동기로 수행하므로 오래 걸릴 수 있다(비동기 전환은 열린 결정). 그날 첫 호출이 트렌드 수집(약 45초)까지 떠안을 수 있다.
+  - 수동 `POST /evaluate`는 비동기라 요청은 즉시 끝난다(아래 "비동기 평가 실행"). 평가는 전체가 한 줄로 직렬 처리되므로 아이디어 N개가 한꺼번에 대기하면 마지막 아이디어는 호출 수 × 6.5초 × N만큼 늦게 끝난다. 그날 첫 평가가 트렌드 수집(약 45초)까지 떠안는다.
 - **Gemini 사용 불가**(비활성/키 없음): 배치는 로그만 남기고 통째로 건너뛰고, 아이디어 단위 호출은 아무것도 쓰지 않고 `E001`.
 - **파이프라인** (`DailyEvaluationService`) — 하루 평가는 서로 독립인 두 갈래다.
 
@@ -168,6 +168,17 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - **실패**: 항목 하나가 실패하면 그 항목만 건너뛰고, 요약할 항목이 하나도 없거나 최종 요약이 비면 그날은 만들지 못한다(`today()`가 null → TREND 평가만 건너뛰고 30분 뒤부터 다시 시도, 근거 4개 기준 평가는 영향 없음). 어제 행이 있어도 오늘 조회가 전부 실패하면 오래된 트렌드로 평가하지 않고 null을 돌려준다.
 - **TREND 평가**: `TrendEvaluator`가 아이디어 4항목 + 오늘 트렌드 요약 + 항목 목록을 `trend-evaluation` 프롬프트에 대입한다(검증 규칙은 위 "AI 응답 서버 검증"). 결과는 `ScoreChange(trendId=오늘 트렌드)`로 `recordResults`에 들어가 `evaluations.trend_id`가 된다. 아이디어가 이미 오늘 트렌드(`last_trend_id`)로 평가됐으면 호출하지 않는다.
 
+### 비동기 평가 실행 (`evaluation`, `EvaluationJobService`)
+- **API**: `POST /api/ideas/{id}/evaluate`는 기다리지 않고 **`202 Accepted`**를 돌려준다. 본문은 기존 규칙대로 `CommonResponse`(성공 `code`는 `"200"` 그대로 — `POST /api/ideas`의 `201`도 같은 방식으로 HTTP 상태만 다르다): `data = {status: QUEUED|RUNNING, idea}`. 본인 소유(`I002`)·없음(`I001`)·보류(`I004`)·Gemini 불가(`E001`)는 요청 시점에 동기로 검사해 그대로 에러로 돌려준다. 이미 QUEUED/RUNNING이면 에러 없이 그 상태를 돌려준다(멱등, `E003` 제거).
+- **상태 머신** (`ideas.evaluation_status`, `EvaluationStatus`): `IDLE → QUEUED → RUNNING → IDLE`(성공) 또는 `FAILED`(예외, `last_evaluation_error_code`에 `CustomException`의 코드, 그 밖의 예외는 `G001`). `FAILED`는 다시 요청하면 QUEUED. `evaluation_started_at`/`evaluation_finished_at`을 함께 기록한다. 모든 전이는 `IdeaRepository`의 **조건부 UPDATE**(`markQueued`·`markRunning`·`markIdle`·`markFailed`, 각각 `REQUIRES_NEW`)로만 해서 동시 요청에도 한 번만 성공하고 AFTER_COMMIT 콜백 안에서도 바로 커밋된다. `Idea`는 `@DynamicUpdate`라 오래된 엔티티가 상태 컬럼을 덮어쓰지 않는다.
+- **실행기**: 전용 `evaluationExecutor`(`ThreadPoolTaskExecutor`, 스레드 **1개**, 대기열 `cue.evaluation.queue-capacity` 기본 50). 대기열이 가득 차면 수동 요청은 `E004`(상태는 IDLE로 되돌림), 자동 시작은 `FAILED(E004)`로 기록만 한다. **전역 `ReentrantLock`**(공정)으로 실행기 작업과 일일 배치가 **한 번에 하나만** 평가해 Gemini 무료 티어 분당 한도를 같이 지킨다. 일일 배치는 같은 `execute`를 쓰므로 같은 상태 규칙(RUNNING → IDLE/FAILED)을 따르고, 배치와 수동 요청이 같은 아이디어를 겹쳐 평가하지 않는다(그사이 끝난 큐 작업은 `markRunning`이 0건이라 건너뜀).
+- **예외 처리**: 비동기 작업의 예외는 로그(`error`)와 `FAILED`+에러 코드로 남기고(다시 던져 배치는 실패로 센다) 실행기 스레드 밖으로 새지 않게 한다.
+- **종료**: `waitForTasksToCompleteOnShutdown` + `cue.evaluation.shutdown-wait-seconds`(기본 30)만큼 진행 중 평가를 기다린 뒤 인터럽트한다. 실행기는 `entityManagerFactory`에 `@DependsOn`이라 DB보다 먼저 닫힌다. 그 안에 끝나지 않은 평가는 RUNNING으로 남아 다음 부팅에서 정리된다.
+- **재시작 정리**: `EvaluationStateRecovery`(`ApplicationRunner`)가 부팅 때 남은 `QUEUED`/`RUNNING`을 `FAILED(E005)`로 바꾼다(큐는 메모리라 재시작하면 사라진다). 평가가 필요한 아이디어(`needs_full_evaluation`)는 사용자의 재요청이나 다음 일일 배치에서 다시 평가된다.
+- **저장 직후 자동 평가**: `POST /api/ideas`로 ACTIVE가 만들어지거나 `PATCH`로 내용이 **실제로 바뀐** ACTIVE 아이디어가 되면(HOLD→ACTIVE 포함) `IdeaService`가 `IdeaEvaluationRequested`를 발행하고 `AutoEvaluationStarter`(`@TransactionalEventListener(AFTER_COMMIT)`)가 커밋 **뒤에** 큐에 넣는다(롤백되면 호출 안 됨). `cue.evaluation.auto-on-save`(기본 true, 통합 테스트는 false)로 끈다. Gemini 불가·대기열 가득이어도 저장 응답은 성공하며 로그(대기열 가득이면 `FAILED(E004)`)만 남긴다. 내용이 같은 수정은 다시 시작하지 않는다.
+- **폴링**: `IdeaResponse`에 `evaluationStatus`·`lastEvaluationErrorCode`가 있다. 완료(IDLE)되면 점수·`hasNewChange`가 갱신된 상태다.
+- **한계·열린 결정**: ① 평가 도중 같은 아이디어를 수정하면 그 수정은 진행 중인 평가에 반영되지 않고(스냅샷은 시작 시점 기준) 평가 완료가 `needs_full_evaluation`을 끌 수 있어, 다음 수정·배치 전까지 재평가가 누락될 수 있다(버전 컬럼으로 막을지 결정 필요). ② 큐는 메모리라 재시작하면 사라지고 `FAILED(E005)`로만 알려준다(재시작 때 자동 재투입은 하지 않음). ③ 수동 요청 호출 횟수 제한(쿨다운)은 아직 없다. ④ 단일 워커라 아이디어가 많으면 대기 시간이 길다(Gemini 한도가 늘면 스레드 수와 락을 함께 조정).
+
 ### 새 변화 알림(확인 처리)
 - `Idea.hasNewChange()` = `lastEvaluatedAt`이 `lastCheckedAt`보다 늦음. 사용자가 최신 점수를 확인하면 `POST /api/ideas/{id}/check`로 `lastCheckedAt`을 갱신한다 (행 단위 is_checked 없음).
 
@@ -205,7 +216,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 (새 변화 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량·근거 요약·출처, 최신순) |
-| POST | `/api/ideas/{id}/evaluate` | ✓ | 지금 재평가 실행 (본인만, HOLD `I004`, Gemini 불가 `E001`). 응답 `{status: NO_CHANGE|EVALUATED, changed, idea}` |
+| POST | `/api/ideas/{id}/evaluate` | ✓ | 평가 비동기 요청 — 즉시 **202**. 본인만(`I002`), HOLD `I004`, Gemini 불가 `E001`, 대기열 가득 `E004`는 동기 검사. 응답 `{status: QUEUED|RUNNING, idea}`(이미 진행 중이면 멱등). 결과는 `GET /api/ideas/{id}`의 `evaluationStatus` 폴링 |
 
 Swagger: `/swagger-ui.html`, 헬스체크: `/actuator/health`.
 
@@ -254,6 +265,8 @@ cd CUE/backend
 | `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 (테스트는 `false`) |
 | `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 실행 시각(Spring 6필드 cron)·시간대 |
 | `EVALUATION_DELAY_MS` | `15000` | 아이디어 사이 대기(ms). Gemini 무료 티어 분당 한도용 |
+| `EVALUATION_AUTO_ON_SAVE` | `true` | ACTIVE 저장·내용 수정 시 첫 평가 자동 큐 투입 (테스트는 `false`) |
+| `EVALUATION_QUEUE_CAPACITY` / `EVALUATION_SHUTDOWN_WAIT_SECONDS` | `50` / `30` | 평가 대기열 상한(`E004`) / 종료 시 진행 중 평가 대기(초) |
 | `GEMINI_API_KEY` | (없음) | Gemini API 키. **커밋 금지**, 팀 비밀 채널로 공유. 없으면 호출 없이 `SimpleIdeaAnalyzer` 폴백 |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
 | `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성 |
@@ -279,7 +292,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
 - 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`, `GEMINI_*`, `EVALUATION_*`(위 표).
-- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer: 급상승 정렬 파라미터·원문 읽기), `source/UrlGuardTest`·`WebContentFetcherTest`(SSRF·리다이렉트·HTML 추출), `source/SourceSummaryServiceTest`(항목→소스 요약 순서·호출 수·덮어쓰기·재사용), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `global/ai/PromptLoaderTest`·`GeminiClientTest`, `evaluation/EvaluationAnalyzerTest`(근거 4개 기준 클램프·필터·초기 평가 변환·TREND 거부)·`evaluation/TrendEvaluatorTest`(TREND 첫 평가/재평가·클램프·URL 필터)·`EvaluationSchedulerConfigTest`(enabled 설정)·`EvaluationDomainTest`, `trend/GlobalTrendServiceTest`(수집→항목·provider·최종 요약 순서와 호출 수·해시 같으면 재사용·항목 요약 재사용·실패 격리), `source/SourceTextFormatTest`, `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/DailyEvaluationFlowTest`(Gemini·자료 조회·글로벌 트렌드는 목: 첫 평가(근거 4+TREND)·변경 없음·새 트렌드 시 TREND만 재평가·한 갈래 실패 시 다른 갈래 저장·트렌드 없는 날·실패 복구·가중치 턴·수동 API 권한/에러·배치 HOLD 제외/실패 격리), `integration/GeminiEnabledBootTest`(기본 설정 부팅).
+- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer: 급상승 정렬 파라미터·원문 읽기), `source/UrlGuardTest`·`WebContentFetcherTest`(SSRF·리다이렉트·HTML 추출), `source/SourceSummaryServiceTest`(항목→소스 요약 순서·호출 수·덮어쓰기·재사용), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `global/ai/PromptLoaderTest`·`GeminiClientTest`, `evaluation/EvaluationAnalyzerTest`(근거 4개 기준 클램프·필터·초기 평가 변환·TREND 거부)·`evaluation/TrendEvaluatorTest`(TREND 첫 평가/재평가·클램프·URL 필터)·`EvaluationSchedulerConfigTest`(enabled 설정)·`EvaluationDomainTest`, `trend/GlobalTrendServiceTest`(수집→항목·provider·최종 요약 순서와 호출 수·해시 같으면 재사용·항목 요약 재사용·실패 격리), `source/SourceTextFormatTest`, `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/DailyEvaluationFlowTest`(Gemini·자료 조회·글로벌 트렌드는 목: 첫 평가(근거 4+TREND)·변경 없음·새 트렌드 시 TREND만 재평가·한 갈래 실패 시 다른 갈래 저장·트렌드 없는 날·실패 복구·가중치 턴·수동 API 권한/에러·배치 HOLD 제외/실패 격리), `integration/AsyncEvaluationFlowTest`(실제 단일 스레드 실행기: 202 즉시 응답·폴링·멱등·동기 검사·FAILED 기록·대기열 가득 E004·부팅 정리·배치 상태)·`integration/AutoEvaluationOnSaveTest`(커밋 뒤 자동 큐 투입), `integration/GeminiEnabledBootTest`(기본 설정 부팅).
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
@@ -289,7 +302,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - 스키마 변경은 확정 전까지 `V1__init.sql`을 수정하고 PR에 "DB 초기화 필요"를 적는다. 확정 후에는 새 버전 파일만 추가한다.
 
 ## 미구현·TODO
-- 평가 호출 보호: 수동 `POST /api/ideas/{id}/evaluate`는 호출 횟수 제한이 없어 Gemini 무료 티어를 소진시킬 수 있다(사용자당 쿨다운/일일 횟수 제한 필요 여부는 **열린 결정**). 429 응답 재시도/백오프도 아직 없다(실패하면 다음 배치로 넘김).
+- 평가 호출 보호: 수동 `POST /api/ideas/{id}/evaluate`는 대기열 상한(`E004`)만 있고 사용자별 호출 횟수 제한이 없어 Gemini 무료 티어를 소진시킬 수 있다(사용자당 쿨다운/일일 횟수 제한 필요 여부는 **열린 결정**). 429 응답 재시도/백오프도 아직 없다(실패하면 다음 배치로 넘김).
 - 글로벌 트렌드 열린 결정: ① 트렌드가 매일 조금씩 바뀌어 거의 매일 아이디어 수만큼 TREND 호출이 생긴다(재평가 대상을 줄이는 방법: 요약 유사도 임계값, 주 1회 평가 등) ② 트렌드 provider 3개·정렬 기준·`days=7`은 제안값이라 팀 확정 필요 ③ 근거 4개 기준 평가에 소스 요약(`sources.summary`)·`trend-summary` 결과를 프롬프트에 넣을지(지금은 항목 요약만 쓰고 소스 요약은 저장만 함) ④ 트렌드 API(`GET /api/trends/latest` 등)를 프론트에 노출할지 — 아직 컨트롤러 없음.
 - `GeminiIdeaAnalyzer`가 `GeminiClient`와 HTTP 호출 코드를 중복한다(공통화 가능). 분석기는 `GEMINI_MIN_INTERVAL_MS` 적용 대상이 아니다.
 - 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange·Hacker News 구현(검색+원문 읽기). Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가; 없으면 해당 source는 `S002`로 FAILED 처리되어 건너뜀 — 종류가 IT가 아니면 이 provider들이 source에 포함되므로 구현 전에는 해당 source는 평가 근거가 되지 못한다).
