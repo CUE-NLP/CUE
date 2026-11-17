@@ -11,6 +11,7 @@ import com.cue.global.security.JwtTokenProvider;
 import com.cue.global.security.UserPrincipal;
 import com.cue.user.entity.User;
 import com.cue.user.repository.UserRepository;
+import com.cue.user.service.UserService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -36,7 +37,7 @@ public class AuthService {
 
     @Transactional
     public TokenResponse login(LoginRequest req) {
-        User user = users.findByEmail(req.email())
+        User user = users.findByEmail(UserService.normalizeEmail(req.email()))
                 .filter(u -> encoder.matches(req.password(), u.getPasswordHash()))
                 .orElseThrow(() -> new CustomException(ErrorCode.INVALID_CREDENTIALS));
         return issueTokens(user);
