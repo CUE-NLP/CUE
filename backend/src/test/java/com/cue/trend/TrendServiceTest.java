@@ -42,6 +42,21 @@ class TrendServiceTest {
     }
 
     @Test
+    void 자료_목록은_한_줄에_한_건_형식이고_항목당_길이와_전체_개수에_상한이_있다() {
+        var item = new SourceItem("제목|파이프", "https://u/1", "요".repeat(400), "2026-01-02", "stars=5");
+        String text = TrendService.formatSources(List.of(SourceCheckResult.changed(1L, ApiProvider.GITHUB, "k",
+                List.of(item, new SourceItem("x", "https://u/2", "")), LocalDateTime.now())));
+        String[] lines = text.split("\n");
+        assertEquals("[GITHUB] 제목/파이프 | https://u/1 | 2026-01-02 | stars=5 | " + "요".repeat(150) + "…", lines[0]);
+        assertEquals("[GITHUB] x | https://u/2 | - | - | -", lines[1]);
+
+        List<SourceItem> many = java.util.stream.IntStream.range(0, 40)
+                .mapToObj(i -> new SourceItem("t" + i, "https://u/" + i, "s")).toList();
+        String capped = TrendService.formatSources(List.of(SourceCheckResult.changed(1L, ApiProvider.GITHUB, "k", many, LocalDateTime.now())));
+        assertEquals(TrendService.MAX_ITEMS, capped.split("\n").length);
+    }
+
+    @Test
     void 변경이_없으면_호출하지_않고_실패하거나_빈_요약이면_null() {
         assertNull(service.summarize(List.of()));
         verifyNoInteractions(gemini);

@@ -27,7 +27,10 @@ public class TrendService {
             "type", "OBJECT",
             "properties", Map.of("summary", Map.of("type", "STRING")),
             "required", List.of("summary"));
-    private static final int MAX_SUMMARY_CHARS = 200;
+    static final int MAX_SUMMARY_CHARS = 150;
+    static final int MAX_TITLE_CHARS = 120;
+    /** 프롬프트에 넣는 자료 항목 최대 개수 (토큰 절약). */
+    public static final int MAX_ITEMS = 15;
 
     private final GeminiClient gemini;
     private final PromptLoader prompts;
@@ -60,21 +63,31 @@ public class TrendService {
         }
     }
 
-    /** 변경된 source별 상위 자료 목록 텍스트. 프롬프트의 {@code {{items}}} 자리에 들어간다. */
+    /**
+     * 변경된(새로 나타난) 자료 목록 텍스트. 프롬프트의 {@code {{items}}}/{@code {{changedItems}}} 자리에 들어간다.
+     * 한 줄에 한 건: {@code [PROVIDER] 제목 | URL | 날짜 | 지표 | 요약} (없는 값은 "-"). 항목당 길이와 전체 개수에 상한이 있다.
+     */
     public static String formatSources(List<SourceCheckResult> changed) {
-        StringBuilder sb = new StringBuilder();
+        List<String> lines = new java.util.ArrayList<>();
+        outer:
         for (SourceCheckResult r : changed) {
-            sb.append("[").append(r.provider()).append(" / 키워드: ").append(r.keyword()).append("]\n");
             for (SourceItem item : r.items()) {
-                sb.append("- ").append(item.title()).append(" (").append(item.url()).append(")");
-                String summary = item.summary() == null ? "" : item.summary().strip();
-                if (!summary.isEmpty()) {
-                    sb.append(": ").append(summary.length() > MAX_SUMMARY_CHARS
-                            ? summary.substring(0, MAX_SUMMARY_CHARS) + "…" : summary);
+                if (lines.size() >= MAX_ITEMS) {
+                    break outer;
                 }
-                sb.append("\n");
+                lines.add("[" + r.provider() + "] " + field(item.title(), MAX_TITLE_CHARS) + " | " + field(item.url(), 300)
+                        + " | " + field(item.publishedAt(), 10) + " | " + field(item.metrics(), 60)
+                        + " | " + field(item.summary(), MAX_SUMMARY_CHARS));
             }
         }
-        return sb.toString().strip();
+        return String.join("\n", lines);
+    }
+
+    private static String field(String value, int max) {
+        String v = value == null ? "" : value.replaceAll("\\s+", " ").strip().replace("|", "/");
+        if (v.isEmpty()) {
+            return "-";
+        }
+        return v.length() > max ? v.substring(0, max) + "…" : v;
     }
 }

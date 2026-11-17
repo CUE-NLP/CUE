@@ -52,8 +52,8 @@ class EvaluationAnalyzerTest {
         List<ScoreChange> changes = analyzer.reEvaluate(idea("55"), List.of(CHANGED), "요약");
 
         assertEquals(2, changes.size());
-        assertEquals(new BigDecimal("10.00"), changes.get(0).difference());
-        assertEquals(new BigDecimal("-10.00"), changes.get(1).difference());
+        assertEquals(new BigDecimal("10"), changes.get(0).difference());
+        assertEquals(new BigDecimal("-10"), changes.get(1).difference());
         assertEquals("https://github.com/a/b", changes.get(0).references().get(0).url());
         assertEquals("a/b", changes.get(0).references().get(0).title());
         assertEquals(ApiProvider.GITHUB, changes.get(0).references().get(0).provider());
@@ -70,7 +70,7 @@ class EvaluationAnalyzerTest {
 
         assertEquals(1, changes.size());
         assertEquals(ScoreType.PROBLEM_IMPORTANCE, changes.get(0).type());
-        assertEquals(new BigDecimal("4.00"), changes.get(0).difference());
+        assertEquals(new BigDecimal("4"), changes.get(0).difference());
         assertTrue(changes.get(0).references().isEmpty());
     }
 
@@ -85,9 +85,27 @@ class EvaluationAnalyzerTest {
     }
 
     @Test
-    void 근거_요약이_비면_기본_문구를_채운다() {
-        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":2,\"evidenceSummary\":\"  \"}]}");
-        assertFalse(analyzer.reEvaluate(idea("55"), List.of(CHANGED), null).get(0).evidenceSummary().isBlank());
+    void 재평가에서_근거_요약이_비어_있으면_그_항목을_버린다() {
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":2,\"evidenceSummary\":\"  \"},"
+                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"difference\":2}]}");
+        assertTrue(analyzer.reEvaluate(idea("55"), List.of(CHANGED), null).isEmpty());
+    }
+
+    @Test
+    void 근거_요약이_300자를_넘으면_자른다() {
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":2,\"evidenceSummary\":\"" + "가".repeat(500) + "\"}]}");
+        String summary = analyzer.reEvaluate(idea("55"), List.of(CHANGED), null).get(0).evidenceSummary();
+        assertEquals(EvaluationAnalyzer.MAX_SUMMARY_CHARS, summary.length());
+        assertTrue(summary.endsWith("…"));
+    }
+
+    @Test
+    void 소수_변화량은_정수로_반올림하고_0이_되면_버린다() {
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":3.6,\"evidenceSummary\":\"a\"},"
+                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"difference\":0.4,\"evidenceSummary\":\"b\"}]}");
+        List<ScoreChange> changes = analyzer.reEvaluate(idea("55"), List.of(CHANGED), null);
+        assertEquals(1, changes.size());
+        assertEquals(new BigDecimal("4"), changes.get(0).difference());
     }
 
     @Test
@@ -100,9 +118,9 @@ class EvaluationAnalyzerTest {
 
         // 현재 점수 50/55/50/50 → 72(+22), 55(변화 없음 제외), 100으로 제한(+50), 50(제외)
         assertEquals(2, changes.size());
-        assertEquals(new BigDecimal("22.00"), changes.get(0).difference());
+        assertEquals(new BigDecimal("22"), changes.get(0).difference());
         assertEquals(ScoreType.MARKET_DIFFERENTIATION, changes.get(1).type());
-        assertEquals(new BigDecimal("50.00"), changes.get(1).difference());
+        assertEquals(new BigDecimal("50"), changes.get(1).difference());
     }
 
     @Test

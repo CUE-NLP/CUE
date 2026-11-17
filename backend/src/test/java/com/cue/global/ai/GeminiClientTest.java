@@ -32,6 +32,7 @@ class GeminiClientTest {
         server[0].expect(requestTo("https://gemini.test/v1beta/models/m1:generateContent"))
                 .andExpect(header("x-goog-api-key", "secret"))
                 .andExpect(jsonPath("$.generationConfig.responseMimeType").value("application/json"))
+                .andExpect(jsonPath("$.generationConfig.responseSchema.type").value("OBJECT"))
                 .andExpect(jsonPath("$.contents[0].parts[0].text").value("안녕"))
                 .andRespond(withSuccess("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"a\\\":1}\"}]}}]}",
                         MediaType.APPLICATION_JSON));
