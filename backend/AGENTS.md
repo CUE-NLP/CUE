@@ -43,14 +43,23 @@ trend/        entity (Trend)
 - `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 V1도 같은 PR에서 고친다.
 
 ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea_score_histories, scores 1:N evaluations, trends 0..1:N evaluations, evaluations 1:N evaluation_references, evaluations 0..1:N sources.
-- `ideas`: `type`(현재 `IT` 하나, 확장 예정; 종류별 검색 API 조합은 `IdeaType.searchProviders()`), `status`(`ACTIVE`/`HOLD`), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각).
+- `ideas`: `type`(대분류 `IdeaType`, 현재 `IT` 하나뿐이며 IT 고정 — IT 외 분야는 나중에 `IdeaType`을 확장), `it_category`(IT 세부 종류 `ItCategory`, varchar30 NOT NULL, 기본 `DEV_TOOLS_INFRA`; 검색 API 조합을 결정, `ItCategory.searchProviders()`), `status`(`ACTIVE`/`HOLD`), `keywords`(TEXT, 줄바꿈 구분, 최대 2개)·`keyword_origin`(`USER`/`AI`, varchar20; 키워드가 없으면 둘 다 null), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각).
 - `scores`: 아이디어당 4행(`ScoreType`), `(idea_id, type)` 유니크. `weight`는 0~1 비율(DECIMAL 4,3), `pending_weight`는 변경 예약.
 - `evaluations`: **항목(score) 단위** 평가 이력. 점수가 바뀔 때만 생성. `difference`(변화량), `score_after`(변경 후 점수), `weight`(평가 당시 가중치), `evidence_summary`(근거 요약), `created_at`(재평가 날짜), nullable `trend_id`.
 - `evaluation_references`: 평가 근거 출처 URL (평가 1 : N).
 - `idea_score_histories`: 평가 시점의 **총점 스냅샷**(`total_score`, `total_difference`, `evaluated_at`). 점수 이력 차트용. 가중치가 바뀌어도 당시 총점을 보존하려고 변화량 누적 대신 스냅샷으로 저장한다.
 - `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash`로 변경 감지 + `checked_at`(수집 확인 시각). 아이디어가 ACTIVE로 등록·수정될 때 종류별 API × 추출 키워드로 새로 만든다.
 - `trends`: 아이디어와 무관한 전역 트렌드 요약. 고정 API 4개로 수집.
-- 외부 API는 6종(`ApiProvider`): 아이디어 검색은 종류별 3개, 트렌드는 고정 4개. **현재 조합은 임시 값**(TODO: 팀 확정).
+- 외부 API는 6종(`ApiProvider`): 아이디어 검색은 IT 세부 종류별 3개, 트렌드는 고정 4개(트렌드 조합은 임시 값, TODO: 팀 확정).
+
+  | `ItCategory` | 설명 | 검색 API 3개 |
+  | --- | --- | --- |
+  | `AI_ML` | AI·머신러닝 | Hugging Face, Semantic Scholar, GitHub |
+  | `DEV_TOOLS_INFRA` | 개발자 도구·인프라 (기본값·폴백) | GitHub, Stack Exchange, Hacker News |
+  | `WEB_APP_SERVICE` | 웹·앱 서비스 | Hacker News, Stack Exchange, Wikipedia Pageviews |
+  | `DATA_ANALYTICS` | 데이터·분석 | GitHub, Hugging Face, Semantic Scholar |
+
+  아이디어당 sources = 세부 종류의 provider 3개 × 키워드 수(1~2). Semantic Scholar·Wikipedia Pageviews 클라이언트는 PR #8(source 외부 API 클라이언트)에서 구현한다.
 
 ## 핵심 규칙·컨벤션
 
@@ -95,9 +104,18 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 
 ### 보류(HOLD)와 등록·수정 흐름
 - `POST /api/ideas`: 4개 항목이 모두 채워지면 `ACTIVE`, 하나라도 비면 `HOLD`. 클라이언트가 status를 보내지 않는다.
-- `ACTIVE`일 때만 `IdeaAnalyzer`로 종류·키워드를 추출하고 `sources`를 만든다. HOLD는 AI를 호출하지 않고 일일 평가에서도 제외한다.
+- `ACTIVE`일 때만 `IdeaAnalyzer`로 IT 세부 종류·키워드를 추출하고 `sources`를 만든다. HOLD는 AI를 호출하지 않고 일일 평가에서도 제외한다.
 - `PATCH /api/ideas/{id}`: 보낸 항목만 수정(null 유지, 빈 문자열은 비움). 수정 뒤 `ACTIVE`면 종류·키워드를 다시 추출해 `sources`를 교체한다(평가 근거로 연결된 행은 유지, 해시는 초기화). HOLD → ACTIVE가 되면 같은 파이프라인을 탄다. **수정 후 재평가는 평가 단계(스케줄러)에서 처리 — 아직 없음.**
-- `IdeaAnalyzer`는 현재 임시 구현(`SimpleIdeaAnalyzer`: 종류 IT, 키워드는 긴 단어 3개). Gemini 연동 구현으로 교체한다.
+- `IdeaAnalyzer`는 `GeminiIdeaAnalyzer`(`@Primary`)가 구현한다: RestClient로 `generateContent`(`x-goog-api-key` 헤더)를 호출하고 `responseMimeType=application/json` + `responseSchema`(`itCategory` enum 4개, keywords 1~2개; AI는 대분류 type을 분류하지 않는다)로 구조화 응답을 받아 `IdeaAnalysis`로 파싱한다. 알 수 없는 세부 종류는 `DEV_TOOLS_INFRA`, 키워드는 공백·중복 제거 후 2개까지(영어 검색어, 한글이 섞이면 경고 로그).
+- **실패 방침: 폴백.** 호출 실패·타임아웃·파싱 실패·API 키 없음이면 `SimpleIdeaAnalyzer`(세부 종류 `DEV_TOOLS_INFRA`, 긴 단어 2개)로 대체한다. 근거: 키워드 추출은 등록의 부가 단계이고 AI 장애 때문에 사용자가 쓴 아이디어 저장이 실패하면 안 된다. 내부적으로는 `requestAnalysis()`가 `G002`(`EXTERNAL_SERVER_ERROR`)를 던지고 `analyze()`가 잡아 로그(warn)만 남긴다. 폴백 결과는 품질이 낮으므로 이후 수정(PATCH) 시 다시 추출된다.
+- 설정은 `cue.gemini.*`(`GEMINI_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_BASE_URL`, `GEMINI_TIMEOUT_SECONDS`). `enabled=false`면 `GeminiIdeaAnalyzer` 빈이 없어 `SimpleIdeaAnalyzer`만 쓴다. 통합 테스트는 `cue.gemini.enabled=false`.
+
+### 검색 키워드 우선순위 (USER > AI)
+- 요청 `keywords`(선택, `POST /api/ideas`·`PATCH /api/ideas/{id}`): 최대 2개, 각 항목 trim 후 1~50자, 빈 문자열 불가, 중복은 제거, 언어 제한 없음. 위반은 `G004`(DTO `@Size`/`@NotBlank` 검증, PATCH에도 `@Valid`).
+- 등록: ACTIVE이고 키워드가 없거나 `[]`이면 `IdeaAnalyzer.analyze`로 종류·키워드(출처 `AI`) 추출. 사용자 키워드가 있으면(출처 `USER`) 키워드 추출은 건너뛰고 `IdeaAnalyzer.analyzeCategory`로 **세부 종류만** 분류한다(검색 provider 조합이 세부 종류에 의존). Gemini는 type만 받는 경량 스키마/프롬프트(`TYPE_ONLY_NOTICE`)를 쓰고 실패하면 `DEV_TOOLS_INFRA` 폴백.
+- 수정: `keywords` 생략(null)이면 유지. 단 출처가 `AI`(또는 없음)면 ACTIVE에서 기존대로 재추출, `USER`면 내용이 바뀌어도 유지. `[]`는 사용자 키워드를 지우고 AI 재추출, 1~2개는 교체(출처 `USER`). HOLD는 키워드를 저장만 하고 sources·AI 호출 없이, ACTIVE가 될 때 위 규칙을 적용한다.
+- `sources`는 종류별 provider × 키워드(최대 2개)로 새로 만든다. 응답 `IdeaResponse`에 `type`(IT)·`itCategory`·`keywords`(없으면 `[]`)·`keywordOrigin`. 수정(PATCH) 시 ACTIVE면 세부 종류도 다시 분류한다.
+- AI 키워드 프롬프트 규칙: 영어 검색어 1~2개, 각 1~3단어, 아이디어 전체를 대표(한 항목에 치우치지 않음), 너무 일반적이지 않게. 한글이 섞여 오면 경고 로그만 남기고 그대로 쓴다.
 
 ### 새 변화 알림(확인 처리)
 - `Idea.hasNewChange()` = `lastEvaluatedAt`이 `lastCheckedAt`보다 늦음. 사용자가 최신 점수를 확인하면 `POST /api/ideas/{id}/check`로 `lastCheckedAt`을 갱신한다 (행 단위 is_checked 없음).
@@ -118,10 +136,10 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | POST | `/api/users` | ✕ | 회원가입 |
 | POST | `/api/auth/login` | ✕ | 로그인 (JWT 발급) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD) |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD). 선택 `keywords`(최대 2개)가 있으면 AI 키워드 추출 생략 |
 | GET | `/api/ideas` | ✓ | 리더보드. `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태·점수·가중치·최근 변화량·hasNewChange) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 키워드 재추출) |
+| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 출처가 AI일 때 키워드 재추출). `keywords`: 생략=유지, `[]`=삭제 후 AI, 1~2개=교체 |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 가중치 변경 예약 |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 (새 변화 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순) |
@@ -163,11 +181,15 @@ cd CUE/backend
 | `JWT_SECRET` | 개발용 임시 값 | **개발 서버·운영에서는 반드시 교체** (32바이트 이상). 서버 인스턴스끼리 같은 값이어야 한다 |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간 |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 자동 기동 여부. `bootRun`이 켜 준다 |
+| `GEMINI_API_KEY` | (없음) | Gemini API 키. **커밋 금지**, 팀 비밀 채널로 공유. 없으면 호출 없이 `SimpleIdeaAnalyzer` 폴백 |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
+| `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성 |
+| `GEMINI_BASE_URL` / `GEMINI_TIMEOUT_SECONDS` | `https://generativelanguage.googleapis.com` / `10` | 엔드포인트, 연결·읽기 타임아웃(초) |
 | `GITHUB_TOKEN` | 없음 | 선택. GitHub 검색 rate limit 완화 |
 | `HUGGING_FACE_TOKEN` | 없음 | 선택. Hugging Face API 토큰 |
 | `STACK_EXCHANGE_KEY` | 없음 | 선택. Stack Exchange API key (일일 쿼터 증가) |
 
-- 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 토큰(위 선택 값)과 Gemini 등 키가 추가되면 이 표에 변수 이름을 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
+- 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 토큰(위 선택 값)과 Gemini 등 키는 이 표에 변수 이름만 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
 
 ### 협업 시 주의
 - **`V1__init.sql` 충돌**: 개발 중에는 모두가 이 한 파일을 고치므로 충돌이 잦다. 스키마 변경 PR은 작게 유지하고 머지 전에 `main`을 반영한다. 스키마 확정 후에는 이 파일을 고정하고 `V2__*.sql`부터 추가한다.
@@ -182,8 +204,8 @@ cd backend && ./gradlew bootRun    # 루트 docker-compose.yml의 DB를 자동 �
 cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (Docker 필요)
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
-- 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`.
-- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리).
+- 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`, `GEMINI_*`와 선택 토큰(`GITHUB_TOKEN`, `HUGGING_FACE_TOKEN`, `STACK_EXCHANGE_KEY`)(위 표).
+- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리).
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
@@ -194,10 +216,9 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 
 ## 미구현·TODO
 - 24시간 주기 평가 스케줄러(`@Scheduled`): 대상은 `ACTIVE` 아이디어. 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집(`Source.updateHash`로 변경 감지) → AI 평가 → `EvaluationService.recordChanges`로 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다. 가중치 적용만으로 총점이 바뀌는 경우의 `idea_score_histories` 기록과, 등록·수정 직후 첫 평가·재평가 연결도 여기서 정한다.
-- `IdeaAnalyzer` Gemini 구현 (현재 `SimpleIdeaAnalyzer` 임시 구현). `evaluations.trend_id`에 트렌드 연결(현재 null).
-- 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange는 구현됨. Hacker News·Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가). 트렌드 수집(`TREND_PROVIDERS`)과 Gemini 연동도 남음.
-- **열린 결정**: 트렌드용 고정 4개 API와 종류별 검색 API 조합을 팀이 확정해야 한다. 확정되면 `IdeaType.searchProviders`/`ApiProvider.TREND_PROVIDERS`를 고치고 필요한 provider 클라이언트를 추가한다. 해시 대상 항목 수(현재 상위 5건)는 평가 정책과 함께 재검토.
-- 외부 API 조합(`IdeaType.searchProviders`, `ApiProvider.TREND_PROVIDERS`) 팀 확정.
+- Gemini 평가(재평가) 호출은 아직 없음(키워드·세부 종류 추출만 구현). `evaluations.trend_id`에 트렌드 연결(현재 null).
+- 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange는 구현됨. Hacker News·Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가). 트렌드 수집(`TREND_PROVIDERS`)과 Gemini 평가 연동도 남음 (예외는 `G002 EXTERNAL_SERVER_ERROR` 사용).
+- **열린 결정**: 트렌드용 고정 API(`ApiProvider.TREND_PROVIDERS`)를 팀이 확정해야 한다. IT 세부 종류별 검색 API 조합은 `ItCategory.searchProviders`에 정의돼 있고, IT 외 분야를 추가할 때 `IdeaType`을 확장한다. 해시 대상 항목 수(현재 상위 5건)는 평가 정책과 함께 재검토.
 - 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
 - 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.
 

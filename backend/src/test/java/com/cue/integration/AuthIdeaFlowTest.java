@@ -23,7 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Testcontainers
-@TestPropertySource(properties = "spring.docker.compose.enabled=false")
+@TestPropertySource(properties = {"spring.docker.compose.enabled=false", "cue.gemini.enabled=false"})
 class AuthIdeaFlowTest {
 
     @Container
@@ -195,8 +195,129 @@ class AuthIdeaFlowTest {
         long id = createIdea(token, FULL);
 
         mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
+                .andExpect(jsonPath("$.data.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.data.type").value("IT"))
+                .andExpect(jsonPath("$.data.itCategory").value("DEV_TOOLS_INFRA"));
+        org.junit.jupiter.api.Assertions.assertEquals(6, sourceCount(id)); // 3 providers x 2 keywords
+        org.junit.jupiter.api.Assertions.assertEquals(
+                new java.util.HashSet<>(com.cue.idea.entity.ItCategory.DEV_TOOLS_INFRA.searchProviders()),
+                sourceRepository.findAll().stream().filter(x -> x.getIdea().getId() == id)
+                        .map(com.cue.source.entity.Source::getProvider).collect(java.util.stream.Collectors.toSet()));
+    }
+
+    // ===== 사용자 키워드 우선 =====
+
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    com.cue.idea.service.IdeaAnalyzer analyzerSpy;
+
+    private static final String FULL_BODY_PREFIX = FULL.substring(0, FULL.length() - 1);
+
+    private java.util.List<String> sourceKeywords(long ideaId) {
+        return sourceRepository.findAll().stream().filter(x -> x.getIdea().getId() == ideaId)
+                .map(com.cue.source.entity.Source::getKeyword).distinct().sorted().toList();
+    }
+
+    private org.springframework.test.web.servlet.ResultActions patchIdea(String token, long id, String body)
+            throws Exception {
+        return mvc.perform(patch("/api/ideas/" + id).header("Authorization", token)
+                .contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    @Test
+    void 사용자_키워드로_등록하면_AI_키워드_추출을_하지_않고_종류만_분류한다() throws Exception {
+        String token = signUpAndLogin("kwuser@cue.com");
+        String res = mvc.perform(post("/api/ideas").header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(FULL_BODY_PREFIX + ",\"keywords\":[\" 코드 리뷰 \",\"code review\"]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.keywords.length()").value(2))
+                .andExpect(jsonPath("$.data.keywords[0]").value("코드 리뷰"))
+                .andExpect(jsonPath("$.data.keywords[1]").value("code review"))
+                .andExpect(jsonPath("$.data.keywordOrigin").value("USER"))
+                .andReturn().getResponse().getContentAsString();
+        long id = mapper.readTree(res).get("data").get("id").asLong();
+
+        org.mockito.Mockito.verify(analyzerSpy, org.mockito.Mockito.never()).analyze(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(analyzerSpy).analyzeCategory(org.mockito.ArgumentMatchers.any());
+        org.junit.jupiter.api.Assertions.assertEquals(6, sourceCount(id));
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("code review", "코드 리뷰"), sourceKeywords(id));
+    }
+
+    @Test
+    void 키워드가_없거나_비어_있으면_AI가_추출하고_출처는_AI() throws Exception {
+        String token = signUpAndLogin("kwai@cue.com");
+        String res = mvc.perform(post("/api/ideas").header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON).content(FULL_BODY_PREFIX + ",\"keywords\":[]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.keywordOrigin").value("AI"))
+                .andExpect(jsonPath("$.data.keywords.length()").value(2))
+                .andReturn().getResponse().getContentAsString();
+        org.mockito.Mockito.verify(analyzerSpy).analyze(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(analyzerSpy, org.mockito.Mockito.never()).analyzeCategory(org.mockito.ArgumentMatchers.any());
+        org.junit.jupiter.api.Assertions.assertEquals(2, mapper.readTree(res).get("data").get("keywords").size());
+    }
+
+    @Test
+    void 키워드_검증_실패는_G004() throws Exception {
+        String token = signUpAndLogin("kwbad@cue.com");
+        for (String bad : new String[] {
+                "[\"a\",\"b\",\"c\"]", "[\"" + "x".repeat(51) + "\"]", "[\"\"]", "[\"  \"]"}) {
+            mvc.perform(post("/api/ideas").header("Authorization", token)
+                            .contentType(MediaType.APPLICATION_JSON).content(FULL_BODY_PREFIX + ",\"keywords\":" + bad + "}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("G004"));
+        }
+        long id = createIdea(token, FULL);
+        patchIdea(token, id, "{\"keywords\":[\"a\",\"b\",\"c\"]}")
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("G004"));
+    }
+
+    @Test
+    void 수정_시_키워드_null은_출처에_따라_유지_또는_재추출_빈_배열은_AI_재추출_교체는_USER() throws Exception {
+        String token = signUpAndLogin("kwpatch@cue.com");
+        long id = createIdea(token, FULL_BODY_PREFIX + ",\"keywords\":[\"my keyword\"]}");
+        org.junit.jupiter.api.Assertions.assertEquals(3, sourceCount(id)); // 3 providers x 1 keyword
+
+        // USER 출처: 내용이 바뀌어도 키워드 유지, AI 키워드 추출 없음
+        org.mockito.Mockito.clearInvocations(analyzerSpy);
+        patchIdea(token, id, "{\"solution\":\"완전히 다른 해결 방식\"}")
+                .andExpect(jsonPath("$.data.keywords[0]").value("my keyword"))
+                .andExpect(jsonPath("$.data.keywordOrigin").value("USER"));
+        org.mockito.Mockito.verify(analyzerSpy, org.mockito.Mockito.never()).analyze(org.mockito.ArgumentMatchers.any());
+
+        // 빈 배열: 사용자 키워드를 지우고 AI로 재추출
+        patchIdea(token, id, "{\"keywords\":[]}")
+                .andExpect(jsonPath("$.data.keywordOrigin").value("AI"))
+                .andExpect(jsonPath("$.data.keywords.length()").value(2));
+        org.mockito.Mockito.verify(analyzerSpy).analyze(org.mockito.ArgumentMatchers.any());
+        org.junit.jupiter.api.Assertions.assertEquals(6, sourceCount(id));
+
+        // AI 출처 + keywords null: 내용 변경 시 재추출
+        org.mockito.Mockito.clearInvocations(analyzerSpy);
+        patchIdea(token, id, "{\"problem\":\"문제가 바뀌었다\"}").andExpect(jsonPath("$.data.keywordOrigin").value("AI"));
+        org.mockito.Mockito.verify(analyzerSpy).analyze(org.mockito.ArgumentMatchers.any());
+
+        // 교체: USER, sources도 새 키워드로
+        patchIdea(token, id, "{\"keywords\":[\"replaced one\",\"replaced two\"]}")
+                .andExpect(jsonPath("$.data.keywordOrigin").value("USER"));
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("replaced one", "replaced two"), sourceKeywords(id));
+    }
+
+    @Test
+    void HOLD는_키워드를_저장만_하고_ACTIVE가_될_때_적용한다() throws Exception {
+        String token = signUpAndLogin("kwhold@cue.com");
+        long id = createIdea(token, "{\"problem\":\"p\",\"target\":\"t\",\"keywords\":[\"saved kw\"]}");
+        mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
+                .andExpect(jsonPath("$.data.status").value("HOLD"))
+                .andExpect(jsonPath("$.data.keywords[0]").value("saved kw"))
+                .andExpect(jsonPath("$.data.keywordOrigin").value("USER"));
+        org.junit.jupiter.api.Assertions.assertEquals(0, sourceCount(id));
+        org.mockito.Mockito.verifyNoInteractions(analyzerSpy);
+
+        patchIdea(token, id, "{\"solution\":\"s\",\"expectation\":\"e\"}")
                 .andExpect(jsonPath("$.data.status").value("ACTIVE"));
-        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id)); // 3 providers x 3 keywords
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("saved kw"), sourceKeywords(id));
+        org.mockito.Mockito.verify(analyzerSpy, org.mockito.Mockito.never()).analyze(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -209,13 +330,13 @@ class AuthIdeaFlowTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.data.problem").value("개발 질문이 흩어져 있다"));
-        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id));
+        org.junit.jupiter.api.Assertions.assertEquals(6, sourceCount(id));
 
         // 다시 수정해도 수집 설정이 중복되지 않는다
         mvc.perform(patch("/api/ideas/" + id).header("Authorization", token)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"solution\":\"새로운 해결 방법 제안\"}"))
                 .andExpect(status().isOk());
-        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id));
+        org.junit.jupiter.api.Assertions.assertEquals(6, sourceCount(id));
 
         mvc.perform(patch("/api/ideas/" + id).header("Authorization", token)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"target\":\"\"}"))

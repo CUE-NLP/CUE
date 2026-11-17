@@ -33,6 +33,11 @@ public class Idea {
     @Column(nullable = false, length = 30)
     private IdeaType type;
 
+    /** IT 세부 종류. 검색에 쓰는 외부 API 조합을 결정한다. AI가 분류하며 분류 전(HOLD 등)에는 기본값. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "it_category", nullable = false, length = 30)
+    private ItCategory itCategory = ItCategory.DEFAULT;
+
     /** 서버가 4개 항목 채움 여부로 결정한다. 클라이언트가 보낸 값은 쓰지 않는다. */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -49,6 +54,14 @@ public class Idea {
 
     @Column(columnDefinition = "TEXT")
     private String expectation;
+
+    /** 검색 키워드(줄바꿈 구분, 최대 2개). 키워드가 없으면 null. */
+    @Column(columnDefinition = "TEXT")
+    private String keywords;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "keyword_origin", length = 20)
+    private KeywordOrigin keywordOrigin;
 
     @Column(name = "total_score", nullable = false, precision = 7, scale = 2)
     private BigDecimal totalScore = BigDecimal.ZERO;
@@ -107,9 +120,29 @@ public class Idea {
         refreshStatus();
     }
 
-    /** AI가 다시 추출한 아이디어 종류를 반영한다. */
-    public void changeType(IdeaType type) {
-        this.type = type;
+    /** 키워드 목록. 없으면 빈 리스트. */
+    public List<String> keywordList() {
+        return keywords == null ? List.of() : List.of(keywords.split("\\n"));
+    }
+
+    /** 키워드와 출처를 저장한다. 빈 목록이면 키워드를 지운다. */
+    public void applyKeywords(List<String> values, KeywordOrigin origin) {
+        if (values == null || values.isEmpty()) {
+            keywords = null;
+            keywordOrigin = null;
+        } else {
+            keywords = String.join("\n", values);
+            keywordOrigin = origin;
+        }
+    }
+
+    public boolean hasUserKeywords() {
+        return keywordOrigin == KeywordOrigin.USER && keywords != null;
+    }
+
+    /** AI가 다시 분류한 IT 세부 종류를 반영한다. */
+    public void changeItCategory(ItCategory itCategory) {
+        this.itCategory = itCategory;
     }
 
     public Score score(ScoreType type) {

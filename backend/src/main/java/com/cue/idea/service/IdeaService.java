@@ -15,6 +15,8 @@ import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaSort;
 import com.cue.idea.entity.IdeaStatus;
 import com.cue.idea.entity.IdeaType;
+import com.cue.idea.entity.ItCategory;
+import com.cue.idea.entity.KeywordOrigin;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.source.entity.ApiProvider;
 import com.cue.source.entity.Source;
@@ -30,6 +32,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class IdeaService {
+    private static final int MAX_KEYWORDS = 2;
+
     private final IdeaRepository ideas;
     private final UserRepository users;
     private final EvaluationRepository evaluations;
@@ -44,8 +48,12 @@ public class IdeaService {
     @Transactional
     public IdeaResponse create(Long userId, CreateIdeaRequest req) {
         var user = users.findById(userId).orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND));
+        List<String> keywords = normalizeKeywords(req.keywords());
         IdeaType type = req.type() != null ? req.type() : IdeaType.IT;
         Idea idea = ideas.save(new Idea(user, type, req.problem(), req.target(), req.solution(), req.expectation()));
+        if (!keywords.isEmpty()) {
+            idea.applyKeywords(keywords, KeywordOrigin.USER);
+        }
         if (idea.isActive()) {
             extractAndRegisterSources(idea);
         }
@@ -57,22 +65,48 @@ public class IdeaService {
     public IdeaResponse update(Long userId, Long ideaId, UpdateIdeaRequest req) {
         Idea idea = findOwned(userId, ideaId);
         idea.edit(req.problem(), req.target(), req.solution(), req.expectation());
+        if (req.keywords() != null) {
+            // 1개 이상이면 교체(USER), 빈 배열이면 사용자 키워드를 지우고 아래에서 AI로 다시 추출한다 (HOLD면 저장만).
+            idea.applyKeywords(normalizeKeywords(req.keywords()), KeywordOrigin.USER);
+        }
         if (idea.isActive()) {
             extractAndRegisterSources(idea);
         }
         return toResponse(idea);
     }
 
-    /** AI로 종류·키워드를 추출하고, 종류별 검색 API × 키워드로 수집 설정을 새로 만든다 (해시는 초기화된다). */
+    /**
+     * 키워드 우선순위: 사용자 입력(USER) > AI 추출. 사용자 키워드가 있으면 종류만 AI로 분류하고 키워드는 그대로 쓴다.
+     * 없으면 AI가 종류·키워드를 함께 추출한다. 이후 종류별 검색 API × 키워드로 수집 설정을 새로 만든다 (해시는 초기화된다).
+     */
     private void extractAndRegisterSources(Idea idea) {
-        IdeaAnalysis analysis = analyzer.analyze(idea);
-        idea.changeType(analysis.type());
+        ItCategory category;
+        List<String> keywords;
+        if (idea.hasUserKeywords()) {
+            category = analyzer.analyzeCategory(idea);
+            keywords = idea.keywordList();
+        } else {
+            IdeaAnalysis analysis = analyzer.analyze(idea);
+            category = analysis.itCategory();
+            keywords = analysis.keywords().stream().limit(MAX_KEYWORDS).toList();
+            idea.applyKeywords(keywords, KeywordOrigin.AI);
+        }
+        idea.changeItCategory(category);
         sources.deleteUnlinkedByIdeaId(idea.getId());
-        for (ApiProvider provider : analysis.type().searchProviders()) {
-            for (String keyword : analysis.keywords()) {
+        for (ApiProvider provider : category.searchProviders()) {
+            for (String keyword : keywords) {
                 sources.save(new Source(idea, provider, keyword));
             }
         }
+    }
+
+    /** 앞뒤 공백 제거 후 빈 값·중복을 없앤다. 개수·길이 검증은 요청 DTO(@Valid)가 맡는다. */
+    private static List<String> normalizeKeywords(List<String> raw) {
+        if (raw == null) {
+            return List.of();
+        }
+        return raw.stream().filter(k -> k != null).map(String::trim).filter(k -> !k.isEmpty())
+                .distinct().limit(MAX_KEYWORDS).toList();
     }
 
     @Transactional(readOnly = true)
@@ -144,9 +178,10 @@ public class IdeaService {
                         evaluations.findFirstByScoreIdOrderByCreatedAtDesc(s.getId())
                                 .map(e -> e.getDifference()).orElse(null)))
                 .toList();
-        return new IdeaResponse(idea.getId(), idea.getType(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
+        return new IdeaResponse(idea.getId(), idea.getType(), idea.getItCategory(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
                 idea.getSolution(), idea.getExpectation(), idea.getTotalScore(), idea.getLastDifference(),
-                idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores);
+                idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores,
+                idea.keywordList(), idea.getKeywordOrigin());
     }
 
     private static Integer percent(BigDecimal fraction) {

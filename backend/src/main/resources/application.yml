@@ -23,6 +23,25 @@ jwt:
   secret: ${JWT_SECRET:dev-only-secret-key-change-me-please-32bytes!!}
   access-token-minutes: ${JWT_ACCESS_MINUTES:60}
 
+cue:
+  gemini:
+    # false면 Gemini를 쓰지 않고 SimpleIdeaAnalyzer만 사용 (테스트 등). 키가 비어 있으면 호출 없이 폴백한다.
+    enabled: ${GEMINI_ENABLED:true}
+    api-key: ${GEMINI_API_KEY:}
+    model: ${GEMINI_MODEL:gemini-2.5-flash}
+    base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com}
+    timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:10}
+  source:
+    # 외부 자료 API 토큰/키: 모두 선택. 없으면 익명 호출(rate limit 낮음). 값은 환경변수로만 주입하고 커밋하지 않는다.
+    connect-timeout: 3s
+    read-timeout: 5s
+    github:
+      token: ${GITHUB_TOKEN:}
+    hugging-face:
+      token: ${HUGGING_FACE_TOKEN:}
+    stack-exchange:
+      token: ${STACK_EXCHANGE_KEY:}
+
 management:
   endpoints:
     web:
@@ -36,15 +55,3 @@ management:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
-
-cue:
-  source:
-    # 외부 자료 API 토큰/키: 모두 선택. 없으면 익명 호출(rate limit 낮음). 값은 환경변수로만 주입하고 커밋하지 않는다.
-    connect-timeout: 3s
-    read-timeout: 5s
-    github:
-      token: ${GITHUB_TOKEN:}
-    hugging-face:
-      token: ${HUGGING_FACE_TOKEN:}
-    stack-exchange:
-      token: ${STACK_EXCHANGE_KEY:}
