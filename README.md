@@ -109,6 +109,9 @@ cd backend && ./gradlew bootRun
 | `JWT_SECRET` | 개발용 임시 값 | **운영에서는 반드시 32바이트 이상 값으로 교체** |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간(분) |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
+| `GEMINI_API_KEY` | (없음) | Gemini API 키(아이디어 종류·키워드 추출). 커밋 금지. 없거나 호출 실패 시 임시 분석기로 대체되어 등록은 계속 동작 |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
+| `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성(테스트 등) |
 | `DB_PORT` | `5433` | `docker-compose.yml`의 DB 호스트 포트 (`DB_URL` 포트도 함께 맞출 것) |
 
 ### 테스트
