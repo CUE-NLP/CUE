@@ -104,10 +104,11 @@ public class DailyEvaluationService {
         RuntimeException failure = null;
         boolean fullDone = false;
         Long trendDone = null;
+        Set<Long> degraded = new java.util.HashSet<>(); // 일괄 요약이 실패해 원래 항목으로 평가한 source
 
         if (runA) {
             try {
-                changes.addAll(evaluateEvidence(snapshot, changed));
+                changes.addAll(evaluateEvidence(snapshot, changed, degraded));
                 fullDone = snapshot.needsFullEvaluation();
             } catch (RuntimeException e) {
                 restoreHashes(changed, previous); // 다음 실행에서 같은 변경을 다시 감지한다
@@ -137,6 +138,8 @@ public class DailyEvaluationService {
             }
             throw e;
         }
+        // 일괄 요약에 실패해 짧은 요약으로 평가한 source는 해시를 되돌려 다음 실행에서 다시 읽고 요약한다
+        restoreHashes(changed.stream().filter(r -> degraded.contains(r.sourceId())).toList(), previous);
         if (failure != null) {
             log.warn("하루 평가 일부가 실패했습니다 (성공한 쪽은 저장됨, 실패한 쪽은 다음 실행에서 다시) ideaId={}: {}", ideaId, failure.toString());
             throw failure;
@@ -145,8 +148,9 @@ public class DailyEvaluationService {
     }
 
     /** A: 변경된 source의 원문을 읽고 요약해 기존 4개 기준을 평가한다. */
-    private List<ScoreChange> evaluateEvidence(IdeaSnapshot snapshot, List<SourceCheckResult> changed) {
+    private List<ScoreChange> evaluateEvidence(IdeaSnapshot snapshot, List<SourceCheckResult> changed, Set<Long> degraded) {
         List<SourceSummary> summaries = changed.stream().map(sourceSummaryService::summarize).toList();
+        summaries.stream().filter(SourceSummary::degraded).forEach(d -> degraded.add(d.result().sourceId()));
         List<SourceCheckResult> enriched = summaries.stream().map(SourceSummary::result).toList();
         return snapshot.needsFullEvaluation()
                 ? analyzer.initialEvaluate(snapshot, enriched)

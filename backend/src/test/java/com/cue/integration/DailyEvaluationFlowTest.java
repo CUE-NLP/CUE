@@ -248,6 +248,21 @@ class DailyEvaluationFlowTest {
         assertEquals(5, evaluationCount(id));
     }
 
+    @Test
+    void 일괄_요약이_실패한_source는_평가는_저장하되_해시를_되돌려_다음에_다시_읽는다() throws Exception {
+        String token = signUpAndLogin("degraded@cue.com");
+        long id = createIdea(token, FULL);
+        evaluate(token, id);
+        when(sourceCheck.checkAll(id)).thenReturn(List.of(changed()));
+        doAnswer(inv -> new com.cue.source.dto.SourceSummary(inv.getArgument(0), null, true))
+                .when(sourceSummary).summarize(any());
+
+        var result = evaluate(token, id); // 원래 조회한 항목으로 재평가는 진행된다
+        assertEquals("EVALUATED", result.get("status").asString());
+        assertTrue(result.get("changed").asBoolean());
+        verify(sourceCheck).restoreHash(eq(1L), any(), any());
+    }
+
     // ===== 글로벌 트렌드(TREND) 평가 =====
 
     private double trendScore(tools.jackson.databind.JsonNode idea) {
