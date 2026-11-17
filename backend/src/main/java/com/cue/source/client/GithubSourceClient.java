@@ -7,7 +7,7 @@ import java.util.List;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 
-/** GitHub 저장소 검색 (stars 순). 토큰은 선택이지만 없으면 rate limit이 매우 낮다. */
+/** GitHub 저장소 검색 (최근 갱신 순). 토큰은 선택이지만 없으면 rate limit이 매우 낮다. */
 public class GithubSourceClient implements SourceClient {
     static final int PAGE_SIZE = 5;
     private final RestClient restClient;
@@ -25,14 +25,16 @@ public class GithubSourceClient implements SourceClient {
     public List<SourceItem> search(String keyword) {
         JsonNode root = SourceClientSupport.getJson(restClient.get().uri(
                 uri -> uri.path("/search/repositories")
-                        .queryParam("q", "{q}").queryParam("sort", "stars").queryParam("order", "desc")
+                        .queryParam("q", "{q}").queryParam("sort", "updated").queryParam("order", "desc")
                         .queryParam("per_page", PAGE_SIZE).build(keyword)));
         List<SourceItem> items = new ArrayList<>();
         for (JsonNode n : root.path("items")) {
             items.add(new SourceItem(
                     SourceClientSupport.text(n, "full_name"),
                     SourceClientSupport.text(n, "html_url"),
-                    SourceClientSupport.text(n, "description")));
+                    SourceClientSupport.text(n, "description"),
+                    SourceClientSupport.date(n, "pushed_at"),
+                    SourceClientSupport.metrics(n, "stars", "stargazers_count", "forks", "forks_count")));
         }
         return items;
     }

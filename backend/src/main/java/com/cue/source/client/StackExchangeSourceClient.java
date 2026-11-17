@@ -8,7 +8,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.util.HtmlUtils;
 import tools.jackson.databind.JsonNode;
 
-/** Stack Overflow 질문 검색 (투표 순). 키(key)는 선택이며 있으면 일일 쿼터가 늘어난다. */
+/** Stack Overflow 질문 검색 (최근 활동 순). 키(key)는 선택이며 있으면 일일 쿼터가 늘어난다. */
 public class StackExchangeSourceClient implements SourceClient {
     static final int PAGE_SIZE = 5;
     private final RestClient restClient;
@@ -29,7 +29,7 @@ public class StackExchangeSourceClient implements SourceClient {
         JsonNode root = SourceClientSupport.getJson(restClient.get().uri(uri -> {
             uri.path("/2.3/search/advanced")
                     .queryParam("q", "{q}").queryParam("site", "stackoverflow")
-                    .queryParam("sort", "votes").queryParam("order", "desc")
+                    .queryParam("sort", "activity").queryParam("order", "desc")
                     .queryParam("pagesize", PAGE_SIZE);
             if (apiKey != null && !apiKey.isBlank()) {
                 uri.queryParam("key", apiKey);
@@ -43,7 +43,9 @@ public class StackExchangeSourceClient implements SourceClient {
             items.add(new SourceItem(
                     HtmlUtils.htmlUnescape(SourceClientSupport.text(n, "title")),
                     SourceClientSupport.text(n, "link"),
-                    String.join(",", tags)));
+                    String.join(",", tags),
+                    SourceClientSupport.epochDate(n, "last_activity_date"),
+                    SourceClientSupport.metrics(n, "votes", "score", "answers", "answer_count")));
         }
         return items;
     }

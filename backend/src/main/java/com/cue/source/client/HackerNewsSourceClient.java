@@ -8,8 +8,8 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Hacker News 스토리 검색 (Algolia, 관련도 순). 키가 필요 없다.
- * 점수(points)·댓글 수는 자주 변해 해시가 흔들리므로 요약에 넣지 않는다.
+ * Hacker News 스토리 검색 (Algolia, 최신 순). 키가 필요 없다.
+ * 점수(points)·댓글 수는 자주 변하므로 해시에는 넣지 않고 metrics로만 전달한다.
  */
 public class HackerNewsSourceClient implements SourceClient {
     static final int PAGE_SIZE = 5;
@@ -28,7 +28,7 @@ public class HackerNewsSourceClient implements SourceClient {
     @Override
     public List<SourceItem> search(String keyword) {
         JsonNode root = SourceClientSupport.getJson(restClient.get().uri(
-                uri -> uri.path("/api/v1/search")
+                uri -> uri.path("/api/v1/search_by_date")
                         .queryParam("query", "{q}").queryParam("tags", "story")
                         .queryParam("hitsPerPage", PAGE_SIZE).build(keyword)));
         List<SourceItem> items = new ArrayList<>();
@@ -37,7 +37,9 @@ public class HackerNewsSourceClient implements SourceClient {
             if (url.isBlank()) { // Ask HN 등 외부 링크가 없는 글은 HN 토론 페이지로 대체한다.
                 url = ITEM_URL + SourceClientSupport.text(n, "objectID");
             }
-            items.add(new SourceItem(SourceClientSupport.text(n, "title"), url, ""));
+            items.add(new SourceItem(SourceClientSupport.text(n, "title"), url, "",
+                    SourceClientSupport.date(n, "created_at"),
+                    SourceClientSupport.metrics(n, "points", "points", "comments", "num_comments")));
         }
         return items;
     }

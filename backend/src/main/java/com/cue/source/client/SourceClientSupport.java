@@ -45,4 +45,28 @@ final class SourceClientSupport {
         JsonNode v = node.path(field);
         return v.isMissingNode() || v.isNull() ? "" : v.asString();
     }
+
+    /** ISO 일시 문자열("2026-01-02T03:04:05Z" 등)에서 날짜(yyyy-MM-dd)만 뽑는다. 없으면 빈 문자열. */
+    static String date(JsonNode node, String field) {
+        String v = text(node, field);
+        return v.length() >= 10 ? v.substring(0, 10) : "";
+    }
+
+    /** epoch 초를 날짜(yyyy-MM-dd, UTC)로. 없으면 빈 문자열. */
+    static String epochDate(JsonNode node, String field) {
+        JsonNode v = node.path(field);
+        return v.isNumber() ? java.time.Instant.ofEpochSecond(v.asLong()).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString() : "";
+    }
+
+    /** "이름=값" 쌍을 쉼표로 잇는다. 값이 없는 필드는 뺀다. */
+    static String metrics(JsonNode node, String... pairs) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        for (int i = 0; i + 1 < pairs.length; i += 2) {
+            JsonNode v = node.path(pairs[i + 1]);
+            if (v.isNumber()) {
+                parts.add(pairs[i] + "=" + v.asLong());
+            }
+        }
+        return String.join(", ", parts);
+    }
 }
