@@ -27,6 +27,11 @@ CREATE TABLE ideas (
     -- 이 아이디어의 TREND 점수를 마지막으로 평가한 글로벌 트렌드(trends.id). null이면 아직 TREND 첫 평가 전(내용 수정 시에도 null로 돌아간다).
     -- 그날 트렌드와 같으면 TREND 평가를 다시 하지 않는다. FK는 trends 생성 뒤에 건다.
     last_trend_id     BIGINT,
+    -- 평가 실행 상태(프론트 폴링용): IDLE → QUEUED → RUNNING → IDLE | FAILED. 서버 재시작 시 남은 QUEUED/RUNNING은 FAILED(E005)로 정리한다.
+    evaluation_status          VARCHAR(10) NOT NULL DEFAULT 'IDLE',
+    evaluation_started_at      TIMESTAMP,
+    evaluation_finished_at     TIMESTAMP,
+    last_evaluation_error_code VARCHAR(10),
     created_at        TIMESTAMP     NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_ideas_user_status ON ideas (user_id, status);

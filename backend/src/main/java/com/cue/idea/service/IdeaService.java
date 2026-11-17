@@ -154,7 +154,8 @@ public class IdeaService {
                 .toList();
         return new IdeaResponse(idea.getId(), idea.getType(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
                 idea.getSolution(), idea.getExpectation(), idea.getTotalScore(), idea.getLastDifference(),
-                idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores);
+                idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores,
+                idea.getEvaluationStatus(), idea.getLastEvaluationErrorCode());
     }
 
     private static Integer percent(BigDecimal fraction) {

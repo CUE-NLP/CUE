@@ -17,6 +17,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
+@org.hibernate.annotations.DynamicUpdate // 평가 상태 컬럼은 별도 UPDATE로 바뀌므로 오래된 엔티티가 덮어쓰지 않게 바뀐 컬럼만 갱신한다
 @Table(name = "ideas")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -73,6 +74,21 @@ public class Idea {
     @Column(name = "last_trend_id")
     private Long lastTrendId;
 
+    /** 평가 실행 상태. 상태 전이는 {@code IdeaRepository}의 조건부 UPDATE로만 한다(동시 요청에도 한 번만 전이). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "evaluation_status", nullable = false, length = 10)
+    private EvaluationStatus evaluationStatus = EvaluationStatus.IDLE;
+
+    @Column(name = "evaluation_started_at")
+    private LocalDateTime evaluationStartedAt;
+
+    @Column(name = "evaluation_finished_at")
+    private LocalDateTime evaluationFinishedAt;
+
+    /** 마지막 평가가 실패했을 때 사용자에게 안내할 에러 코드(예: G002). FAILED가 아니면 null. */
+    @Column(name = "last_evaluation_error_code", length = 10)
+    private String lastEvaluationErrorCode;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -106,8 +122,12 @@ public class Idea {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    /** 항목 수정. null이면 그대로 두고, 빈 문자열이면 비운다. 수정 후 상태를 다시 판단한다. */
-    public void edit(String problem, String target, String solution, String expectation) {
+    /**
+     * 항목 수정. null이면 그대로 두고, 빈 문자열이면 비운다. 수정 후 상태를 다시 판단한다.
+     *
+     * @return 4개 항목의 내용이 실제로 바뀌었으면 true
+     */
+    public boolean edit(String problem, String target, String solution, String expectation) {
         String[] before = {this.problem, this.target, this.solution, this.expectation};
         if (problem != null) this.problem = blankToNull(problem);
         if (target != null) this.target = blankToNull(target);
@@ -115,10 +135,12 @@ public class Idea {
         if (expectation != null) this.expectation = blankToNull(expectation);
         refreshStatus();
         String[] after = {this.problem, this.target, this.solution, this.expectation};
-        if (!java.util.Arrays.equals(before, after)) {
+        boolean contentChanged = !java.util.Arrays.equals(before, after);
+        if (contentChanged) {
             needsFullEvaluation = true; // 내용이 바뀌었으니 다음 평가에서 전체 재평가 (TREND도 첫 평가부터 다시)
             lastTrendId = null;
         }
+        return contentChanged;
     }
 
     /** 전체(초기) 평가를 끝냈음을 기록한다. */
