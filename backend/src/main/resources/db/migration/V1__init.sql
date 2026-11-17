@@ -1,3 +1,5 @@
+-- 초기 스키마. 스키마가 확정되기 전까지는 이 파일 하나를 수정해서 쓴다 (backend/AGENTS.md 참고).
+
 CREATE TABLE users (
     id            BIGSERIAL PRIMARY KEY,
     nickname      VARCHAR(50)  NOT NULL,
@@ -6,25 +8,31 @@ CREATE TABLE users (
     created_at    TIMESTAMP    NOT NULL DEFAULT now()
 );
 
+-- 구조화 4개 항목이 모두 채워지면 ACTIVE, 하나라도 비면 HOLD (서버가 판단한다).
 CREATE TABLE ideas (
-    id          BIGSERIAL PRIMARY KEY,
-    user_id     BIGINT        NOT NULL REFERENCES users (id),
-    type        VARCHAR(30)   NOT NULL,
-    problem     TEXT          NOT NULL,
-    target      TEXT          NOT NULL,
-    solution    TEXT          NOT NULL,
-    expectation TEXT          NOT NULL,
-    total_score DECIMAL(7, 2) NOT NULL DEFAULT 0,
-    created_at  TIMESTAMP     NOT NULL DEFAULT now()
+    id                BIGSERIAL PRIMARY KEY,
+    user_id           BIGINT        NOT NULL REFERENCES users (id),
+    type              VARCHAR(30)   NOT NULL,
+    status            VARCHAR(20)   NOT NULL,
+    problem           TEXT,
+    target            TEXT,
+    solution          TEXT,
+    expectation       TEXT,
+    total_score       DECIMAL(7, 2) NOT NULL DEFAULT 0,
+    last_difference   DECIMAL(7, 2),
+    last_evaluated_at TIMESTAMP,
+    last_checked_at   TIMESTAMP,
+    created_at        TIMESTAMP     NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_ideas_user_id ON ideas (user_id);
+CREATE INDEX idx_ideas_user_status ON ideas (user_id, status);
 
 CREATE TABLE scores (
-    id      BIGSERIAL PRIMARY KEY,
-    idea_id BIGINT        NOT NULL REFERENCES ideas (id) ON DELETE CASCADE,
-    type    VARCHAR(30)   NOT NULL,
-    weight  DECIMAL(4, 3) NOT NULL,
-    score   DECIMAL(5, 2) NOT NULL DEFAULT 0,
+    id             BIGSERIAL PRIMARY KEY,
+    idea_id        BIGINT        NOT NULL REFERENCES ideas (id) ON DELETE CASCADE,
+    type           VARCHAR(30)   NOT NULL,
+    weight         DECIMAL(4, 3) NOT NULL,
+    pending_weight DECIMAL(4, 3),
+    score          DECIMAL(5, 2) NOT NULL DEFAULT 0,
     UNIQUE (idea_id, type)
 );
 
@@ -35,20 +43,43 @@ CREATE TABLE trends (
     created_at TIMESTAMP   NOT NULL DEFAULT now()
 );
 
+-- 항목별 평가 이력. 점수에 변화가 있을 때만 생성된다 (변화가 없으면 행도, 날짜도 남기지 않는다).
 CREATE TABLE evaluations (
     id               BIGSERIAL PRIMARY KEY,
     score_id         BIGINT        NOT NULL REFERENCES scores (id) ON DELETE CASCADE,
     trend_id         BIGINT        REFERENCES trends (id),
     evidence_summary TEXT          NOT NULL,
     difference       DECIMAL(5, 2) NOT NULL,
+    weight           DECIMAL(4, 3) NOT NULL,
+    score_after      DECIMAL(5, 2) NOT NULL,
     created_at       TIMESTAMP     NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_evaluations_score_id ON evaluations (score_id, created_at DESC);
 
+-- 평가 근거 출처 (한 평가에 여러 개)
+CREATE TABLE evaluation_references (
+    id            BIGSERIAL PRIMARY KEY,
+    evaluation_id BIGINT      NOT NULL REFERENCES evaluations (id) ON DELETE CASCADE,
+    url           TEXT        NOT NULL,
+    title         VARCHAR(255),
+    provider      VARCHAR(30)
+);
+CREATE INDEX idx_evaluation_references_evaluation_id ON evaluation_references (evaluation_id);
+
+-- 평가 시점의 아이디어 총점 스냅샷 (점수 이력 차트용). 가중치가 바뀌어도 당시 총점을 그대로 보여주기 위해 저장한다.
+CREATE TABLE idea_score_histories (
+    id               BIGSERIAL PRIMARY KEY,
+    idea_id          BIGINT        NOT NULL REFERENCES ideas (id) ON DELETE CASCADE,
+    total_score      DECIMAL(7, 2) NOT NULL,
+    total_difference DECIMAL(7, 2) NOT NULL,
+    evaluated_at     TIMESTAMP     NOT NULL
+);
+CREATE INDEX idx_idea_score_histories_idea ON idea_score_histories (idea_id, evaluated_at DESC);
+
 CREATE TABLE sources (
     id            BIGSERIAL PRIMARY KEY,
     idea_id       BIGINT       NOT NULL REFERENCES ideas (id) ON DELETE CASCADE,
-    evaluation_id BIGINT       REFERENCES evaluations (id),
+    evaluation_id BIGINT       REFERENCES evaluations (id) ON DELETE SET NULL,
     provider      VARCHAR(30)  NOT NULL,
     keyword       VARCHAR(255) NOT NULL,
     content_hash  VARCHAR(64),

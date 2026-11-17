@@ -8,7 +8,7 @@
 ## 핵심 흐름
 
 1. **기록**: 텍스트·음성으로 자유롭게 입력 (음성은 프론트에서 STT 후 전달)
-2. **구조화**: AI가 타깃·문제·해결·기대효과 4개 항목으로 정리 → **사용자가 검증·수정한 뒤에만 DB에 저장**
+2. **구조화**: 프론트에서 AI가 타깃·문제·해결·기대효과 4개 항목으로 정리 → **사용자가 검증·수정한 뒤에만 서버에 저장**. 4개가 모두 채워지면 평가 대상(`ACTIVE`), 하나라도 비면 `보류(HOLD)`로 저장됩니다.
 3. **평가**: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성 4개 기준으로 점수화
 4. **갱신(Idea Delta)**: 24시간마다 외부 API 자료를 재확인, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
 
@@ -20,7 +20,7 @@ CUE
 ├── frontend/   React · TypeScript
 ├── docker-compose.yml   로컬 PostgreSQL
 ├── AGENTS.md   공통 작업 규칙 (커밋 컨벤션, PR 규칙)
-└── .github/    PR 템플릿
+└── .github/    PR 템플릿, 백엔드 CI(GitHub Actions)
 ```
 
 | 영역 | 담당 | 가이드 |
@@ -35,7 +35,7 @@ CUE
 | Frontend | React, TypeScript |
 | Backend | Java 21, Spring Boot 4, Spring Security (JWT), Spring Data JPA, Lombok, RestClient, Actuator, springdoc(Swagger) |
 | Database | PostgreSQL 17, Flyway |
-| AI | Gemini API (구조화 · 평가), 음성인식 STT |
+| AI | Gemini API (프론트: 구조화 / 백엔드: 키워드 추출 · 평가), 음성인식 STT |
 | Test | JUnit 5, Testcontainers (PostgreSQL) |
 | Infra | Docker, GitHub Actions |
 
@@ -47,7 +47,7 @@ CUE
 
 ## 프론트가 맡는 역할
 - 아이디어 입력(텍스트·음성): **음성 인식(STT)은 프론트에서 처리**하고, 서버에는 텍스트만 보냅니다.
-- AI 구조화 결과(타깃 · 문제 · 해결 · 기대효과) 확인·수정 후 저장 요청
+- AI 구조화(타깃 · 문제 · 해결 · 기대효과)와 사용자 확인·수정 후 저장 요청 (서버는 구조화하지 않고 저장만 합니다. 항목이 비어 있으면 `보류`로 저장됩니다)
 - 리더보드(점수 · 순위 · 변화량), Idea Delta, 항목별 가중치 조절 화면
 
 ## 백엔드 연동 참고
@@ -71,9 +71,9 @@ backend/src/main/java/com/cue
 │   └── security/    UserPrincipal, JwtTokenProvider, JwtPrincipalConverter
 ├── auth/            로그인 (JWT 발급)
 ├── user/            회원가입 · 내 정보
-├── idea/            아이디어 저장 · 조회 · 리더보드
+├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
 ├── score/           항목별 점수 (4개 기준)
-├── evaluation/      재평가 결과 (변화량 · 근거 요약)
+├── evaluation/      재평가 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
 ├── source/          아이디어별 외부 자료 수집 설정 · 변경 감지 (ApiProvider)
 └── trend/           고정 API 4개로 수집한 트렌드 요약
 ```
@@ -109,6 +109,7 @@ cd backend && ./gradlew bootRun
 | `JWT_SECRET` | 개발용 임시 값 | **운영에서는 반드시 32바이트 이상 값으로 교체** |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간(분) |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
+| `DB_PORT` | `5433` | `docker-compose.yml`의 DB 호스트 포트 (`DB_URL` 포트도 함께 맞출 것) |
 
 ### 테스트
 
@@ -128,9 +129,13 @@ cd backend && ./gradlew test
 | POST | `/api/users` | ✕ | 회원가입 |
 | POST | `/api/auth/login` | ✕ | 로그인, 액세스 토큰 발급 |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas` | ✓ | 검증 완료된 구조화 아이디어 저장 |
-| GET | `/api/ideas` | ✓ | 내 아이디어 리더보드 (총점 순) |
-| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (항목별 점수 · 가중치 · 최근 변화량) |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD` |
+| GET | `/api/ideas` | ✓ | 리더보드. `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
+| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태 · 항목별 점수 · 가중치 · 최근 변화량 · `hasNewChange`) |
+| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출 |
+| POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
+| GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순) |
+| GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순) |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
 
 ### 가중치
@@ -166,7 +171,7 @@ PATCH /api/ideas/1/weights
 | Global | `G001~` | 서버 오류, 외부 서비스 오류, 잘못된 요청/입력, 405, 404 |
 | Auth | `A001~` | 인증 필요, 권한 없음, JWT 형식 오류·만료·무효·없음, 로그인 실패 |
 | User | `U001~` | 이메일 중복, 사용자 없음 |
-| Idea | `I001~` | 아이디어 없음, 접근 거부, 가중치 오류 |
+| Idea | `I001~` | 아이디어 없음, 접근 거부, 가중치 오류, 보류 아이디어 평가 불가 |
 
 JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 재로그인 흐름으로 분기하면 됩니다.
 
@@ -174,16 +179,17 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 
 ## 데이터베이스
 
-스키마는 Flyway 마이그레이션(`backend/src/main/resources/db/migration`)으로 관리합니다.
-이미 반영된 파일은 수정하지 말고, 변경은 새 버전 파일(`V3__*.sql` 등)로 추가해 주세요.
+스키마는 Flyway(`backend/src/main/resources/db/migration`)로 관리합니다. **스키마가 확정되기 전까지는 `V1__init.sql` 하나를 수정해서 쓰고**, 확정 후에 새 버전 파일을 추가합니다. V1이 바뀐 PR을 받으면 `docker compose down -v` 후 다시 실행해 DB를 새로 만들어 주세요.
 
 | 테이블 | 설명 |
 | --- | --- |
 | `users` | 사용자 |
-| `ideas` | 구조화된 아이디어와 총점 |
+| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 |
 | `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
-| `evaluations` | 일일 재평가의 변화량과 근거 요약 |
-| `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지) |
+| `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
+| `evaluation_references` | 평가 근거 출처 URL |
+| `idea_score_histories` | 평가 시점의 총점 스냅샷 (점수 이력 차트용) |
+| `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각 |
 | `trends` | 고정 API로 수집한 트렌드 요약 |
 
 ---

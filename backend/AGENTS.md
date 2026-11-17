@@ -8,9 +8,9 @@ CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근�
 
 핵심 흐름
 1. 기록: 텍스트·음성 입력. **음성 인식(STT)은 프론트에서 처리**하고 서버는 텍스트만 받는다.
-2. 구조화: AI가 타깃·문제·해결·기대효과로 요약 → **사용자가 검증·수정 완료해야만 DB에 저장**한다. (원문·입력 방식은 DB에 저장하지 않는다.)
+2. 구조화: **프론트가** AI로 타깃·문제·해결·기대효과로 요약하고 사용자가 검증·수정한 뒤 백엔드에는 **저장만** 요청한다. (원문·입력 방식은 DB에 저장하지 않는다.) 서버는 등록 시 4개 항목이 모두 채워졌는지 보고 `ACTIVE`/`HOLD`를 정한다. `ACTIVE`일 때만 AI로 아이디어 종류·검색 키워드를 추출한다.
 3. 평가: 4개 기준(문제 중요성, 시장 수요, 시장 차별성, 기술적 실현 가능성)으로 점수화.
-4. 갱신(Idea Delta): 하루 1회 AI가 재평가 → **점수에 변화가 있을 때만** 변화량(difference)과 근거 요약(출처 URL 포함)을 저장. 다음 날 이전 점수에 변화량을 반영해 보여주고 변화량은 점수 옆에 작게 표시한다.
+4. 갱신(Idea Delta): 하루 1회 AI가 재평가 → **점수에 변화가 있을 때만** 항목별 변화량·근거 요약·출처 URL·평가 시각을 저장한다 (변화가 없으면 행도 날짜도 남기지 않는다). 다음 날 이전 점수에 변화량을 반영해 보여주고 변화량은 점수 옆에 작게 표시한다.
 
 ## 기술 스택 (backend)
 - Java 21 (이 머신의 JDK 21 사용, Java 25 아님), Spring Boot 4.0.9, Gradle(Kotlin DSL) 9.1
@@ -31,22 +31,24 @@ auth/         controller / service / dto   — 로그인(JWT 발급)
 user/         controller / service / repository / entity / dto — 회원가입, 내 정보
 idea/         controller / service / repository / entity / dto — 아이디어 저장·조회·리더보드·가중치
 score/        entity (Score, ScoreType)
-evaluation/   entity, repository (Evaluation)
-source/       entity (Source, ApiProvider)
+evaluation/   controller 없음. entity (Evaluation, EvaluationReference, IdeaScoreHistory) / repository / service (EvaluationService) / dto (ScoreChange, ReferenceInput)
+source/       entity (Source, ApiProvider) / repository
 trend/        entity (Trend)
 ```
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
 
 ## DB (Flyway, `src/main/resources/db/migration`)
-- `V1__init.sql`: users, ideas, scores, trends, evaluations, sources
-- `V2__score_pending_weight.sql`: `scores.pending_weight`
-- **이미 반영된 마이그레이션 파일은 수정하지 않는다.** 변경은 항상 새 버전(`V3__...`)으로 추가한다. `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패.
+- 마이그레이션은 **`V1__init.sql` 하나뿐**이다 (users, ideas, scores, trends, evaluations, evaluation_references, idea_score_histories, sources).
+- **스키마가 확정되기 전(개발 중)에는 `V1__init.sql`을 직접 수정한다.** Flyway 이력 관리(`V2__...` 추가)는 스키마가 확정되는 마지막 단계에 시작한다. 그래서 V1이 바뀌면 이미 V1을 적용한 로컬 DB는 체크섬 불일치로 기동이 실패하니, **`docker compose down -v` 후 다시 실행**해 DB를 새로 만든다 (PR 설명에 적는다).
+- `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 V1도 같은 PR에서 고친다.
 
-ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, scores 1:N evaluations, trends 1:N evaluations, evaluations 1:N sources.
-- `ideas.type`: 현재 `IT` 하나뿐이며 확장 예정. 종류별로 검색에 쓰는 외부 API 조합이 다르다 (`IdeaType.searchProviders()`).
+ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea_score_histories, scores 1:N evaluations, trends 0..1:N evaluations, evaluations 1:N evaluation_references, evaluations 0..1:N sources.
+- `ideas`: `type`(현재 `IT` 하나, 확장 예정; 종류별 검색 API 조합은 `IdeaType.searchProviders()`), `status`(`ACTIVE`/`HOLD`), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각).
 - `scores`: 아이디어당 4행(`ScoreType`), `(idea_id, type)` 유니크. `weight`는 0~1 비율(DECIMAL 4,3), `pending_weight`는 변경 예약.
-- `evaluations`: score 단위 평가 이력(`difference`, `evidence_summary`, nullable `trend_id`).
-- `sources`: 아이디어별 검색 설정(provider, keyword) + `content_hash`로 변경 감지.
+- `evaluations`: **항목(score) 단위** 평가 이력. 점수가 바뀔 때만 생성. `difference`(변화량), `score_after`(변경 후 점수), `weight`(평가 당시 가중치), `evidence_summary`(근거 요약), `created_at`(재평가 날짜), nullable `trend_id`.
+- `evaluation_references`: 평가 근거 출처 URL (평가 1 : N).
+- `idea_score_histories`: 평가 시점의 **총점 스냅샷**(`total_score`, `total_difference`, `evaluated_at`). 점수 이력 차트용. 가중치가 바뀌어도 당시 총점을 보존하려고 변화량 누적 대신 스냅샷으로 저장한다.
+- `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash`로 변경 감지 + `checked_at`(수집 확인 시각). 아이디어가 ACTIVE로 등록·수정될 때 종류별 API × 추출 키워드로 새로 만든다.
 - `trends`: 아이디어와 무관한 전역 트렌드 요약. 고정 API 4개로 수집.
 - 외부 API는 6종(`ApiProvider`): 아이디어 검색은 종류별 3개, 트렌드는 고정 4개. **현재 조합은 임시 값**(TODO: 팀 확정).
 
@@ -88,7 +90,20 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, scores 1:N eva
 - 점수 갱신: `Score.applyDifference(diff)` — 0~100으로 제한.
 - 가중치는 **아이디어별**, 항목별 퍼센트 정수, **합이 정확히 100**. 기본 25/25/25/25.
 - 가중치 변경(`PATCH /api/ideas/{id}/weights`)은 즉시 적용하지 않고 `pending_weight`에 **예약**한다. 다음 평가 턴 시작 시 `Idea.startNextTurn()`이 적용하고 총점을 재계산한다. API 응답은 `weightPercent`(현재)와 `pendingWeightPercent`(예약).
-- 점수는 하루치만 반영한다: 최신 점수 = 이전 점수 + 변화량. 변화량이 없으면 `evaluations` 행을 만들지 않는다.
+- 점수는 하루치만 반영한다: 최신 점수 = 이전 점수 + 변화량. 변화량이 없으면 `evaluations` 행도, 날짜(`last_evaluated_at`)도 만들지 않는다.
+- 평가 저장은 `EvaluationService.recordChanges(ideaId, changes)` 하나로 한다: 항목별 `Evaluation`(+출처) 저장 → 총점 재계산 → `Idea.lastDifference/lastEvaluatedAt` 갱신 → `IdeaScoreHistory` 스냅샷. 0~100 제한 때문에 실제로 안 바뀐 항목은 건너뛴다. `HOLD` 아이디어는 `I004`.
+
+### 보류(HOLD)와 등록·수정 흐름
+- `POST /api/ideas`: 4개 항목이 모두 채워지면 `ACTIVE`, 하나라도 비면 `HOLD`. 클라이언트가 status를 보내지 않는다.
+- `ACTIVE`일 때만 `IdeaAnalyzer`로 종류·키워드를 추출하고 `sources`를 만든다. HOLD는 AI를 호출하지 않고 일일 평가에서도 제외한다.
+- `PATCH /api/ideas/{id}`: 보낸 항목만 수정(null 유지, 빈 문자열은 비움). 수정 뒤 `ACTIVE`면 종류·키워드를 다시 추출해 `sources`를 교체한다(평가 근거로 연결된 행은 유지, 해시는 초기화). HOLD → ACTIVE가 되면 같은 파이프라인을 탄다. **수정 후 재평가는 평가 단계(스케줄러)에서 처리 — 아직 없음.**
+- `IdeaAnalyzer`는 현재 임시 구현(`SimpleIdeaAnalyzer`: 종류 IT, 키워드는 긴 단어 3개). Gemini 연동 구현으로 교체한다.
+
+### 새 변화 알림(확인 처리)
+- `Idea.hasNewChange()` = `lastEvaluatedAt`이 `lastCheckedAt`보다 늦음. 사용자가 최신 점수를 확인하면 `POST /api/ideas/{id}/check`로 `lastCheckedAt`을 갱신한다 (행 단위 is_checked 없음).
+
+### 리더보드
+- `GET /api/ideas?status=ACTIVE|HOLD&sort=TOTAL|RECENT_RISE`. 기본은 `ACTIVE` + `TOTAL`(총점순). `RECENT_RISE`는 `last_difference` 내림차순(없으면 뒤). 보류 탭은 `status=HOLD`.
 
 ### 외부 자료 변경 감지
 - `Source.updateHash(newHash)`가 이전 해시와 다르면 true. 변경이 있을 때만 재평가를 트리거한다.
@@ -99,10 +114,14 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, scores 1:N eva
 | POST | `/api/users` | ✕ | 회원가입 |
 | POST | `/api/auth/login` | ✕ | 로그인 (JWT 발급) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas` | ✓ | 검증 완료된 구조화 아이디어 저장 |
-| GET | `/api/ideas` | ✓ | 내 아이디어 리더보드 (총점 순) |
-| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (점수·가중치·최근 변화량) |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD) |
+| GET | `/api/ideas` | ✓ | 리더보드. `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
+| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태·점수·가중치·최근 변화량·hasNewChange) |
+| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 키워드 재추출) |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 가중치 변경 예약 |
+| POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 (새 변화 알림 해제) |
+| GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순) |
+| GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량·근거 요약·출처, 최신순) |
 
 Swagger: `/swagger-ui.html`, 헬스체크: `/actuator/health`.
 
@@ -129,9 +148,9 @@ cd CUE/backend
 | --- | --- |
 | 호스트/포트 | `localhost:5433` (로컬 PostgreSQL이 5432를 써도 충돌하지 않게 5433으로 매핑) |
 | DB / 계정 / 비밀번호 | `cue` / `cue` / `cue` |
-| 초기화 | `docker compose down -v` 후 다시 실행 (Flyway가 스키마를 새로 만든다) |
+| 초기화 | `docker compose down -v` 후 다시 실행 (Flyway가 스키마를 새로 만든다). **`V1__init.sql`이 바뀐 PR을 받았을 때도 필요하다.** |
 
-5433도 이미 쓰는 중이면 `docker-compose.yml`의 포트와 `DB_URL`을 함께 바꾼다.
+5433도 이미 쓰는 중이면 `DB_PORT=원하는포트`로 compose를 띄우고 `DB_URL`의 포트를 맞춘다. DB 컨테이너는 헬스체크(`pg_isready`)가 있고 타임존은 `Asia/Seoul`이다.
 
 ### 환경 변수 (선택)
 | 이름 | 기본값 | 비고 |
@@ -144,9 +163,9 @@ cd CUE/backend
 - 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 키(Gemini 등)가 추가되면 이 표에 변수 이름을 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
 
 ### 협업 시 주의
-- **Flyway 버전 충돌**: 두 명이 동시에 `V3__*.sql`을 만들면 충돌한다. 마이그레이션을 추가하기 전에 `main`을 최신으로 받아 다음 번호를 확인하고, 번호가 겹치면 나중에 머지하는 사람이 번호를 올린다. 이미 머지된 파일은 절대 수정하지 않는다.
-- 엔티티를 바꾸면 마이그레이션도 같은 PR에 넣는다 (`ddl-auto: validate`라서 어긋나면 서버가 안 뜬다).
-- 에러 코드(`ErrorCode`)와 마이그레이션 번호는 충돌이 잦은 파일이다. PR을 작게 유지하고 자주 `main`을 반영한다.
+- **`V1__init.sql` 충돌**: 개발 중에는 모두가 이 한 파일을 고치므로 충돌이 잦다. 스키마 변경 PR은 작게 유지하고 머지 전에 `main`을 반영한다. 스키마 확정 후에는 이 파일을 고정하고 `V2__*.sql`부터 추가한다.
+- 엔티티를 바꾸면 `V1__init.sql`도 같은 PR에 넣는다 (`ddl-auto: validate`라서 어긋나면 서버가 안 뜬다).
+- 에러 코드(`ErrorCode`)와 `V1__init.sql`은 충돌이 잦은 파일이다. PR을 작게 유지하고 자주 `main`을 반영한다.
 - 통합 테스트는 Docker가 켜져 있어야 통과한다.
 - 프론트 연동: 아직 **CORS 설정이 없다.** 프론트가 브라우저에서 호출하기 시작하면 허용 도메인을 설정해야 한다 (TODO).
 
@@ -157,21 +176,21 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
 - 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`.
-- 테스트: `DomainTest`(순수 단위), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치 흐름).
+- 테스트: `DomainTest`(순수 단위), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리).
+- CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
 ## 작업 규칙 (backend)
 - 코드 변경 시 테스트를 함께 추가/수정하고 `cd backend && ./gradlew test`를 통과시킨 뒤 알린다.
 - 동작이 바뀌면 루트 `README.md`의 Backend 섹션과 이 문서를 함께 갱신한다.
-- 이미 반영된 Flyway 마이그레이션은 수정하지 않고 새 버전을 추가한다.
+- 스키마 변경은 확정 전까지 `V1__init.sql`을 수정하고 PR에 "DB 초기화 필요"를 적는다. 확정 후에는 새 버전 파일만 추가한다.
 
 ## 미구현·TODO
-- 24시간 주기 평가 스케줄러(`@Scheduled`): 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집 → AI 평가 → 변화량·근거 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다.
+- 24시간 주기 평가 스케줄러(`@Scheduled`): 대상은 `ACTIVE` 아이디어. 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집(`Source.updateHash`로 변경 감지) → AI 평가 → `EvaluationService.recordChanges`로 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다. 가중치 적용만으로 총점이 바뀌는 경우의 `idea_score_histories` 기록과, 등록·수정 직후 첫 평가·재평가 연결도 여기서 정한다.
+- `IdeaAnalyzer` Gemini 구현 (현재 `SimpleIdeaAnalyzer` 임시 구현). `evaluations.trend_id`에 트렌드 연결(현재 null).
 - 외부 API 클라이언트(GitHub, Hugging Face, Stack Exchange, Hacker News, Semantic Scholar, Wikipedia Pageviews)와 Gemini 연동 (예외는 `G002 EXTERNAL_SERVER_ERROR` 사용).
-- AI 구조화 API (입력 텍스트 → 4항목 초안; 저장은 검증 후 별도 호출).
 - 외부 API 조합(`IdeaType.searchProviders`, `ApiProvider.TREND_PROVIDERS`) 팀 확정.
 - 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
-- GitHub Actions CI(빌드·테스트).
 - 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.
 
 ## 참고
