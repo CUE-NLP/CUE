@@ -3,4 +3,4 @@ package com.cue.global.security;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "jwt")
-public record JwtProperties(String secret, long accessTokenMinutes) {}
+public record JwtProperties(String secret, long accessTokenMinutes, long refreshTokenDays) {}

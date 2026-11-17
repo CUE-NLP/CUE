@@ -90,3 +90,14 @@ CREATE TABLE sources (
 );
 CREATE INDEX idx_sources_idea_provider ON sources (idea_id, provider);
 CREATE INDEX idx_sources_content_hash ON sources (content_hash);
+
+-- 리프레시 토큰: 원문은 저장하지 않고 SHA-256 해시만 저장한다. 회전 시 사용된 토큰은 revoked_at을 채워 남겨 두고(재사용 탐지), 재사용이 감지되면 해당 사용자의 모든 토큰을 폐기한다.
+CREATE TABLE refresh_tokens (
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    expires_at TIMESTAMP   NOT NULL,
+    revoked_at TIMESTAMP,
+    created_at TIMESTAMP   NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_refresh_tokens_user ON refresh_tokens (user_id);
