@@ -10,7 +10,7 @@
 1. **기록**: 텍스트·음성으로 자유롭게 입력 (음성은 프론트에서 STT 후 전달)
 2. **구조화**: 프론트에서 AI가 타깃·문제·해결·기대효과 4개 항목으로 정리 → **사용자가 검증·수정한 뒤에만 서버에 저장**. 4개가 모두 채워지면 평가 대상(`ACTIVE`), 하나라도 비면 `보류(HOLD)`로 저장됩니다.
 3. **평가**: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성 4개 기준으로 점수화
-4. **갱신(Idea Delta)**: 24시간마다 외부 API 자료를 재확인, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
+4. **갱신(Idea Delta)**: 매일(기본 03:00 KST) 외부 API 자료를 재확인해 변화가 있을 때만 Gemini가 재평가하고, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
 
 ## 저장소 구조
 
@@ -35,7 +35,7 @@ CUE
 | Frontend | React, TypeScript |
 | Backend | Java 21, Spring Boot 4, Spring Security (JWT), Spring Data JPA, Lombok, RestClient, Actuator, springdoc(Swagger) |
 | Database | PostgreSQL 17, Flyway |
-| AI | Gemini API (프론트: 구조화 / 백엔드: 키워드 추출 · 평가), 음성인식 STT |
+| AI | Gemini API (프론트: 구조화 / 백엔드: 키워드 추출 · 평가), 음성인식 STT. 백엔드 프롬프트: `backend/src/main/resources/prompts/`, 설계는 [docs/ai-prompts.md](docs/ai-prompts.md) |
 | Test | JUnit 5, Testcontainers (PostgreSQL) |
 | Infra | Docker, GitHub Actions |
 
@@ -67,15 +67,16 @@ CUE
 backend/src/main/java/com/cue
 ├── global/
 │   ├── config/      SecurityConfig (JWT, 인증 설정)
+│   ├── ai/          GeminiClient · PromptLoader (평가용 Gemini 호출, 프롬프트 치환)
 │   ├── error/       ErrorCode(전체 에러 코드), CustomException, GlobalExceptionHandler
 │   └── security/    UserPrincipal, JwtTokenProvider, JwtPrincipalConverter
 ├── auth/            로그인 (JWT 발급)
 ├── user/            회원가입 · 내 정보
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
 ├── score/           항목별 점수 (4개 기준)
-├── evaluation/      재평가 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
-├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange) · 해시 변경 감지
-└── trend/           고정 API 4개로 수집한 트렌드 요약
+├── evaluation/      일일 재평가 파이프라인(스케줄러 · Gemini 평가) · 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
+├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange/Hacker News) · 해시 변경 감지
+└── trend/           변경된 외부 자료의 Gemini 요약 (평가 근거)
 ```
 
 각 도메인은 `controller / service / repository / entity / dto` 로 나누고, 보일러플레이트는 Lombok(`@Getter`, `@RequiredArgsConstructor` 등)으로 줄입니다.
@@ -112,7 +113,10 @@ cd backend && ./gradlew bootRun
 | `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
 | `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
 | `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
-| `GEMINI_API_KEY` | (없음) | Gemini API 키(아이디어 종류·키워드 추출). 커밋 금지. 없거나 호출 실패 시 임시 분석기로 대체되어 등록은 계속 동작 |
+| `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 여부 (테스트는 `false`) |
+| `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 재평가 실행 시각(Spring 6필드 cron) · 시간대 |
+| `EVALUATION_DELAY_MS` | `15000` | 아이디어 사이 대기(ms) — Gemini 무료 티어 분당 호출 한도용 |
+| `GEMINI_API_KEY` | (없음) | Gemini API 키(키워드 추출 · 재평가). 커밋 금지. 없으면 키워드 추출은 임시 분석기로 대체되어 등록은 계속 동작하고, 일일 재평가는 건너뜀 |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
 | `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성(테스트 등) |
 | `DB_PORT` | `5433` | `docker-compose.yml`의 DB 호스트 포트 (`DB_URL` 포트도 함께 맞출 것) |
@@ -142,6 +146,7 @@ cd backend && ./gradlew test
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순) |
+| POST | `/api/ideas/{id}/evaluate` | ✓ | 지금 재평가 실행 (본인 아이디어만, 보류는 `I004`). 자료 변화가 없으면 `NO_CHANGE`로 아무것도 기록하지 않음. 응답: `status`, `changed`, 갱신된 `idea` |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
 
 ### 가중치
@@ -178,6 +183,8 @@ PATCH /api/ideas/1/weights
 | Auth | `A001~` | 인증 필요, 권한 없음, JWT 형식 오류·만료·무효·없음, 로그인 실패 |
 | User | `U001~` | 이메일 중복, 사용자 없음 |
 | Idea | `I001~` | 아이디어 없음, 접근 거부, 가중치 오류, 보류 아이디어 평가 불가 |
+| Source | `S001~` | 수집 설정 없음, 지원하지 않는 외부 API |
+| Evaluation | `E001~` | AI 평가 사용 불가(Gemini 비활성·키 없음), AI 응답 해석 불가, 이미 평가 중 |
 
 JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 재로그인 흐름으로 분기하면 됩니다.
 
@@ -190,13 +197,13 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | 테이블 | 설명 |
 | --- | --- |
 | `users` | 사용자 |
-| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 |
+| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 · 전체 평가 필요 플래그(`needs_full_evaluation`) |
 | `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
 | `evaluation_references` | 평가 근거 출처 URL |
 | `idea_score_histories` | 평가 시점의 총점 스냅샷 (점수 이력 차트용) |
 | `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각 |
-| `trends` | 고정 API로 수집한 트렌드 요약 |
+| `trends` | 재평가 때 변경이 감지된 외부 자료의 Gemini 요약 (`evaluations.trend_id`로 연결) |
 
 ---
 
