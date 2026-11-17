@@ -36,7 +36,8 @@ public enum ErrorCode {
     // ===== Idea (아이디어, I-xxx) =====
     IDEA_NOT_FOUND(HttpStatus.NOT_FOUND, "I001", "아이디어를 찾을 수 없습니다."),
     IDEA_ACCESS_DENIED(HttpStatus.FORBIDDEN, "I002", "본인의 아이디어만 조회할 수 있습니다."),
-    INVALID_WEIGHT(HttpStatus.BAD_REQUEST, "I003", "가중치는 4개 항목을 모두 0~100 정수로 입력하고 합이 100이어야 합니다.");
+    INVALID_WEIGHT(HttpStatus.BAD_REQUEST, "I003", "가중치는 4개 항목을 모두 0~100 정수로 입력하고 합이 100이어야 합니다."),
+    IDEA_NOT_ACTIVE(HttpStatus.CONFLICT, "I004", "구조화 항목이 모두 채워지지 않은 보류 아이디어는 평가할 수 없습니다.");
 
     private final HttpStatus status;
     private final String code;

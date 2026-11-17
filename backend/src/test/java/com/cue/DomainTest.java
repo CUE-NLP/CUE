@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.entity.Idea;
+import com.cue.idea.entity.IdeaStatus;
 import com.cue.idea.entity.IdeaType;
 import com.cue.score.entity.Score;
 import com.cue.score.entity.ScoreType;
@@ -86,5 +87,39 @@ class DomainTest {
         assertThrows(CustomException.class, () -> idea.reserveWeights(weights(-10, 40, 40, 30)));
         assertThrows(CustomException.class, () -> idea.reserveWeights(Map.of(ScoreType.MARKET_DEMAND, 100)));
         assertThrows(CustomException.class, () -> idea.reserveWeights(null));
+    }
+
+    @Test
+    void 네_항목이_모두_채워져야_ACTIVE_하나라도_비면_HOLD() {
+        assertEquals(IdeaStatus.ACTIVE, new Idea(null, IdeaType.IT, "p", "t", "s", "e").getStatus());
+        assertEquals(IdeaStatus.HOLD, new Idea(null, IdeaType.IT, "p", "t", "s", null).getStatus());
+        assertEquals(IdeaStatus.HOLD, new Idea(null, IdeaType.IT, "p", "  ", "s", "e").getStatus());
+    }
+
+    @Test
+    void 수정하면_상태를_다시_판단한다() {
+        Idea idea = new Idea(null, IdeaType.IT, "p", "t", "s", null);
+        idea.edit(null, null, null, "e"); // null은 유지, 빈 항목을 채움
+        assertEquals(IdeaStatus.ACTIVE, idea.getStatus());
+        assertEquals("p", idea.getProblem());
+
+        idea.edit(null, "", null, null); // 빈 문자열은 비움
+        assertEquals(IdeaStatus.HOLD, idea.getStatus());
+        assertNull(idea.getTarget());
+    }
+
+    @Test
+    void 확인하지_않은_새_평가가_있을_때만_새_변화로_본다() {
+        Idea idea = new Idea(null, IdeaType.IT, "p", "t", "s", "e");
+        assertFalse(idea.hasNewChange()); // 평가 없음
+
+        idea.recordEvaluation(new BigDecimal("3"), java.time.LocalDateTime.now());
+        assertTrue(idea.hasNewChange());
+
+        idea.markChecked();
+        assertFalse(idea.hasNewChange());
+
+        idea.recordEvaluation(new BigDecimal("-1"), java.time.LocalDateTime.now().plusSeconds(1));
+        assertTrue(idea.hasNewChange());
     }
 }

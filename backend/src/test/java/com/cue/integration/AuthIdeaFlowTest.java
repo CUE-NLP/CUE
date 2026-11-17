@@ -153,4 +153,148 @@ class AuthIdeaFlowTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("G006"));
     }
+
+    // ===== 보류/활성, 수정, 확인, 평가 이력 =====
+
+    @Autowired com.cue.source.repository.SourceRepository sourceRepository;
+    @Autowired com.cue.evaluation.service.EvaluationService evaluationService;
+
+    private long createIdea(String token, String body) throws Exception {
+        String res = mvc.perform(post("/api/ideas").header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        return mapper.readTree(res).get("data").get("id").asLong();
+    }
+
+    private long sourceCount(long ideaId) {
+        return sourceRepository.findAll().stream().filter(s -> s.getIdea().getId() == ideaId).count();
+    }
+
+    private static final String FULL = "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\","
+            + "\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}";
+
+    @Test
+    void 항목이_비어_있으면_HOLD로_저장되고_키워드를_추출하지_않는다() throws Exception {
+        String token = signUpAndLogin("hold@cue.com");
+        long id = createIdea(token, "{\"problem\":\"p\",\"target\":\"t\"}");
+
+        mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
+                .andExpect(jsonPath("$.data.status").value("HOLD"));
+        org.junit.jupiter.api.Assertions.assertEquals(0, sourceCount(id));
+
+        // 기본 목록(ACTIVE)에는 없고 HOLD 목록에는 있다
+        mvc.perform(get("/api/ideas").header("Authorization", token))
+                .andExpect(jsonPath("$.data.length()").value(0));
+        mvc.perform(get("/api/ideas?status=HOLD").header("Authorization", token))
+                .andExpect(jsonPath("$.data.length()").value(1));
+    }
+
+    @Test
+    void 모두_채워지면_ACTIVE이고_종류별_API_곱하기_키워드로_수집_설정이_만들어진다() throws Exception {
+        String token = signUpAndLogin("active@cue.com");
+        long id = createIdea(token, FULL);
+
+        mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
+                .andExpect(jsonPath("$.data.status").value("ACTIVE"));
+        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id)); // 3 providers x 3 keywords
+    }
+
+    @Test
+    void 수정으로_모두_채우면_ACTIVE가_되고_키워드를_추출하며_비우면_다시_HOLD() throws Exception {
+        String token = signUpAndLogin("edit@cue.com");
+        long id = createIdea(token, "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\",\"solution\":\"질문 정리 도구\"}");
+
+        mvc.perform(patch("/api/ideas/" + id).header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectation\":\"시간 절약\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.data.problem").value("개발 질문이 흩어져 있다"));
+        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id));
+
+        // 다시 수정해도 수집 설정이 중복되지 않는다
+        mvc.perform(patch("/api/ideas/" + id).header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"solution\":\"새로운 해결 방법 제안\"}"))
+                .andExpect(status().isOk());
+        org.junit.jupiter.api.Assertions.assertEquals(9, sourceCount(id));
+
+        mvc.perform(patch("/api/ideas/" + id).header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"target\":\"\"}"))
+                .andExpect(jsonPath("$.data.status").value("HOLD"));
+    }
+
+    @Test
+    void 점수가_바뀌면_평가_이력_총점_이력_새변화가_기록되고_확인하면_해제된다() throws Exception {
+        String token = signUpAndLogin("eval@cue.com");
+        long id = createIdea(token, FULL);
+
+        // 변화가 없으면 아무것도 기록하지 않는다 (날짜도 갱신 안 함)
+        org.junit.jupiter.api.Assertions.assertFalse(evaluationService.recordChanges(id, java.util.List.of()));
+        mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
+                .andExpect(jsonPath("$.data.hasNewChange").value(false))
+                .andExpect(jsonPath("$.data.lastEvaluatedAt").doesNotExist());
+
+        evaluationService.recordChanges(id, java.util.List.of(
+                new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.MARKET_DEMAND,
+                        new java.math.BigDecimal("80"), "수요가 크다",
+                        java.util.List.of(new com.cue.evaluation.dto.ReferenceInput(
+                                "https://github.com/trending", "GitHub Trending", com.cue.source.entity.ApiProvider.GITHUB))),
+                new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.TECH_FEASIBILITY,
+                        new java.math.BigDecimal("40"), "구현 가능", null)));
+
+        // 총점 = (80 + 40) * 0.25 = 30, 변화량 30
+        mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
+                .andExpect(jsonPath("$.data.totalScore").value(30.0))
+                .andExpect(jsonPath("$.data.lastDifference").value(30.0))
+                .andExpect(jsonPath("$.data.hasNewChange").value(true));
+
+        mvc.perform(get("/api/ideas/" + id + "/evaluations").header("Authorization", token))
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].difference").value(80.0))
+                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].weightPercent").value(25))
+                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].references[0].url")
+                        .value("https://github.com/trending"));
+
+        mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].totalScore").value(30.0))
+                .andExpect(jsonPath("$.data[0].totalDifference").value(30.0));
+
+        mvc.perform(post("/api/ideas/" + id + "/check").header("Authorization", token))
+                .andExpect(jsonPath("$.data.hasNewChange").value(false));
+
+        // 두 번째 평가: 총점은 35로 오르지만 변화량은 5로 작다
+        evaluationService.recordChanges(id, java.util.List.of(
+                new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.MARKET_DEMAND,
+                        new java.math.BigDecimal("20"), "수요가 더 커짐", null)));
+        mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[1].totalScore").value(35.0))
+                .andExpect(jsonPath("$.data[1].totalDifference").value(5.0));
+
+        // 최근 상승 정렬은 변화량(25 > 5), 총점 정렬은 총점(35 > 25) 기준이다
+        long other = createIdea(token, FULL);
+        evaluationService.recordChanges(other, java.util.List.of(
+                new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.MARKET_DEMAND,
+                        new java.math.BigDecimal("100"), "아주 큰 수요", null)));
+        mvc.perform(get("/api/ideas?sort=RECENT_RISE").header("Authorization", token))
+                .andExpect(jsonPath("$.data[0].id").value(other));
+        mvc.perform(get("/api/ideas?sort=TOTAL").header("Authorization", token))
+                .andExpect(jsonPath("$.data[0].id").value(id));
+    }
+
+    @Test
+    void 보류_아이디어는_평가할_수_없다() throws Exception {
+        String token = signUpAndLogin("holdeval@cue.com");
+        long id = createIdea(token, "{\"problem\":\"p\"}");
+        org.junit.jupiter.api.Assertions.assertThrows(com.cue.global.error.CustomException.class,
+                () -> evaluationService.recordChanges(id, java.util.List.of()));
+    }
+
+    @Test
+    void 잘못된_정렬_값은_400() throws Exception {
+        String token = signUpAndLogin("badsort@cue.com");
+        mvc.perform(get("/api/ideas?sort=NOPE").header("Authorization", token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("G004"));
+    }
 }

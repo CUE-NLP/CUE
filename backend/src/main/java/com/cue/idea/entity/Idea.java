@@ -33,20 +33,37 @@ public class Idea {
     @Column(nullable = false, length = 30)
     private IdeaType type;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    /** 서버가 4개 항목 채움 여부로 결정한다. 클라이언트가 보낸 값은 쓰지 않는다. */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private IdeaStatus status;
+
+    @Column(columnDefinition = "TEXT")
     private String problem;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(columnDefinition = "TEXT")
     private String target;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(columnDefinition = "TEXT")
     private String solution;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(columnDefinition = "TEXT")
     private String expectation;
 
     @Column(name = "total_score", nullable = false, precision = 7, scale = 2)
     private BigDecimal totalScore = BigDecimal.ZERO;
+
+    /** 가장 최근 평가에서의 총점 변화량. 평가가 없으면 null. 리더보드 "최근 상승" 정렬에 쓴다. */
+    @Column(name = "last_difference", precision = 7, scale = 2)
+    private BigDecimal lastDifference;
+
+    /** 가장 최근에 점수가 바뀐 평가 시각. 변화가 없어 평가가 일어나지 않았다면 갱신하지 않는다. */
+    @Column(name = "last_evaluated_at")
+    private LocalDateTime lastEvaluatedAt;
+
+    /** 사용자가 최신 점수를 확인한 시각. 이후 평가가 있으면 "새로운 변화"로 본다. */
+    @Column(name = "last_checked_at")
+    private LocalDateTime lastCheckedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
@@ -57,13 +74,62 @@ public class Idea {
     public Idea(User user, IdeaType type, String problem, String target, String solution, String expectation) {
         this.user = user;
         this.type = type;
-        this.problem = problem;
-        this.target = target;
-        this.solution = solution;
-        this.expectation = expectation;
+        this.problem = blankToNull(problem);
+        this.target = blankToNull(target);
+        this.solution = blankToNull(solution);
+        this.expectation = blankToNull(expectation);
+        refreshStatus();
         for (ScoreType scoreType : ScoreType.values()) {
             scores.add(new Score(this, scoreType, scoreType.defaultWeight()));
         }
+    }
+
+    public boolean isActive() {
+        return status == IdeaStatus.ACTIVE;
+    }
+
+    /** 4개 항목이 모두 채워졌으면 ACTIVE, 아니면 HOLD. */
+    private void refreshStatus() {
+        boolean complete = problem != null && target != null && solution != null && expectation != null;
+        status = complete ? IdeaStatus.ACTIVE : IdeaStatus.HOLD;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** 항목 수정. null이면 그대로 두고, 빈 문자열이면 비운다. 수정 후 상태를 다시 판단한다. */
+    public void edit(String problem, String target, String solution, String expectation) {
+        if (problem != null) this.problem = blankToNull(problem);
+        if (target != null) this.target = blankToNull(target);
+        if (solution != null) this.solution = blankToNull(solution);
+        if (expectation != null) this.expectation = blankToNull(expectation);
+        refreshStatus();
+    }
+
+    /** AI가 다시 추출한 아이디어 종류를 반영한다. */
+    public void changeType(IdeaType type) {
+        this.type = type;
+    }
+
+    public Score score(ScoreType type) {
+        return scores.stream().filter(s -> s.getType() == type).findFirst().orElseThrow();
+    }
+
+    /** 사용자가 최신 점수를 확인했음을 기록한다. */
+    public void markChecked() {
+        lastCheckedAt = LocalDateTime.now();
+    }
+
+    /** 확인하지 않은 새 평가가 있는지. */
+    public boolean hasNewChange() {
+        return lastEvaluatedAt != null && (lastCheckedAt == null || lastEvaluatedAt.isAfter(lastCheckedAt));
+    }
+
+    /** 평가로 총점이 바뀐 시점의 변화량·시각을 기록한다. */
+    public void recordEvaluation(BigDecimal totalDifference, LocalDateTime evaluatedAt) {
+        lastDifference = totalDifference;
+        lastEvaluatedAt = evaluatedAt;
     }
 
     /** 항목별 점수의 가중합으로 총점을 다시 계산한다. */
