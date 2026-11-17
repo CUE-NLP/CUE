@@ -59,6 +59,9 @@ cue:
     max-redirects: 3
     # 같은 URL의 항목 요약을 재사용하는 기간(일). 0이면 항상 다시 요약
     summary-reuse-days: ${SOURCE_SUMMARY_REUSE_DAYS:7}
+    # 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자)
+    batch-content-chars: ${SOURCE_BATCH_CONTENT_CHARS:4000}
+    batch-total-chars: ${SOURCE_BATCH_TOTAL_CHARS:16000}
     github:
       token: ${GITHUB_TOKEN:}
     hugging-face:

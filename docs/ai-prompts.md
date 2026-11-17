@@ -66,6 +66,32 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 ```
 - 원문이 비었거나 의미가 없으면 `{"summary":""}` — 서버는 그 항목을 건너뛴다.
 
+### item-summary-batch.txt
+목적: **키워드 근거 자료**의 source 하나의 상위 항목 N개를 **한 번의 호출로** 요약한다(항목마다 호출하던 `item-summary.txt` 대체). 항목마다 번호·제목·URL·날짜·지표·원문 일부를 넣는다. 원문은 항목당 `cue.source.batch-content-chars`(4000자), 한 호출 합계 `batch-total-chars`(16000자)로 자른다. 결과는 `source_items`에 저장된다.
+
+| 플레이스홀더 | 설명 |
+| --- | --- |
+| `{{keyword}}` | 이 source의 검색 키워드 |
+| `{{items}}` | 항목 목록: `[번호] 제목: … / URL: … / 날짜·지표: … / 원문: …` 블록을 항목마다 (원문은 신뢰하지 않는 데이터) |
+
+출력 스키마와 예시:
+```json
+{"items":[{"url":"https://github.com/example/agent-kit","summary":"에이전트 워크플로를 코드로 정의해 실행하는 오픈소스 프레임워크다. 문서화된 예제가 많지만 대규모 운영 사례는 README에 없다."}]}
+```
+- 서버 검증(`ItemBatchSummarizer`): `url`이 입력에 있던 것만, 같은 url 중복은 첫 번째만, 빈 요약은 버림, 요약 500자 제한. 빠진 항목은 건너뛰고 원래 조회한 짧은 요약을 쓴다. `responseSchema`로 형식을 강제한다.
+
+### trend-item-summary-batch.txt
+목적: **글로벌 트렌드**(키워드 없음)의 provider 하나의 상위 항목 N개를 한 번의 호출로 요약한다. `item-summary-batch.txt`와 같은 규칙에서 `{{keyword}}`만 뺐다. 결과는 `trend_items`에 저장된다.
+
+| 플레이스홀더 | 설명 |
+| --- | --- |
+| `{{items}}` | 항목 목록 (위와 같은 형식) |
+
+출력 스키마와 예시:
+```json
+{"items":[{"url":"https://news.ycombinator.com/item?id=1","summary":"브라우저에서 돌아가는 소형 음성 인식 모델의 오픈소스 구현이다. 서버 없이 기기 안에서 추론하려는 흐름을 보여준다."}]}
+```
+
 ### trend-item-summary.txt
 목적: **글로벌 트렌드**(키워드 없음)의 상위 항목 **한 건의 원문**을 읽고 2~3문장으로 요약한다. `item-summary.txt`와 같은 규칙에서 `{{keyword}}`만 뺐다. 결과는 `trend_items`에 저장된다(같은 URL은 `summary-reuse-days` 안이면 재사용).
 

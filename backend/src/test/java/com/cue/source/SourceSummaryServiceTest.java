@@ -53,7 +53,7 @@ class SourceSummaryServiceTest {
 
     private SourceSummaryService service(int topN, int reuseDays) {
         SourceApiProperties props = new SourceApiProperties(Duration.ofSeconds(3), Duration.ofSeconds(5), topN, 30,
-                8000, 1048576, 3, reuseDays, null, null, null, null);
+                8000, 1048576, 3, reuseDays, 4000, 16000, null, null, null, null);
         return new SourceSummaryService(List.of(client), gemini, new PromptLoader(), sources, itemRepo,
                 new TransactionTemplate(mock(PlatformTransactionManager.class)), props);
     }
