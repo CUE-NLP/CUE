@@ -169,6 +169,10 @@ cd CUE/backend
 - 통합 테스트는 Docker가 켜져 있어야 통과한다.
 - 프론트 연동: 아직 **CORS 설정이 없다.** 프론트가 브라우저에서 호출하기 시작하면 허용 도메인을 설정해야 한다 (TODO).
 
+## AI 프롬프트
+- Gemini 프롬프트는 `src/main/resources/prompts/`(`trend-summary.txt`, `initial-evaluation.txt`, `re-evaluation.txt`)에 있고 플레이스홀더는 `{{name}}` 형식이다. 입력·출력 JSON 규격, 점수 앵커, 운용 팁은 [docs/ai-prompts.md](../docs/ai-prompts.md).
+- **프롬프트를 바꾸면 `docs/ai-prompts.md`(플레이스홀더 표·JSON 예시)와 `PromptTemplatesTest`를 함께 갱신한다.** 파일명·플레이스홀더·출력 JSON 키는 `PromptLoader`/평가 코드와의 계약이다.
+
 ## 실행·테스트
 ```bash
 cd backend && ./gradlew bootRun    # 루트 docker-compose.yml의 DB를 자동 기동 (어느 디렉터리에서 실행해도 됨)
@@ -176,7 +180,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
 - 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`.
-- 테스트: `DomainTest`(순수 단위), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리).
+- 테스트: `DomainTest`(순수 단위), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리).
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
