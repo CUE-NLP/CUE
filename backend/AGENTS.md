@@ -32,7 +32,7 @@ user/         controller / service / repository / entity / dto — 회원가입,
 idea/         controller / service / repository / entity / dto — 아이디어 저장·조회·리더보드·가중치
 score/        entity (Score, ScoreType)
 evaluation/   controller 없음. entity (Evaluation, EvaluationReference, IdeaScoreHistory) / repository / service (EvaluationService) / dto (ScoreChange, ReferenceInput)
-source/       entity (Source, ApiProvider) / repository
+source/       entity (Source, ApiProvider) / repository / client (SourceClient + GitHub·HuggingFace·StackExchange) / service (SourceCheckService, SourceHasher) / dto / config (SourceApiProperties, SourceClientConfig)
 trend/        entity (Trend)
 ```
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
@@ -61,7 +61,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 서비스는 DTO를 반환하고, 래핑은 컨트롤러에서 한다.
 
 ### 에러: `ErrorCode` 하나로 관리
-- `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
+- `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
 - JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효 `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
 - 필터 단계 에러(401/403)는 `SecurityErrorWriter`가 CommonResponse로 응답한다.
@@ -106,7 +106,11 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `GET /api/ideas?status=ACTIVE|HOLD&sort=TOTAL|RECENT_RISE`. 기본은 `ACTIVE` + `TOTAL`(총점순). `RECENT_RISE`는 `last_difference` 내림차순(없으면 뒤). 보류 탭은 `status=HOLD`.
 
 ### 외부 자료 변경 감지
-- `Source.updateHash(newHash)`가 이전 해시와 다르면 true. 변경이 있을 때만 재평가를 트리거한다.
+- `Source.updateHash(newHash)`가 이전 해시와 다르면 true(첫 조회는 해시만 기록하고 false). 변경이 있을 때만 재평가를 트리거한다.
+- `SourceClient`(provider당 구현체 1개, 빈으로 등록하면 자동 인식)가 RestClient로 키워드 검색 상위 5건을 `SourceItem(title,url,summary)`로 반환한다. 현재 구현: GITHUB(저장소, stars순), HUGGING_FACE(모델, downloads순), STACK_EXCHANGE(Stack Overflow, votes순). 나머지 provider는 `SourceClient` 구현 빈만 추가하면 된다 (없으면 `S002`).
+- `SourceCheckService.check(sourceId)`: 조회 → `SourceHasher`(제목·URL·요약의 SHA-256 hex) → `updateHash`로 `content_hash`·`checked_at` 갱신 → `SourceCheckResult`(CHANGED는 items 포함 / UNCHANGED). `checkAll(ideaId)`는 한 source가 실패해도 계속하고 실패는 `FAILED` 결과(해시·시각 유지)로 담는다. 외부 오류(4xx/5xx·타임아웃·파싱 실패)는 `G002`, 없는 source `S001`, 미지원 provider `S002`.
+- 외부 HTTP 호출 중 DB 트랜잭션을 잡지 않으려고 이 서비스만 `@Transactional`을 쓰지 않는다 (저장은 `repository.save` 단위). 해시 입력에서 별점·갱신일 등 자주 변하는 값은 뺀다.
+- 스케줄러·평가 연결은 아직 없다 (evaluation 후속 작업).
 
 ## API 현황
 | Method | Path | 인증 | 설명 |
@@ -159,8 +163,11 @@ cd CUE/backend
 | `JWT_SECRET` | 개발용 임시 값 | **개발 서버·운영에서는 반드시 교체** (32바이트 이상). 서버 인스턴스끼리 같은 값이어야 한다 |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간 |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 자동 기동 여부. `bootRun`이 켜 준다 |
+| `GITHUB_TOKEN` | 없음 | 선택. GitHub 검색 rate limit 완화 |
+| `HUGGING_FACE_TOKEN` | 없음 | 선택. Hugging Face API 토큰 |
+| `STACK_EXCHANGE_KEY` | 없음 | 선택. Stack Exchange API key (일일 쿼터 증가) |
 
-- 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 키(Gemini 등)가 추가되면 이 표에 변수 이름을 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
+- 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 토큰(위 선택 값)과 Gemini 등 키가 추가되면 이 표에 변수 이름을 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
 
 ### 협업 시 주의
 - **`V1__init.sql` 충돌**: 개발 중에는 모두가 이 한 파일을 고치므로 충돌이 잦다. 스키마 변경 PR은 작게 유지하고 머지 전에 `main`을 반영한다. 스키마 확정 후에는 이 파일을 고정하고 `V2__*.sql`부터 추가한다.
@@ -176,7 +183,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
 - 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`.
-- 테스트: `DomainTest`(순수 단위), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리).
+- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리).
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
@@ -188,7 +195,8 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ## 미구현·TODO
 - 24시간 주기 평가 스케줄러(`@Scheduled`): 대상은 `ACTIVE` 아이디어. 평가 시작 직전 `Idea.startNextTurn()` → 외부 API 수집(`Source.updateHash`로 변경 감지) → AI 평가 → `EvaluationService.recordChanges`로 저장. 아직 어디서도 `startNextTurn()`을 호출하지 않는다. 가중치 적용만으로 총점이 바뀌는 경우의 `idea_score_histories` 기록과, 등록·수정 직후 첫 평가·재평가 연결도 여기서 정한다.
 - `IdeaAnalyzer` Gemini 구현 (현재 `SimpleIdeaAnalyzer` 임시 구현). `evaluations.trend_id`에 트렌드 연결(현재 null).
-- 외부 API 클라이언트(GitHub, Hugging Face, Stack Exchange, Hacker News, Semantic Scholar, Wikipedia Pageviews)와 Gemini 연동 (예외는 `G002 EXTERNAL_SERVER_ERROR` 사용).
+- 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange는 구현됨. Hacker News·Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가). 트렌드 수집(`TREND_PROVIDERS`)과 Gemini 연동도 남음.
+- **열린 결정**: 트렌드용 고정 4개 API와 종류별 검색 API 조합을 팀이 확정해야 한다. 확정되면 `IdeaType.searchProviders`/`ApiProvider.TREND_PROVIDERS`를 고치고 필요한 provider 클라이언트를 추가한다. 해시에 넣는 필드(현재 제목·URL·요약, 상위 5건)도 평가 정책과 함께 재검토.
 - 외부 API 조합(`IdeaType.searchProviders`, `ApiProvider.TREND_PROVIDERS`) 팀 확정.
 - 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
 - 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.

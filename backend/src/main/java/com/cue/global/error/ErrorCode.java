@@ -6,7 +6,7 @@ import org.springframework.http.HttpStatus;
 
 /**
  * 서비스 전체 에러 코드. 새 에러는 도메인 구분 주석 아래에 추가한다.
- * 코드 형식: {도메인 영문자 1자}{3자리 번호} (G: 공통, A: 인증, U: 사용자, I: 아이디어). 코드는 전체에서 유일해야 한다.
+ * 코드 형식: {도메인 영문자 1자}{3자리 번호} (G: 공통, A: 인증, U: 사용자, I: 아이디어, S: 외부 자료 수집). 코드는 전체에서 유일해야 한다.
  */
 @Getter
 @RequiredArgsConstructor
@@ -37,7 +37,11 @@ public enum ErrorCode {
     IDEA_NOT_FOUND(HttpStatus.NOT_FOUND, "I001", "아이디어를 찾을 수 없습니다."),
     IDEA_ACCESS_DENIED(HttpStatus.FORBIDDEN, "I002", "본인의 아이디어만 조회할 수 있습니다."),
     INVALID_WEIGHT(HttpStatus.BAD_REQUEST, "I003", "가중치는 4개 항목을 모두 0~100 정수로 입력하고 합이 100이어야 합니다."),
-    IDEA_NOT_ACTIVE(HttpStatus.CONFLICT, "I004", "구조화 항목이 모두 채워지지 않은 보류 아이디어는 평가할 수 없습니다.");
+    IDEA_NOT_ACTIVE(HttpStatus.CONFLICT, "I004", "구조화 항목이 모두 채워지지 않은 보류 아이디어는 평가할 수 없습니다."),
+
+    // ===== Source (외부 자료 수집, S-xxx) — 외부 API 통신 오류 자체는 G002 =====
+    SOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "S001", "수집 설정(source)을 찾을 수 없습니다."),
+    SOURCE_PROVIDER_NOT_SUPPORTED(HttpStatus.NOT_IMPLEMENTED, "S002", "아직 지원하지 않는 외부 API입니다.");
 
     private final HttpStatus status;
     private final String code;

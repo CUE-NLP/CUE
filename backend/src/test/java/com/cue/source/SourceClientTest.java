@@ -1,0 +1,82 @@
+package com.cue.source;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.*;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
+
+import com.cue.global.error.CustomException;
+import com.cue.global.error.ErrorCode;
+import com.cue.source.client.*;
+import com.cue.source.dto.SourceItem;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.zip.GZIPOutputStream;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestClient;
+
+class SourceClientTest {
+
+    private static MockRestServiceServer bind(RestClient.Builder b) {
+        return MockRestServiceServer.bindTo(b).build();
+    }
+
+    @Test
+    void GitHub_검색_결과를_제목_URL_요약으로_변환한다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://gh.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://gh.test/search/repositories?q=ai%20idea")))
+                .andExpect(queryParam("per_page", "5"))
+                .andRespond(withSuccess("{\"items\":[{\"full_name\":\"a/b\",\"html_url\":\"https://github.com/a/b\",\"description\":null}]}",
+                        MediaType.APPLICATION_JSON));
+        List<SourceItem> items = new GithubSourceClient(b.build()).search("ai idea");
+        assertEquals(List.of(new SourceItem("a/b", "https://github.com/a/b", "")), items);
+        server.verify();
+    }
+
+    @Test
+    void HuggingFace_모델_URL을_만든다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://hf.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://hf.test/api/models?search=bert")))
+                .andRespond(withSuccess("[{\"id\":\"org/bert\",\"pipeline_tag\":\"fill-mask\"}]", MediaType.APPLICATION_JSON));
+        List<SourceItem> items = new HuggingFaceSourceClient(b.build(), "https://hf.test").search("bert");
+        assertEquals(new SourceItem("org/bert", "https://hf.test/org/bert", "fill-mask"), items.get(0));
+    }
+
+    @Test
+    void StackExchange_gzip_응답을_풀고_제목_HTML을_복원한다() throws Exception {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://se.test");
+        MockRestServiceServer server = bind(b);
+        String json = "{\"items\":[{\"title\":\"What&#39;s up?\",\"link\":\"https://so/q/1\",\"tags\":[\"java\",\"spring\"]}]}";
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (GZIPOutputStream gz = new GZIPOutputStream(bos)) {
+            gz.write(json.getBytes(StandardCharsets.UTF_8));
+        }
+        server.expect(requestTo(org.hamcrest.Matchers.containsString("key=k1")))
+                .andRespond(withSuccess(bos.toByteArray(), MediaType.APPLICATION_JSON));
+        List<SourceItem> items = new StackExchangeSourceClient(b.build(), "k1").search("spring");
+        assertEquals(new SourceItem("What's up?", "https://so/q/1", "java,spring"), items.get(0));
+    }
+
+    @Test
+    void 외부_서버_오류는_G002로_변환된다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://gh.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://gh.test"))).andRespond(withStatus(HttpStatus.FORBIDDEN));
+        CustomException e = assertThrows(CustomException.class, () -> new GithubSourceClient(b.build()).search("x"));
+        assertEquals(ErrorCode.EXTERNAL_SERVER_ERROR, e.getErrorCode());
+    }
+
+    @Test
+    void JSON이_아닌_응답도_G002로_변환된다() {
+        RestClient.Builder b = RestClient.builder().baseUrl("https://gh.test");
+        MockRestServiceServer server = bind(b);
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://gh.test"))).andRespond(withSuccess("<html>", MediaType.TEXT_HTML));
+        CustomException e = assertThrows(CustomException.class, () -> new GithubSourceClient(b.build()).search("x"));
+        assertEquals(ErrorCode.EXTERNAL_SERVER_ERROR, e.getErrorCode());
+    }
+}
