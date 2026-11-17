@@ -33,7 +33,7 @@ user/         controller / service / repository / entity / dto — 회원가입,
 idea/         controller / service / repository / entity / dto — 아이디어 저장·조회·리더보드·가중치
 score/        entity (Score, ScoreType — 5개 기준: 근거 4개 + TREND)
 evaluation/   controller 없음. (EvaluationJobService=비동기 직렬 실행·상태 기록, AutoEvaluationStarter=저장 직후 자동 큐 투입, EvaluationStateRecovery=부팅 시 상태 정리, config/EvaluationExecutorConfig=단일 스레드 실행기) entity (Evaluation, EvaluationReference, IdeaScoreHistory) / repository / service (EvaluationService=저장·턴 시작, DailyEvaluationService=아이디어 1개 파이프라인(근거 4개 기준 + TREND 두 갈래), EvaluationAnalyzer=키워드 근거 4개 기준 Gemini 호출·변환·클램프, TrendEvaluator=TREND 호출·변환·클램프, EvaluationBatchService, EvaluationScheduler) / config (EvaluationProperties) / dto (ScoreChange, ReferenceInput, IdeaSnapshot, EvaluationRunResult)
-source/       entity (Source, SourceItemSummary, ApiProvider) / repository / client (SourceClient + GitHub·HuggingFace·StackExchange·HackerNews, SearchSettings) / fetch (WebContentFetcher, UrlGuard, JdkTransport, HtmlText) / service (SourceCheckService, SourceSummaryService, SourceHasher) / dto / config (SourceApiProperties, SourceClientConfig)
+source/       entity (Source, SourceItemSummary, ApiProvider) / repository / client (SourceClient + GitHub·HuggingFace·StackExchange·HackerNews·SemanticScholar·WikipediaPageviews, SearchSettings) / fetch (WebContentFetcher, UrlGuard, JdkTransport, HtmlText) / service (SourceCheckService, SourceSummaryService, SourceHasher) / dto / config (SourceApiProperties, SourceClientConfig)
 trend/        entity (Trend, TrendSource, TrendItem) / repository / service (GlobalTrendService — 글로벌 트렌드 하루 1회 수집·요약·저장) / config (TrendProperties) / dto (TrendSnapshot)
 ```
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
@@ -113,17 +113,19 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - **호출량과 무료 티어 대응** — source(또는 트렌드 provider) 하나의 항목은 **한 번의 일괄 호출**로 요약한다(항목마다 호출하던 방식 폐기). source당 Gemini 호출 = **일괄 항목 요약 1회 + 소스 요약 1회 = 2회**, 저장된 요약을 전부 재사용하면 소스 요약 1회뿐이다.
   - **B. 글로벌 트렌드(하루 1회 고정, 아이디어 수와 무관)**: provider 3개 × 2 + 최종 요약 1 = **7회/일**(해시가 같으면 0회). `TREND_TOP_N`은 호출 수가 아니라 일괄 호출의 입력 크기에만 영향을 준다.
   - **TREND 평가(아이디어당)**: 새 트렌드가 만들어진 날(또는 아이디어 첫 평가) 1회, 트렌드가 같으면 0회.
-  - **A. 키워드 근거(아이디어당, 변경된 source만)**: source = provider × 키워드(키워드 최대 3개). 변경된 source마다 2회 + 근거 평가(초기/재평가) 1회 = 2×(변경 source 수) + 1. 변경도 전체 평가 플래그도 없으면 0회.
+  - **A. 키워드 근거(아이디어당, 변경된 source만)**: 아이디어 세부 종류가 정하는 **provider 3개** × 키워드 **최대 2개** = **source 최대 6개**(조합은 PR #4의 세부 종류 enum이 결정: AI_ML = Hugging Face·Semantic Scholar·GitHub, DEV_TOOLS_INFRA = GitHub·Stack Exchange·Hacker News, WEB_APP_SERVICE = Hacker News·Stack Exchange·Wikipedia Pageviews, DATA_ANALYTICS = GitHub·Hugging Face·Semantic Scholar). 변경된 source마다 2회 + 근거 평가(초기/재평가) 1회 = 2×(변경 source 수) + 1. 변경도 전체 평가 플래그도 없으면 0회.
 
-| 아이디어 종류 / 키워드 수 | source 수 | A 최악(전부 변경) | + TREND 1 | 하루 총합 (트렌드 7 + 아이디어당) |
-| --- | --- | --- | --- | --- |
-| IT (provider 4) / 3개 | 12 | 12×2+1 = 25 | **26** | 7 + 26×N |
-| IT / 2개 | 8 | 8×2+1 = 17 | **18** | 7 + 18×N |
-| 그 외 (provider 3) / 3개 | 9 | 9×2+1 = 19 | **20** | 7 + 20×N |
-| 그 외 / 2개 | 6 | 6×2+1 = 13 | **14** | 7 + 14×N |
+| 상황 | 호출 수 |
+| --- | --- |
+| 글로벌 트렌드(하루 1회, 아이디어 수와 무관) | 3×2+1 = **7회/일** (해시 같으면 0) |
+| 아이디어 1개, 근거 source 6개 모두 변경 | 6×2 + 1(근거 평가) = **13회** |
+| 위 + TREND 평가 | 13 + 1 = **최악 14회/아이디어** |
+| source 3개만 변경 | 3×2+1 = 7회 (+ TREND 1) |
+| 새 트렌드만 있음 | 1회 (TREND) |
+| 변경도 새 트렌드도 없음 | 0회 |
 
-  - 예: IT·키워드 3개에서 변경이 3개뿐이면 3×2+1 = 7, 새 트렌드만 있으면 1(TREND), 둘 다 없으면 0. (이전 방식은 최악 74회였다.)
-  - 호출 간격: `GEMINI_MIN_INTERVAL_MS`(기본 6500ms ≈ 분당 9회)는 **호출당** 적용되므로 소요 시간 ≈ 호출 수 × 6.5초. 트렌드 수집 7회 ≈ 45초, 최악 아이디어(26회) ≈ 2분 50초, IT·키워드 2개 최악(18회) ≈ 2분. 아이디어 사이 대기는 `EVALUATION_DELAY_MS`. 일일 한도(RPD)는 키 수령 후 확인이 필요하며 한도에 닿으면 `G002`로 그 갈래가 실패하고(A는 해시 복구, B는 평가 완료 미기록) 다음 배치에서 다시 시도한다.
+  - 하루 총합 = 7(트렌드) + Σ아이디어(최대 14). 키워드가 1개면 source 3개라 최악 8회/아이디어. (예전의 "IT 4 provider × 키워드 3개 = 12 source, 최악 26회" 가정은 폐기.)
+  - 호출 간격: `GEMINI_MIN_INTERVAL_MS`(기본 6500ms ≈ 분당 9회)는 **호출당** 적용되므로 소요 시간 ≈ 호출 수 × 6.5초. 트렌드 수집 7회 ≈ 45초, 최악 아이디어(14회) ≈ **1분 30초**. 아이디어 N개가 한 줄로 직렬 처리되므로 최악 총 시간 ≈ 45초 + N × 1분 30초 (아이디어 사이 대기 `EVALUATION_DELAY_MS`는 배치에서만 추가). 일일 한도(RPD)는 키 수령 후 확인이 필요하며 한도에 닿으면 `G002`로 그 갈래가 실패하고(A는 해시 복구, B는 평가 완료 미기록) 다음 배치에서 다시 시도한다.
   - **일괄 요약의 입력 크기**: 항목당 원문은 `SOURCE_BATCH_CONTENT_CHARS`(기본 4000자, 단건 모드의 8000보다 작게), 한 호출 합계는 `SOURCE_BATCH_TOTAL_CHARS`(기본 16000자)로 자른다(넘으면 항목당 길이를 균등하게 줄임, 최소 200자). 응답은 `{"items":[{"url","summary"}]}`이며 서버가 검증한다(입력에 있던 URL만·중복 제거·500자 제한, 빠진 항목은 건너뛰고 원래 조회한 짧은 요약 사용).
   - **항목 요약과 소스 요약을 한 호출로 합치지 않은 이유**: 호출이 source당 1회로 줄지만 ① 응답이 길어져 JSON이 잘리거나 항목 요약 품질이 떨어질 위험이 있고 ② 항목 요약이 전부 재사용된 날에도 소스 요약은 따로 필요해 결국 호출 경로가 둘로 갈라진다. 한도가 더 부족하면 다음 후보다.
   - **일괄 호출 실패 처리**: 그 source는 원래 조회한 항목(제목·URL·짧은 요약)으로 평가를 계속하고(`SourceSummary.degraded`), 평가 저장이 끝난 뒤 source 해시를 되돌려 다음 실행에서 다시 읽고 요약한다(`source_items`·`sources.summary`는 건드리지 않음). 글로벌 트렌드는 일괄 호출이 실패한 provider를 그날 트렌드에서 뺀다(재사용 항목만 남기고 진행, 전부 비면 그날은 만들지 못함 → 다음 배치에서 재시도). 원문 읽기에 실패한 항목은 건너뛰고 나머지로 일괄 호출한다.
@@ -206,6 +208,8 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | GITHUB | `q={kw} pushed:>{오늘−N일}` + `sort=stars` — 최근 N일 안에 활동한 저장소 중 인기순. (`created:>`만 쓰면 오래 유지되는 좋은 프로젝트의 활동을 놓치고 전체 stars 순은 거의 안 변하므로 pushed를 택함) | README (`/repos/{full_name}/readme`, raw 미디어 타입) |
 | HUGGING_FACE | `sort=trendingScore` (허브의 최근 인기 점수) | 모델 카드 `/{id}/raw/main/README.md` (YAML 머리말 제외) |
 | STACK_EXCHANGE | `search/advanced`는 `hot`/`week` 정렬이 없어 `fromdate={오늘−N일}` + `sort=votes` — 최근 N일 안 생성된 질문 득표순 | 질문 본문 + 최고 득표 답변 본문 (`filter=withbody`, HTML→텍스트) |
+| SEMANTIC_SCHOLAR | Graph API `/graph/v1/paper/search`(`query`, `limit=top-n`, `year={올해-(papers-years-1)}-`, `fields=title,abstract,url,year,citationCount,publicationDate`)로 **최근 `cue.source.papers-years`년(기본 2) 논문**만 받아 **인용 수 내림차순**(같으면 제목순)으로 정리. 인용 수는 `metrics`(`citations=N`)로만 쓰고 해시에서 뺀다(단, 순서가 인용 수로 정해지므로 순위가 바뀌면 해시가 바뀔 수 있다) | 초록(abstract)을 그대로 원문으로 사용(PDF는 읽지 않음, 검색 응답에 이미 있어 추가 호출 없음, `summary`에 앞 1500자 저장). url이 없으면 `https://www.semanticscholar.org/paper/{paperId}`. API 키(`SEMANTIC_SCHOLAR_API_KEY`, `x-api-key` 헤더)는 선택이지만 **없으면 익명 공유 한도라 429가 잦다**(모두 `G002`) |
+| WIKIPEDIA_PAGEVIEWS | 영어 위키 `w/api.php?action=query&list=search&srsearch={kw}&srlimit=top-n&srnamespace=0`로 문서를 찾고, 문서마다 Wikimedia REST pageviews(`per-article/en.wikipedia/all-access/user/{title}/daily/{start}/{end}`)의 **최근 `cue.source.pageviews-days`일(기본 30, 어제까지) 일별 조회수를 합산**해 `metrics`(`views_30d=N`). 조회수 호출이 실패·데이터 없음이면 그 문서의 metrics만 비운다. 조회수는 해시에서 뺀다(제목·URL·snippet만) | 문서 소개 `api/rest_v1/page/summary/{title}`의 `extract`. 요약은 검색 snippet(HTML 태그 제거). **User-Agent 필수**(Wikimedia 정책): `WIKIMEDIA_USER_AGENT`(기본은 프로젝트 식별용 일반 문자열, 개인 이메일 금지) |
 | HACKER_NEWS | Algolia `/search` + `tags=story` + `numericFilters=created_at_i>{오늘−N일}` (관련도 뒤에 points·댓글 반영) | 연결된 기사 URL 본문(`WebContentFetcher`), 외부 링크가 없으면 글 텍스트(`/api/v1/items/{id}`) |
 
   N일은 `cue.source.trending-days`(기본 30). 점수·댓글 수·stars 등은 `metrics`로만 전달하고 해시에서는 뺀다.
@@ -270,6 +274,9 @@ cd CUE/backend
 | `GITHUB_TOKEN` | 없음 | 선택. GitHub 검색 rate limit 완화 |
 | `HUGGING_FACE_TOKEN` | 없음 | 선택. Hugging Face API 토큰 |
 | `STACK_EXCHANGE_KEY` | 없음 | 선택. Stack Exchange API key (일일 쿼터 증가) |
+| `SEMANTIC_SCHOLAR_API_KEY` | 없음 | 선택. Semantic Scholar API 키(`x-api-key`). 없으면 익명 공유 한도라 429(`G002`)가 잦다 |
+| `WIKIMEDIA_USER_AGENT` | `CUE-idea-portfolio/1.0 (student project; non-commercial)` | Wikimedia API 필수 User-Agent. 프로젝트를 식별하는 일반 문자열로 두고 개인 이메일을 넣지 않는다 |
+| `SOURCE_PAPERS_YEARS` / `SOURCE_PAGEVIEWS_DAYS` | `2` / `30` | Semantic Scholar: 최근 N년(올해 포함) 논문만 / Wikipedia: 조회수를 합산할 최근 일수 |
 | `SOURCE_TOP_N` | `5` | source마다 읽고 요약할 상위 항목 수 |
 | `SOURCE_TRENDING_DAYS` | `30` | "급상승" 판단 기간(일) |
 | `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | 원문 자르는 길이 / 같은 URL 요약 재사용 기간(0이면 항상 재요약) |
@@ -306,7 +313,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
 - 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`, `GEMINI_*`, `EVALUATION_*`(위 표).
-- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer: 급상승 정렬 파라미터·원문 읽기), `source/UrlGuardTest`·`WebContentFetcherTest`(SSRF·리다이렉트·HTML 추출), `source/SourceSummaryServiceTest`(항목→소스 요약 순서·호출 수·덮어쓰기·재사용), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `global/ai/PromptLoaderTest`·`GeminiClientTest`, `evaluation/EvaluationAnalyzerTest`(근거 4개 기준 클램프·필터·초기 평가 변환·TREND 거부)·`evaluation/TrendEvaluatorTest`(TREND 첫 평가/재평가·클램프·URL 필터)·`EvaluationSchedulerConfigTest`(enabled 설정)·`EvaluationDomainTest`, `trend/GlobalTrendServiceTest`(수집→항목·provider·최종 요약 순서와 호출 수·해시 같으면 재사용·항목 요약 재사용·실패 격리), `source/SourceTextFormatTest`, `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/DailyEvaluationFlowTest`(Gemini·자료 조회·글로벌 트렌드는 목: 첫 평가(근거 4+TREND)·변경 없음·새 트렌드 시 TREND만 재평가·한 갈래 실패 시 다른 갈래 저장·트렌드 없는 날·실패 복구·가중치 턴·수동 API 권한/에러·배치 HOLD 제외/실패 격리), `integration/AsyncEvaluationFlowTest`(실제 단일 스레드 실행기: 202 즉시 응답·폴링·멱등·동기 검사·FAILED 기록·대기열 가득 E004·부팅 정리·배치 상태)·`integration/AutoEvaluationOnSaveTest`(커밋 뒤 자동 큐 투입)·`integration/DemoEvaluationApiTest`·`DemoApiDisabledTest`·`DemoQueueFullTest`(시연 API: 본인 ACTIVE만 큐 투입·보류/다른 사용자 제외·진행 중 건너뜀·force 해시 변경·쿨다운 D002·꺼짐 D001·미인증 A006·E004)·`integration/EvaluatingEditLockTest`(평가 중 수정 I005·완료/실패 뒤 수정·I002 우선·weights/check 허용·행 잠금 경쟁), `integration/GeminiEnabledBootTest`(기본 설정 부팅).
+- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer: 급상승 정렬 파라미터·원문 읽기·Semantic Scholar 연도 필터/인용 정렬/키 헤더·Wikipedia 조회수 합산/User-Agent/HTML 제거·429→G002), `source/UrlGuardTest`·`WebContentFetcherTest`(SSRF·리다이렉트·HTML 추출), `source/SourceSummaryServiceTest`(항목→소스 요약 순서·호출 수·덮어쓰기·재사용), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `global/ai/PromptLoaderTest`·`GeminiClientTest`, `evaluation/EvaluationAnalyzerTest`(근거 4개 기준 클램프·필터·초기 평가 변환·TREND 거부)·`evaluation/TrendEvaluatorTest`(TREND 첫 평가/재평가·클램프·URL 필터)·`EvaluationSchedulerConfigTest`(enabled 설정)·`EvaluationDomainTest`, `trend/GlobalTrendServiceTest`(수집→항목·provider·최종 요약 순서와 호출 수·해시 같으면 재사용·항목 요약 재사용·실패 격리), `source/SourceTextFormatTest`, `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/DailyEvaluationFlowTest`(Gemini·자료 조회·글로벌 트렌드는 목: 첫 평가(근거 4+TREND)·변경 없음·새 트렌드 시 TREND만 재평가·한 갈래 실패 시 다른 갈래 저장·트렌드 없는 날·실패 복구·가중치 턴·수동 API 권한/에러·배치 HOLD 제외/실패 격리), `integration/AsyncEvaluationFlowTest`(실제 단일 스레드 실행기: 202 즉시 응답·폴링·멱등·동기 검사·FAILED 기록·대기열 가득 E004·부팅 정리·배치 상태)·`integration/AutoEvaluationOnSaveTest`(커밋 뒤 자동 큐 투입)·`integration/DemoEvaluationApiTest`·`DemoApiDisabledTest`·`DemoQueueFullTest`(시연 API: 본인 ACTIVE만 큐 투입·보류/다른 사용자 제외·진행 중 건너뜀·force 해시 변경·쿨다운 D002·꺼짐 D001·미인증 A006·E004)·`integration/EvaluatingEditLockTest`(평가 중 수정 I005·완료/실패 뒤 수정·I002 우선·weights/check 허용·행 잠금 경쟁), `integration/GeminiEnabledBootTest`(기본 설정 부팅).
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
@@ -319,7 +326,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - 평가 호출 보호: 수동 `POST /api/ideas/{id}/evaluate`는 대기열 상한(`E004`)만 있고 사용자별 호출 횟수 제한이 없어 Gemini 무료 티어를 소진시킬 수 있다(사용자당 쿨다운/일일 횟수 제한 필요 여부는 **열린 결정**). 429 응답 재시도/백오프도 아직 없다(실패하면 다음 배치로 넘김).
 - 글로벌 트렌드 열린 결정: ① 트렌드가 매일 조금씩 바뀌어 거의 매일 아이디어 수만큼 TREND 호출이 생긴다(재평가 대상을 줄이는 방법: 요약 유사도 임계값, 주 1회 평가 등) ② 트렌드 provider 3개·정렬 기준·`days=7`은 제안값이라 팀 확정 필요 ③ 근거 4개 기준 평가에 소스 요약(`sources.summary`)·`trend-summary` 결과를 프롬프트에 넣을지(지금은 항목 요약만 쓰고 소스 요약은 저장만 함) ④ 트렌드 API(`GET /api/trends/latest` 등)를 프론트에 노출할지 — 아직 컨트롤러 없음.
 - `GeminiIdeaAnalyzer`가 `GeminiClient`와 HTTP 호출 코드를 중복한다(공통화 가능). 분석기는 `GEMINI_MIN_INTERVAL_MS` 적용 대상이 아니다.
-- 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange·Hacker News 구현(검색+원문 읽기). Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가; 없으면 해당 source는 `S002`로 FAILED 처리되어 건너뜀 — 종류가 IT가 아니면 이 provider들이 source에 포함되므로 구현 전에는 해당 source는 평가 근거가 되지 못한다).
+- 외부 API 클라이언트 6종 모두 구현(검색+원문 읽기): GitHub·Hugging Face·Stack Exchange·Hacker News·Semantic Scholar·Wikipedia Pageviews. 클라이언트 빈이 등록되면 종류별 조합(`IdeaType.searchProviders`)에서 자동으로 쓰인다. 한도 경고: Semantic Scholar는 키 없이 호출하면 공유 한도(낮음)라 429가 나기 쉽고, Wikipedia는 문서마다 조회수 호출이 1회 더 있다(상위 N개면 검색 1 + 조회수 N + 원문 N회의 HTTP).
 - **열린 결정**: 종류별 검색 API 조합(`IdeaType.searchProviders`)을 팀이 확정해야 한다. 해시에 넣는 필드(현재 제목·URL·요약, 상위 5건)도 평가 정책과 함께 재검토. 점수 앵커·±10 한도·자료 개수 상한은 `docs/ai-prompts.md` "열린 결정" 참고.
 - 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
 - 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.
