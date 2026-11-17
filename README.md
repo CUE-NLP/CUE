@@ -62,6 +62,7 @@ CUE
 - **평가는 비동기입니다 (프론트 흐름)**: 아이디어를 저장(`POST /api/ideas`, ACTIVE)하거나 내용을 수정(`PATCH`)하면 서버가 커밋 뒤 **첫 평가를 자동으로 큐에 넣습니다**(`EVALUATION_AUTO_ON_SAVE`). 프론트는 "가능성을 분석하고 있어요" 로딩 화면에서 `GET /api/ideas/{id}`를 **몇 초 간격으로 폴링**하고, `evaluationStatus`가 `IDLE`이면 점수를 보여주고 `FAILED`면 `lastEvaluationErrorCode`로 안내합니다. **평가가 끝날 때까지(`QUEUED`/`RUNNING`) 그 아이디어는 수정할 수 없습니다**(`PATCH`가 `I005`). 저장 직후 자동 평가가 시작되면 로딩 화면 동안 수정 버튼을 비활성화하고, `I005`가 오면 "평가가 끝난 뒤 다시 시도해 주세요"로 안내하세요. 가중치 예약(`/weights`)과 확인 처리(`/check`)는 평가 중에도 됩니다. 수동으로 다시 돌리려면 `POST /api/ideas/{id}/evaluate`(즉시 `202`)를 호출하고 같은 방식으로 폴링합니다.
   - `evaluationStatus`: `IDLE`(대기·완료) → `QUEUED`(대기열) → `RUNNING`(평가 중) → `IDLE`(완료, 점수·`hasNewChange` 갱신) 또는 `FAILED`(`lastEvaluationErrorCode`에 `G002` 등). `FAILED`는 다시 요청하면 재시도됩니다. 보류(HOLD) 아이디어와 평가 전 상태는 `IDLE`입니다.
   - 서버는 평가를 한 번에 하나씩만 돌리므로 대기열이 길면 `QUEUED`가 오래 갈 수 있고(수 분), 대기열이 가득 차면 요청이 `E004`로 거절됩니다. 서버 재시작으로 중단된 평가는 `FAILED`(`E005`)가 됩니다.
+- **시연용 버튼 흐름**: 서버를 `DEMO_API_ENABLED=true`로 띄운 뒤 화면의 "지금 조회·평가" 버튼이 `POST /api/demo/evaluations/run`(변화를 눈으로 보여주려면 `{"force": true}`)을 호출 → `202`를 받으면 `queued`의 아이디어마다 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링 → `evaluationStatus`가 `IDLE`이면 점수·`hasNewChange` 갱신 표시, `FAILED`면 에러 코드 안내. `D001`이면 버튼을 숨기고, `D002`는 잠시 뒤 다시 누르도록 안내합니다. **주의**: `force`는 호출 수가 많아(아이디어마다 최대 수십 회) Gemini 무료 한도를 빨리 소진합니다. 큐에 들어간 아이디어는 평가가 끝날 때까지 수정할 수 없습니다(`I005`).
 - **API 문서**: 백엔드 실행 후 `http://localhost:8080/swagger-ui.html`
 - **CORS**: 아직 설정되어 있지 않습니다. 브라우저에서 호출을 시작할 때 백엔드와 허용 도메인을 맞춰야 합니다.
 
@@ -127,8 +128,10 @@ cd backend && ./gradlew bootRun
 | `SOURCE_BATCH_CONTENT_CHARS` / `SOURCE_BATCH_TOTAL_CHARS` | `4000` / `16000` | 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자) |
 | `GEMINI_MIN_INTERVAL_MS` | `6500` | 평가용 Gemini 호출 사이 최소 간격(ms, 무료 티어 분당 한도용) |
 | `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 여부 (테스트는 `false`) |
-| `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 재평가 실행 시각(Spring 6필드 cron) · 시간대 |
+| `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 재평가 실행 시각(Spring 6필드 cron: `초 분 시 일 월 요일`) · 시간대. 환경변수로 바로 바꿀 수 있다. 예: `EVALUATION_CRON="0 30 9 * * *"` = 매일 09:30 |
 | `EVALUATION_DELAY_MS` | `15000` | 아이디어 사이 대기(ms) — Gemini 무료 티어 분당 호출 한도용 |
+| `DEMO_API_ENABLED` | `false` | 시연용 `POST /api/demo/evaluations/run` 사용 여부. **꺼져 있으면 `D001`.** 호출이 Gemini 무료 한도를 소진시킬 수 있어 시연 때만 켠다 |
+| `DEMO_COOLDOWN_SECONDS` | `30` | 같은 사용자가 시연 실행을 연달아 누르는 최소 간격(초). 안에 다시 누르면 `D002`(429) |
 | `EVALUATION_AUTO_ON_SAVE` | `true` | ACTIVE로 저장·내용 수정 시 첫 평가를 자동으로 큐에 넣음 (테스트는 `false`) |
 | `EVALUATION_QUEUE_CAPACITY` / `EVALUATION_SHUTDOWN_WAIT_SECONDS` | `50` / `30` | 평가 대기열 상한(가득 차면 `E004`) / 종료 시 진행 중 평가를 기다리는 시간(초) |
 | `GEMINI_API_KEY` | (없음) | Gemini API 키(키워드 추출 · 재평가). 커밋 금지. 없으면 키워드 추출은 임시 분석기로 대체되어 등록은 계속 동작하고, 일일 재평가는 건너뜀 |
@@ -161,6 +164,7 @@ cd backend && ./gradlew test
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순) |
+| POST | `/api/demo/evaluations/run` | ✓ | **시연용** "지금 조회·평가"(`DEMO_API_ENABLED=true`일 때만, 아니면 `D001` 403). 선택 본문 `{"force": boolean}`(기본 false). 글로벌 트렌드 수집(오늘 것이 없거나 `force`일 때)과 **호출한 사용자의 ACTIVE 아이디어 전부**를 평가 큐에 넣고 즉시 `202`. 응답 `data`: `queued`(큐에 넣은 아이디어 id), `skipped`(`[{ideaId, reason}]`, reason은 `ALREADY_QUEUED`/`ALREADY_RUNNING`/`QUEUE_FULL`), `trendRefreshed`(트렌드 수집 작업을 큐에 넣었는지). 보류·다른 사용자 아이디어는 건드리지 않음. `force=true`면 트렌드를 다시 수집하고 source 해시를 바꿔 자료를 다시 읽고 평가함. Gemini 불가 `E001`, 쿨다운 `D002`, 큐 가득 `E004`. 진행은 `GET /api/ideas/{id}`의 `evaluationStatus` 폴링 |
 | POST | `/api/ideas/{id}/evaluate` | ✓ | 평가를 **비동기로** 요청 — 즉시 **`202 Accepted`**(본문 `code`는 다른 성공 응답처럼 `"200"`). 응답 `data`: `status`(`QUEUED` 방금 큐에 넣음 / `RUNNING` 이미 진행 중이라 그대로 둠 — 중복 요청은 에러 없이 멱등), `idea`. 본인 아이디어만(`I002`), 보류 `I004`, Gemini 불가 `E001`, 대기열 가득 `E004`는 요청 시점에 바로 반환. 결과는 `GET /api/ideas/{id}`의 `evaluationStatus`를 폴링해 확인 |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — **5개 항목(TREND 포함) 모두**, 합 100, **다음 평가 턴부터 적용** |
 
@@ -199,6 +203,7 @@ PATCH /api/ideas/1/weights
 | User | `U001~` | 이메일 중복, 사용자 없음 |
 | Idea | `I001~` | 아이디어 없음, 접근 거부, 가중치 오류, 보류 아이디어 평가 불가, 평가 진행 중이라 수정 불가(`I005`) |
 | Source | `S001~` | 수집 설정 없음, 지원하지 않는 외부 API, 허용되지 않는 URL |
+| Demo | `D001~` | 시연 API 꺼짐(403), 시연 실행 쿨다운(429) |
 | Evaluation | `E001~` | AI 평가 사용 불가(Gemini 비활성·키 없음), AI 응답 해석 불가, 평가 대기열 가득(`E004`, 503), 재시작으로 평가 중단(`E005`, 상태로만 노출) |
 
 JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료 / `A005` 무효 / `A006` 토큰 없음). 프론트는 `A004`일 때 재로그인 흐름으로 분기하면 됩니다.
