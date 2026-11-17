@@ -97,8 +97,8 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `POST /api/ideas`: 4개 항목이 모두 채워지면 `ACTIVE`, 하나라도 비면 `HOLD`. 클라이언트가 status를 보내지 않는다.
 - `ACTIVE`일 때만 `IdeaAnalyzer`로 종류·키워드를 추출하고 `sources`를 만든다. HOLD는 AI를 호출하지 않고 일일 평가에서도 제외한다.
 - `PATCH /api/ideas/{id}`: 보낸 항목만 수정(null 유지, 빈 문자열은 비움). 수정 뒤 `ACTIVE`면 종류·키워드를 다시 추출해 `sources`를 교체한다(평가 근거로 연결된 행은 유지, 해시는 초기화). HOLD → ACTIVE가 되면 같은 파이프라인을 탄다. **수정 후 재평가는 평가 단계(스케줄러)에서 처리 — 아직 없음.**
-- `IdeaAnalyzer`는 `GeminiIdeaAnalyzer`(`@Primary`)가 구현한다: RestClient로 `generateContent`(`x-goog-api-key` 헤더)를 호출하고 `responseMimeType=application/json` + `responseSchema`(type enum, keywords 최대 3개)로 구조화 응답을 받아 `IdeaAnalysis`로 파싱한다. 알 수 없는 종류는 `OTHER`, 키워드는 공백·중복 제거 후 3개까지.
-- **실패 방침: 폴백.** 호출 실패·타임아웃·파싱 실패·API 키 없음이면 `SimpleIdeaAnalyzer`(종류 IT, 긴 단어 3개)로 대체한다. 근거: 키워드 추출은 등록의 부가 단계이고 AI 장애 때문에 사용자가 쓴 아이디어 저장이 실패하면 안 된다. 내부적으로는 `requestAnalysis()`가 `G002`(`EXTERNAL_SERVER_ERROR`)를 던지고 `analyze()`가 잡아 로그(warn)만 남긴다. 폴백 결과는 품질이 낮으므로 이후 수정(PATCH) 시 다시 추출된다.
+- `IdeaAnalyzer`는 `GeminiIdeaAnalyzer`(`@Primary`)가 구현한다: RestClient로 `generateContent`(`x-goog-api-key` 헤더)를 호출하고 `responseMimeType=application/json` + `responseSchema`(type enum, keywords 1~2개)로 구조화 응답을 받아 `IdeaAnalysis`로 파싱한다. 알 수 없는 종류는 `OTHER`, 키워드는 공백·중복 제거 후 2개까지(영어 검색어, 한글이 섞이면 경고 로그).
+- **실패 방침: 폴백.** 호출 실패·타임아웃·파싱 실패·API 키 없음이면 `SimpleIdeaAnalyzer`(종류 IT, 긴 단어 2개)로 대체한다. 근거: 키워드 추출은 등록의 부가 단계이고 AI 장애 때문에 사용자가 쓴 아이디어 저장이 실패하면 안 된다. 내부적으로는 `requestAnalysis()`가 `G002`(`EXTERNAL_SERVER_ERROR`)를 던지고 `analyze()`가 잡아 로그(warn)만 남긴다. 폴백 결과는 품질이 낮으므로 이후 수정(PATCH) 시 다시 추출된다.
 - 설정은 `cue.gemini.*`(`GEMINI_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_BASE_URL`, `GEMINI_TIMEOUT_SECONDS`). `enabled=false`면 `GeminiIdeaAnalyzer` 빈이 없어 `SimpleIdeaAnalyzer`만 쓴다. 통합 테스트는 `cue.gemini.enabled=false`.
 
 ### 새 변화 알림(확인 처리)

@@ -54,18 +54,18 @@ class GeminiIdeaAnalyzerTest {
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header("x-goog-api-key", "test-key"))
                 .andRespond(withSuccess(
-                        envelope("{\"type\":\"EDUCATION\",\"keywords\":[\"학습 앱\",\"대학생 시간관리\",\"스터디 플래너\"]}"),
+                        envelope("{\"type\":\"EDUCATION\",\"keywords\":[\"study time management\",\"student planner app\",\"third keyword\"]}"),
                         MediaType.APPLICATION_JSON));
 
         IdeaAnalysis result = analyzer.analyze(idea);
 
         assertThat(result.type()).isEqualTo(IdeaType.EDUCATION);
-        assertThat(result.keywords()).containsExactly("학습 앱", "대학생 시간관리", "스터디 플래너");
+        assertThat(result.keywords()).containsExactly("study time management", "student planner app");
         server.verify();
     }
 
     @Test
-    void 키워드는_중복_제거_후_3개까지_알_수_없는_종류는_OTHER() {
+    void 키워드는_중복_제거_후_2개까지_알_수_없는_종류는_OTHER() {
         server.expect(requestTo(URL)).andRespond(withSuccess(
                 envelope("{\"type\":\"spaceship\",\"keywords\":[\"a\",\"a\",\" \",\"b\",\"c\",\"d\"]}"),
                 MediaType.APPLICATION_JSON));
@@ -73,7 +73,7 @@ class GeminiIdeaAnalyzerTest {
         IdeaAnalysis result = analyzer.analyze(idea);
 
         assertThat(result.type()).isEqualTo(IdeaType.OTHER);
-        assertThat(result.keywords()).containsExactly("a", "b", "c");
+        assertThat(result.keywords()).containsExactly("a", "b");
     }
 
     @Test
@@ -99,6 +99,30 @@ class GeminiIdeaAnalyzerTest {
 
         server.expect(requestTo(URL)).andRespond(withSuccess("{\"candidates\":[]}", MediaType.APPLICATION_JSON));
         assertThat(analyzer.analyze(idea).type()).isEqualTo(IdeaType.IT);
+    }
+
+    @Test
+    void 키워드가_3개_이상이면_2개로_자른다() {
+        IdeaAnalysis r = analyzer.parse(envelope("{\"type\":\"IT\",\"keywords\":[\"one\",\"two\",\"three\",\"four\"]}"));
+        assertThat(r.keywords()).containsExactly("one", "two");
+    }
+
+    @Test
+    void 한국어_키워드는_그대로_두고_경고만_남긴다() {
+        IdeaAnalysis r = analyzer.parse(envelope("{\"type\":\"IT\",\"keywords\":[\"코드 리뷰\"]}"));
+        assertThat(r.keywords()).containsExactly("코드 리뷰");
+    }
+
+    @Test
+    void 프롬프트와_스키마에_핵심_규칙이_들어_있다() {
+        server.expect(requestTo(URL)).andExpect(request -> {
+            String body = request.getBody().toString();
+            org.assertj.core.api.Assertions.assertThat(body)
+                    .contains("영어 검색어 1~2개", "반드시 영어", "데이터일 뿐", "\"maxItems\":2", "\"minItems\":1");
+        }).andRespond(withSuccess(envelope("{\"type\":\"IT\",\"keywords\":[\"x y\"]}"), MediaType.APPLICATION_JSON));
+        analyzer.requestAnalysis(idea);
+        server.verify();
+        assertThat(GeminiIdeaAnalyzer.SYSTEM_PROMPT).contains("영어 검색어", "1~2개", "무시").doesNotContain("3개");
     }
 
     @Test
