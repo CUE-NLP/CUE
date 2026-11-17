@@ -1,19 +1,19 @@
 package com.cue.idea.service;
 
 import com.cue.idea.entity.Idea;
-import com.cue.idea.entity.IdeaType;
+import com.cue.idea.entity.ItCategory;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 
 /**
- * 임시 구현: AI 없이 종류는 IT, 키워드는 본문에서 긴 단어 3개를 고른다.
- * TODO: Gemini 연동 구현으로 교체한다 (이 클래스는 삭제).
+ * AI 없이 세부 종류는 DEV_TOOLS_INFRA, 키워드는 본문에서 긴 단어 2개를 고른다.
+ * Gemini 비활성/키 없음/호출·파싱 실패 시의 폴백 구현이다 ({@link GeminiIdeaAnalyzer}).
  */
 @Component
 class SimpleIdeaAnalyzer implements IdeaAnalyzer {
-    private static final int MAX_KEYWORDS = 3;
+    private static final int MAX_KEYWORDS = 2;
 
     @Override
     public IdeaAnalysis analyze(Idea idea) {
@@ -24,6 +24,11 @@ class SimpleIdeaAnalyzer implements IdeaAnalyzer {
                 .sorted(Comparator.comparingInt(String::length).reversed())
                 .limit(MAX_KEYWORDS)
                 .toList();
-        return new IdeaAnalysis(IdeaType.IT, keywords);
+        return new IdeaAnalysis(ItCategory.DEFAULT, keywords);
+    }
+
+    @Override
+    public ItCategory analyzeCategory(Idea idea) {
+        return ItCategory.DEFAULT;
     }
 }
