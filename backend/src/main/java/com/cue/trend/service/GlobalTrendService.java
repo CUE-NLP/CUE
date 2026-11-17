@@ -8,6 +8,7 @@ import com.cue.source.config.SourceApiProperties;
 import com.cue.source.dto.SourceCheckResult;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
+import com.cue.source.service.ItemBatchSummarizer;
 import com.cue.source.service.SourceHasher;
 import com.cue.source.service.SourceTextFormat;
 import com.cue.trend.config.TrendProperties;
@@ -39,7 +40,7 @@ import tools.jackson.databind.JsonNode;
  * <ol>
  *   <li>고정 provider {@link ApiProvider#TREND_PROVIDERS}(HN·GitHub·Hugging Face)를 키워드 없이 "급상승" 기준으로 조회 (상위 {@code cue.trend.top-n})</li>
  *   <li>항목들의 해시({@link SourceHasher})가 가장 최근 트렌드와 같으면 재요약하지 않고 그 행을 그대로 쓴다</li>
- *   <li>다르면 항목 원문 읽기 → 항목 요약({@code trend-item-summary}) → provider별 요약 → 최종 요약({@code global-trend-summary}) 후 새 행으로 저장.
+ *   <li>다르면 항목 원문 읽기 → provider당 항목 일괄 요약 1회({@code trend-item-summary-batch}) → provider별 요약 → 최종 요약({@code global-trend-summary}) 후 새 행으로 저장.
  *       같은 URL의 항목 요약은 {@code cue.source.summary-reuse-days} 안이면 이전 행에서 재사용한다</li>
  * </ol>
  * 결과는 그날 첫 호출에서 만들어 메모리에 두고(재시작하면 DB의 오늘 행을 쓴다) 이후엔 그대로 돌려준다.
@@ -55,6 +56,7 @@ public class GlobalTrendService {
     private final Map<ApiProvider, SourceClient> clients = new EnumMap<>(ApiProvider.class);
     private final GeminiClient gemini;
     private final PromptLoader prompts;
+    private final ItemBatchSummarizer batch;
     private final TrendRepository trends;
     private final TrendItemRepository trendItems;
     private final TrendSourceRepository trendSources;
@@ -66,12 +68,13 @@ public class GlobalTrendService {
     private LocalDate cachedOn;
     private LocalDateTime failedAt;
 
-    public GlobalTrendService(List<SourceClient> clientList, GeminiClient gemini, PromptLoader prompts,
+    public GlobalTrendService(List<SourceClient> clientList, GeminiClient gemini, PromptLoader prompts, ItemBatchSummarizer batch,
                               TrendRepository trends, TrendItemRepository trendItems, TrendSourceRepository trendSources,
                               TransactionTemplate tx, SourceApiProperties sourceProps, TrendProperties props) {
         clientList.forEach(c -> clients.put(c.provider(), c));
         this.gemini = gemini;
         this.prompts = prompts;
+        this.batch = batch;
         this.trends = trends;
         this.trendItems = trendItems;
         this.trendSources = trendSources;
@@ -147,18 +150,34 @@ public class GlobalTrendService {
         Map<ApiProvider, List<LocalDateTime>> times = new LinkedHashMap<>();
         Map<ApiProvider, String> providerSummaries = new LinkedHashMap<>();
         for (Map.Entry<ApiProvider, List<SourceItem>> e : found.entrySet()) {
-            List<SourceItem> items = new ArrayList<>();
-            List<LocalDateTime> at = new ArrayList<>();
+            // 같은 URL의 최근 요약은 재사용하고, 나머지는 원문을 읽어 provider당 한 번의 일괄 호출로 요약한다
+            Map<String, TrendItem> reusedItems = new HashMap<>();
+            List<ItemBatchSummarizer.Entry> toSummarize = new ArrayList<>();
             for (SourceItem item : e.getValue()) {
                 TrendItem old = previous.get(item.url());
                 if (old != null && sourceProps.summaryReuseDays() > 0 && old.getSummarizedAt().isAfter(reuseAfter)) {
+                    reusedItems.put(item.url(), old);
+                } else {
+                    readContent(clients.get(e.getKey()), item).ifPresent(c -> toSummarize.add(new ItemBatchSummarizer.Entry(item, c)));
+                }
+            }
+            Map<String, String> fresh = Map.of();
+            if (!toSummarize.isEmpty()) {
+                try {
+                    fresh = batch.summarize("trend-item-summary-batch", Map.of(), toSummarize);
+                } catch (RuntimeException ex) { // 일괄 호출 실패: 이 provider는 재사용 항목만으로 진행한다
+                    log.warn("트렌드 항목 일괄 요약 실패 provider={}: {}", e.getKey(), ex.toString());
+                }
+            }
+            List<SourceItem> items = new ArrayList<>();
+            List<LocalDateTime> at = new ArrayList<>();
+            for (SourceItem item : e.getValue()) {
+                TrendItem old = reusedItems.get(item.url());
+                if (old != null) {
                     items.add(withSummary(item, old.getSummary()));
                     at.add(old.getSummarizedAt());
-                    continue;
-                }
-                String summary = summarizeItem(clients.get(e.getKey()), item);
-                if (summary != null) {
-                    items.add(withSummary(item, summary));
+                } else if (fresh.containsKey(item.url())) {
+                    items.add(withSummary(item, fresh.get(item.url())));
                     at.add(LocalDateTime.now());
                 }
             }
@@ -208,8 +227,8 @@ public class GlobalTrendService {
         return load(id);
     }
 
-    /** 항목 원문을 읽어 요약한다. 읽기·요약이 실패하거나 비면 null (그 항목만 건너뛴다). */
-    private String summarizeItem(SourceClient client, SourceItem item) {
+    /** 항목 원문을 읽는다. 읽기에 실패하거나 비어 있으면 빈 값 (그 항목만 건너뛴다). */
+    private java.util.Optional<String> readContent(SourceClient client, SourceItem item) {
         try {
             String content = client == null ? "" : client.fetchContent(item);
             content = content == null ? "" : content.strip();
@@ -218,15 +237,12 @@ public class GlobalTrendService {
             }
             if (content.isEmpty()) {
                 log.warn("트렌드 항목 원문이 비어 건너뜁니다 url={}", item.url());
-                return null;
+                return java.util.Optional.empty();
             }
-            JsonNode result = gemini.generateJson(prompts.render("trend-item-summary", Map.of(
-                    "title", item.title(), "url", item.url(), "content", content)), SourceTextFormat.SUMMARY_SCHEMA);
-            String summary = result.path("summary").asString("").strip();
-            return summary.isEmpty() ? null : summary;
+            return java.util.Optional.of(content);
         } catch (RuntimeException e) {
-            log.warn("트렌드 항목 요약 실패, 건너뜁니다 url={}: {}", item.url(), e.toString());
-            return null;
+            log.warn("트렌드 항목 원문 읽기 실패, 건너뜁니다 url={}: {}", item.url(), e.toString());
+            return java.util.Optional.empty();
         }
     }
 

@@ -13,6 +13,7 @@ import com.cue.source.client.SourceClient;
 import com.cue.source.config.SourceApiProperties;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
+import com.cue.source.service.ItemBatchSummarizer;
 import com.cue.source.service.SourceHasher;
 import com.cue.trend.config.TrendProperties;
 import com.cue.trend.dto.TrendSnapshot;
@@ -79,20 +80,33 @@ class GlobalTrendServiceTest {
         return ApiProvider.TREND_PROVIDERS.stream().flatMap(p -> items(p).stream()).toList();
     }
 
+    /** 일괄 프롬프트면 입력 URL마다 "항목요약", 아니면 "요약 N"(N = 지금까지의 호출 수). */
+    private tools.jackson.databind.JsonNode reply(String prompt) {
+        prompts.add(prompt);
+        if (!prompt.contains("[항목 목록]")) return mapper.readTree("{\"summary\":\"요약 " + prompts.size() + "\"}");
+        StringBuilder items = new StringBuilder();
+        var m = java.util.regex.Pattern.compile("URL: (\\S+)").matcher(prompt);
+        while (m.find()) {
+            if (omitUrl != null && m.group(1).equals(omitUrl)) continue;
+            if (items.length() > 0) items.append(",");
+            items.append("{\"url\":\"").append(m.group(1)).append("\",\"summary\":\"항목요약\"}");
+        }
+        return mapper.readTree("{\"items\":[" + items + "]}");
+    }
+
+    private String omitUrl = null;
+
     private GlobalTrendService service(int reuseDays) {
         SourceApiProperties props = new SourceApiProperties(Duration.ofSeconds(3), Duration.ofSeconds(5), 5, 30,
                 8000, 1048576, 3, reuseDays, 4000, 16000, null, null, null, null);
         return new GlobalTrendService(ApiProvider.TREND_PROVIDERS.stream().map(this::client).toList(), gemini,
-                new PromptLoader(), trends, itemRepo, sourceRepo, new TransactionTemplate(mock(PlatformTransactionManager.class)),
+                new PromptLoader(), new ItemBatchSummarizer(gemini, new PromptLoader(), props), trends, itemRepo, sourceRepo, new TransactionTemplate(mock(PlatformTransactionManager.class)),
                 props, new TrendProperties(7, 2));
     }
 
     @BeforeEach
     void setUp() {
-        when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
-            prompts.add(inv.getArgument(0));
-            return mapper.readTree("{\"summary\":\"요약 " + prompts.size() + "\"}");
-        });
+        doAnswer(inv -> reply(inv.getArgument(0))).when(gemini).generateJson(anyString(), anyMap());
         when(trends.findFirstByOrderByIdDesc()).thenAnswer(inv -> Optional.ofNullable(latest));
         when(trends.save(any(Trend.class))).thenAnswer(inv -> {
             Trend t = inv.getArgument(0);
@@ -123,14 +137,14 @@ class GlobalTrendServiceTest {
 
         assertEquals(ApiProvider.TREND_PROVIDERS, trendingCalls);
         assertEquals(6, fetched.size());
-        // provider마다 (항목 2 + provider 요약 1), 마지막에 최종 1 = 10회
-        assertEquals(10, prompts.size());
-        assertTrue(prompts.get(0).contains("원문 HACKER_NEWS-1"));
+        // provider마다 (항목 일괄 1 + provider 요약 1), 마지막에 최종 1 = 3×2+1 = 7회
+        assertEquals(7, prompts.size());
+        assertTrue(prompts.get(0).contains("원문 HACKER_NEWS-1") && prompts.get(0).contains("원문 HACKER_NEWS-2")); // 한 호출에 항목 2개
         assertFalse(prompts.get(0).contains("{{"));
-        assertTrue(prompts.get(2).contains("[HACKER_NEWS] HACKER_NEWS-1 | https://HACKER_NEWS/1")); // provider 요약 입력: 항목 줄 목록
-        String last = prompts.get(9);                                                              // 최종 요약 입력: provider 요약들
-        assertTrue(last.contains("[HACKER_NEWS] 요약 3") && last.contains("[GITHUB] 요약 6") && last.contains("[HUGGING_FACE] 요약 9"));
-        assertEquals("요약 10", snapshot.summary());
+        assertTrue(prompts.get(1).contains("[HACKER_NEWS] HACKER_NEWS-1 | https://HACKER_NEWS/1")); // provider 요약 입력: 항목 줄 목록
+        String last = prompts.get(6);                                                              // 최종 요약 입력: provider 요약들
+        assertTrue(last.contains("[HACKER_NEWS] 요약 2") && last.contains("[GITHUB] 요약 4") && last.contains("[HUGGING_FACE] 요약 6"));
+        assertEquals("요약 7", snapshot.summary());
 
         Trend saved = savedTrends.get(0);
         assertEquals("HACKER_NEWS,GITHUB,HUGGING_FACE", saved.getProviders());
@@ -138,7 +152,7 @@ class GlobalTrendServiceTest {
         assertEquals(6, savedItems.size());
         assertEquals(3, savedSources.size());
         assertEquals(3, snapshot.sources().size());
-        assertEquals("요약 1", snapshot.sources().get(0).items().get(0).summary());
+        assertEquals("항목요약", snapshot.sources().get(0).items().get(0).summary());
     }
 
     @Test
@@ -184,7 +198,7 @@ class GlobalTrendServiceTest {
 
         assertFalse(fetched.contains("https://GITHUB/1")); // 재사용: 다시 읽지 않는다
         assertEquals(5, fetched.size());
-        assertEquals(9, prompts.size());                    // 항목 5 + provider 3 + 최종 1
+        assertEquals(7, prompts.size());                    // 일괄 3 + provider 3 + 최종 1
         assertEquals(101L, snapshot.id());
         assertEquals(6, savedItems.stream().filter(i -> i.getTrend().getId() == 101L).count());
         assertTrue(savedItems.stream().anyMatch(i -> "저장된 항목 요약".equals(i.getSummary()) && i.getTrend().getId() == 101L));
@@ -222,30 +236,51 @@ class GlobalTrendServiceTest {
 
     @Test
     void 최종_요약이_실패하면_아무것도_저장하지_않고_null() {
-        when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
+        doAnswer(inv -> {
             String prompt = inv.getArgument(0);
-            if (prompt.contains("[HACKER_NEWS] 요약")) throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
-            prompts.add(prompt);
-            return mapper.readTree("{\"summary\":\"요약 " + prompts.size() + "\"}");
-        });
-        // 최종 단계의 입력은 "[HACKER_NEWS] 요약 N" 줄로 시작한다
+            if (prompt.contains("[HACKER_NEWS] 요약")) throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // 최종 단계 입력
+            return reply(prompt);
+        }).when(gemini).generateJson(anyString(), anyMap());
         assertNull(service(7).today());
         assertTrue(savedTrends.isEmpty());
         assertTrue(savedItems.isEmpty());
     }
 
     @Test
-    void 항목_원문이나_요약이_실패하면_그_항목만_건너뛴다() {
+    void 이전_항목_요약이_전부_재사용되면_일괄_호출_없이_provider_요약과_최종_요약만_한다() {
+        latest = existing(5L, "old-hash", LocalDateTime.now().minusDays(1));
+        savedTrends.add(latest);
+        for (ApiProvider p : ApiProvider.TREND_PROVIDERS)
+            for (SourceItem it : items(p))
+                savedItems.add(new TrendItem(latest, p, it.url(), it.title(), "", "", "저장 " + it.title(), LocalDateTime.now().minusDays(1)));
+
+        service(7).today();
+
+        assertTrue(fetched.isEmpty());
+        assertEquals(4, prompts.size()); // provider 3 + 최종 1
+        assertTrue(prompts.stream().noneMatch(p -> p.contains("[항목 목록]")));
+    }
+
+    @Test
+    void 일괄_호출이_실패한_provider는_빠지고_나머지로_만든다() {
         int[] n = {0};
-        when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
-            prompts.add(inv.getArgument(0));
-            if (++n[0] == 1) throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // 첫 항목 요약 실패
-            return mapper.readTree("{\"summary\":\"요약 " + n[0] + "\"}");
-        });
+        doAnswer(inv -> {
+            String prompt = inv.getArgument(0);
+            if (prompt.contains("[항목 목록]") && ++n[0] == 1) throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // HN 일괄 실패
+            return reply(prompt);
+        }).when(gemini).generateJson(anyString(), anyMap());
+        TrendSnapshot snapshot = service(7).today();
+        assertEquals("GITHUB,HUGGING_FACE", savedTrends.get(0).getProviders());
+        assertEquals(4, savedItems.size());
+        assertEquals(2, snapshot.sources().size());
+    }
+
+    @Test
+    void 일괄_응답이_빠뜨린_항목과_원문을_못_읽은_항목은_저장하지_않는다() {
+        omitUrl = "https://GITHUB/2";
         TrendSnapshot snapshot = service(7).today();
         assertEquals(5, savedItems.size());
+        assertTrue(savedItems.stream().noneMatch(i -> i.getUrl().equals("https://GITHUB/2")));
         assertNotNull(snapshot);
-        ArgumentCaptor<String> p = ArgumentCaptor.forClass(String.class);
-        verify(gemini, atLeastOnce()).generateJson(p.capture(), anyMap());
     }
 }
