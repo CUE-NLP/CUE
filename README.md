@@ -74,7 +74,7 @@ backend/src/main/java/com/cue
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
 ├── score/           항목별 점수 (4개 기준)
 ├── evaluation/      재평가 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
-├── source/          아이디어별 외부 자료 수집 설정 · 변경 감지 (ApiProvider)
+├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange) · 해시 변경 감지
 └── trend/           고정 API 4개로 수집한 트렌드 요약
 ```
 
@@ -112,6 +112,9 @@ cd backend && ./gradlew bootRun
 | `GEMINI_API_KEY` | (없음) | Gemini API 키(아이디어 종류·키워드 추출). 커밋 금지. 없거나 호출 실패 시 임시 분석기로 대체되어 등록은 계속 동작 |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
 | `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성(테스트 등) |
+| `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
+| `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
+| `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
 | `DB_PORT` | `5433` | `docker-compose.yml`의 DB 호스트 포트 (`DB_URL` 포트도 함께 맞출 것) |
 
 ### 테스트
