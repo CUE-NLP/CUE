@@ -13,7 +13,6 @@ import com.cue.source.dto.SourceItem;
 import com.cue.trend.service.TrendService;
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,12 +43,12 @@ public class EvaluationAnalyzer {
     public static final int MAX_SUMMARY_CHARS = 300;
     private static final String NO_SUMMARY = "AI가 근거 요약을 제공하지 않았습니다.";
 
-    private static final List<String> TYPE_NAMES = Arrays.stream(ScoreType.values()).map(Enum::name).toList();
+    private static final List<String> TYPE_NAMES = ScoreType.EVIDENCE_TYPES.stream().map(Enum::name).toList();
     private static final Map<String, Object> REFERENCE_URLS = Map.of("type", "ARRAY", "items", Map.of("type", "STRING"));
 
     static final Map<String, Object> RE_EVALUATION_SCHEMA = Map.of(
             "type", "OBJECT",
-            "properties", Map.of("changes", Map.of("type", "ARRAY", "maxItems", ScoreType.values().length,
+            "properties", Map.of("changes", Map.of("type", "ARRAY", "maxItems", ScoreType.EVIDENCE_TYPES.size(),
                     "items", Map.of("type", "OBJECT",
                             "properties", Map.of(
                                     "type", Map.of("type", "STRING", "enum", TYPE_NAMES),
@@ -61,7 +60,7 @@ public class EvaluationAnalyzer {
 
     static final Map<String, Object> INITIAL_EVALUATION_SCHEMA = Map.of(
             "type", "OBJECT",
-            "properties", Map.of("scores", Map.of("type", "ARRAY", "maxItems", ScoreType.values().length,
+            "properties", Map.of("scores", Map.of("type", "ARRAY", "maxItems", ScoreType.EVIDENCE_TYPES.size(),
                     "items", Map.of("type", "OBJECT",
                             "properties", Map.of(
                                     "type", Map.of("type", "STRING", "enum", TYPE_NAMES),
@@ -125,7 +124,7 @@ public class EvaluationAnalyzer {
 
     private Map<String, String> variables(IdeaSnapshot idea, List<SourceCheckResult> changed, String trendSummary) {
         StringBuilder scores = new StringBuilder();
-        for (ScoreType type : ScoreType.values()) {
+        for (ScoreType type : ScoreType.EVIDENCE_TYPES) {
             scores.append(type).append(": ").append(idea.scores().getOrDefault(type, BigDecimal.ZERO)).append("\n");
         }
         Map<String, String> vars = new HashMap<>();
@@ -181,7 +180,8 @@ public class EvaluationAnalyzer {
             return null;
         }
         try {
-            return ScoreType.valueOf(value.trim().toUpperCase());
+            ScoreType type = ScoreType.valueOf(value.trim().toUpperCase());
+            return ScoreType.EVIDENCE_TYPES.contains(type) ? type : null; // TREND는 글로벌 트렌드 평가에서만 다룬다
         } catch (IllegalArgumentException e) {
             return null;
         }

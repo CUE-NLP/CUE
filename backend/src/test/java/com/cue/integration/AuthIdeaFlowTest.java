@@ -63,7 +63,7 @@ class AuthIdeaFlowTest {
         mvc.perform(post("/api/ideas").header("Authorization", token).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"problem\":\"p\",\"target\":\"t\",\"solution\":\"s\",\"expectation\":\"e\"}"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.scores.length()").value(4));
+                .andExpect(jsonPath("$.data.scores.length()").value(5));
 
         mvc.perform(get("/api/ideas").header("Authorization", token))
                 .andExpect(status().isOk())
@@ -102,16 +102,16 @@ class AuthIdeaFlowTest {
 
         mvc.perform(patch("/api/ideas/" + id + "/weights").header("Authorization", token)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"weights\":{\"PROBLEM_IMPORTANCE\":40,\"MARKET_DEMAND\":30,"
-                                + "\"MARKET_DIFFERENTIATION\":20,\"TECH_FEASIBILITY\":10}}"))
+                        .content("{\"weights\":{\"PROBLEM_IMPORTANCE\":30,\"MARKET_DEMAND\":25,\"MARKET_DIFFERENTIATION\":20,"
+                                + "\"TECH_FEASIBILITY\":15,\"TREND\":10}}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.scores[0].weightPercent").value(25))
-                .andExpect(jsonPath("$.data.scores[0].pendingWeightPercent").value(40));
+                .andExpect(jsonPath("$.data.scores[0].weightPercent").value(20))
+                .andExpect(jsonPath("$.data.scores[0].pendingWeightPercent").value(30));
 
         mvc.perform(patch("/api/ideas/" + id + "/weights").header("Authorization", token)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"weights\":{\"PROBLEM_IMPORTANCE\":50,\"MARKET_DEMAND\":30,"
-                                + "\"MARKET_DIFFERENTIATION\":20,\"TECH_FEASIBILITY\":10}}"))
+                        .content("{\"weights\":{\"PROBLEM_IMPORTANCE\":50,\"MARKET_DEMAND\":30,\"MARKET_DIFFERENTIATION\":20,"
+                                + "\"TECH_FEASIBILITY\":10,\"TREND\":10}}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("I003"));
     }
@@ -241,37 +241,37 @@ class AuthIdeaFlowTest {
                 new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.TECH_FEASIBILITY,
                         new java.math.BigDecimal("40"), "구현 가능", null)));
 
-        // 총점 = (80 + 40) * 0.25 = 30, 변화량 30
+        // 총점 = (80 + 40) * 0.2 = 24, 변화량 24
         mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
-                .andExpect(jsonPath("$.data.totalScore").value(30.0))
-                .andExpect(jsonPath("$.data.lastDifference").value(30.0))
+                .andExpect(jsonPath("$.data.totalScore").value(24.0))
+                .andExpect(jsonPath("$.data.lastDifference").value(24.0))
                 .andExpect(jsonPath("$.data.hasNewChange").value(true));
 
         mvc.perform(get("/api/ideas/" + id + "/evaluations").header("Authorization", token))
                 .andExpect(jsonPath("$.data.length()").value(2))
                 .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].difference").value(80.0))
-                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].weightPercent").value(25))
+                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].weightPercent").value(20))
                 .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].references[0].url")
                         .value("https://github.com/trending"));
 
         mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
                 .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].totalScore").value(30.0))
-                .andExpect(jsonPath("$.data[0].totalDifference").value(30.0));
+                .andExpect(jsonPath("$.data[0].totalScore").value(24.0))
+                .andExpect(jsonPath("$.data[0].totalDifference").value(24.0));
 
         mvc.perform(post("/api/ideas/" + id + "/check").header("Authorization", token))
                 .andExpect(jsonPath("$.data.hasNewChange").value(false));
 
-        // 두 번째 평가: 총점은 35로 오르지만 변화량은 5로 작다
+        // 두 번째 평가: 총점은 28로 오르지만 변화량은 4로 작다 (수요는 100점 상한)
         evaluationService.recordChanges(id, java.util.List.of(
                 new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.MARKET_DEMAND,
                         new java.math.BigDecimal("20"), "수요가 더 커짐", null)));
         mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
                 .andExpect(jsonPath("$.data.length()").value(2))
-                .andExpect(jsonPath("$.data[1].totalScore").value(35.0))
-                .andExpect(jsonPath("$.data[1].totalDifference").value(5.0));
+                .andExpect(jsonPath("$.data[1].totalScore").value(28.0))
+                .andExpect(jsonPath("$.data[1].totalDifference").value(4.0));
 
-        // 최근 상승 정렬은 변화량(25 > 5), 총점 정렬은 총점(35 > 25) 기준이다
+        // 최근 상승 정렬은 변화량(20 > 4), 총점 정렬은 총점(28 > 20) 기준이다
         long other = createIdea(token, FULL);
         evaluationService.recordChanges(other, java.util.List.of(
                 new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.MARKET_DEMAND,

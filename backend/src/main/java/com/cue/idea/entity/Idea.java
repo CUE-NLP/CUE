@@ -155,7 +155,7 @@ public class Idea {
     }
 
     /**
-     * 항목별 가중치(퍼센트 정수)를 예약한다. 4개 항목이 모두 있어야 하고 합이 100이어야 한다.
+     * 항목별 가중치(퍼센트 정수)를 예약한다. 5개 기준(TREND 포함)이 모두 있어야 하고 합이 100이어야 한다.
      * 현재 점수·총점에는 영향이 없으며, 다음 평가 턴에 {@link #startNextTurn()} 으로 적용된다.
      */
     public void reserveWeights(Map<ScoreType, Integer> percents) {

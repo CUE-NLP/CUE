@@ -26,7 +26,7 @@ class DomainTest {
                 .filter(s -> s.getType() == ScoreType.TECH_FEASIBILITY)
                 .forEach(s -> s.applyDifference(new BigDecimal("20")));
         idea.recalculateTotal();
-        assertEquals(0, new BigDecimal("75.00").compareTo(idea.getTotalScore())); // (70*3+90)*0.25
+        assertEquals(0, new BigDecimal("74.00").compareTo(idea.getTotalScore())); // (70*4+90)*0.2
     }
 
     @Test
@@ -52,9 +52,9 @@ class DomainTest {
         assertEquals(ErrorCode.values().length, distinct);
     }
 
-    private static Map<ScoreType, Integer> weights(int a, int b, int c, int d) {
+    private static Map<ScoreType, Integer> weights(int a, int b, int c, int d, int e) {
         return Map.of(ScoreType.PROBLEM_IMPORTANCE, a, ScoreType.MARKET_DEMAND, b,
-                ScoreType.MARKET_DIFFERENTIATION, c, ScoreType.TECH_FEASIBILITY, d);
+                ScoreType.MARKET_DIFFERENTIATION, c, ScoreType.TECH_FEASIBILITY, d, ScoreType.TREND, e);
     }
 
     @Test
@@ -63,34 +63,37 @@ class DomainTest {
         idea.getScores().forEach(s -> s.applyDifference(new BigDecimal("80")));
         idea.recalculateTotal(); // 80.00
 
-        idea.reserveWeights(weights(10, 10, 10, 70));
+        idea.reserveWeights(weights(10, 10, 10, 60, 10));
         idea.getScores().stream().filter(s -> s.getType() == ScoreType.TECH_FEASIBILITY)
                 .forEach(s -> s.applyDifference(new BigDecimal("-30"))); // 50점으로 변경
 
         // 예약 직후: 현재 weight 그대로, pending에만 저장
         Score tech = idea.getScores().get(3);
-        assertEquals(0, new BigDecimal("0.250").compareTo(tech.getWeight()));
-        assertEquals(0, new BigDecimal("0.700").compareTo(tech.getPendingWeight()));
+        assertEquals(0, new BigDecimal("0.200").compareTo(tech.getWeight()));
+        assertEquals(0, new BigDecimal("0.600").compareTo(tech.getPendingWeight()));
 
         idea.startNextTurn();
-        assertEquals(0, new BigDecimal("0.700").compareTo(tech.getWeight()));
+        assertEquals(0, new BigDecimal("0.600").compareTo(tech.getWeight()));
         assertNull(tech.getPendingWeight());
         idea.recalculateTotal();
-        // 80*0.1*3 + 50*0.7 = 24 + 35 = 59
-        assertEquals(0, new BigDecimal("59.00").compareTo(idea.getTotalScore()));
+        // 80*0.1*4 + 50*0.6 = 32 + 30 = 62
+        assertEquals(0, new BigDecimal("62.00").compareTo(idea.getTotalScore()));
     }
 
     @Test
     void 가중치_합이_100이_아니거나_항목이_빠지면_거부한다() {
         Idea idea = new Idea(null, IdeaType.IT, "p", "t", "s", "e");
-        assertThrows(CustomException.class, () -> idea.reserveWeights(weights(30, 30, 30, 30)));
-        assertThrows(CustomException.class, () -> idea.reserveWeights(weights(-10, 40, 40, 30)));
+        assertThrows(CustomException.class, () -> idea.reserveWeights(weights(20, 20, 20, 20, 30)));
+        // 예전 4개 기준 요청(TREND 없음)은 거부한다
+        assertThrows(CustomException.class, () -> idea.reserveWeights(Map.of(ScoreType.PROBLEM_IMPORTANCE, 25,
+                ScoreType.MARKET_DEMAND, 25, ScoreType.MARKET_DIFFERENTIATION, 25, ScoreType.TECH_FEASIBILITY, 25)));
+        assertThrows(CustomException.class, () -> idea.reserveWeights(weights(-10, 40, 40, 20, 10)));
         assertThrows(CustomException.class, () -> idea.reserveWeights(Map.of(ScoreType.MARKET_DEMAND, 100)));
         assertThrows(CustomException.class, () -> idea.reserveWeights(null));
     }
 
     @Test
-    void 네_항목이_모두_채워져야_ACTIVE_하나라도_비면_HOLD() {
+    void 아이디어_네_항목이_모두_채워져야_ACTIVE_하나라도_비면_HOLD() {
         assertEquals(IdeaStatus.ACTIVE, new Idea(null, IdeaType.IT, "p", "t", "s", "e").getStatus());
         assertEquals(IdeaStatus.HOLD, new Idea(null, IdeaType.IT, "p", "t", "s", null).getStatus());
         assertEquals(IdeaStatus.HOLD, new Idea(null, IdeaType.IT, "p", "  ", "s", "e").getStatus());

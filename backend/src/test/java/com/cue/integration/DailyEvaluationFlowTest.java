@@ -129,8 +129,8 @@ class DailyEvaluationFlowTest {
         var first = evaluate(token, id);
         assertEquals("EVALUATED", first.get("status").asString());
         assertTrue(first.get("changed").asBoolean());
-        // (70+60+40+80) * 0.25 = 62.5
-        assertEquals(62.5, first.get("idea").get("totalScore").asDouble());
+        // (70+60+40+80) * 0.2 = 50 (TREND는 0점으로 시작)
+        assertEquals(50.0, first.get("idea").get("totalScore").asDouble());
         assertTrue(first.get("idea").get("hasNewChange").asBoolean());
         assertEquals(4, evaluationCount(id));                       // 기준마다 0 → 점수로의 변화가 평가 행으로 남는다
         assertEquals(1, count("select count(*) from idea_score_histories where idea_id = ?", id));
@@ -223,14 +223,14 @@ class DailyEvaluationFlowTest {
     void 예약된_가중치는_평가_턴_시작에_적용되고_총점이_바뀌면_이력_스냅샷만_남긴다() throws Exception {
         String token = signUpAndLogin("weight@cue.com");
         long id = createIdea(token, FULL);
-        evaluate(token, id); // 총점 62.5, 이력 1건
+        evaluate(token, id); // 총점 50, 이력 1건
         String lastAt = mapper.readTree(mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
                 .andReturn().getResponse().getContentAsString()).get("data").get("lastEvaluatedAt").asString();
 
         mvc.perform(patch("/api/ideas/" + id + "/weights").header("Authorization", token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"weights\":{\"PROBLEM_IMPORTANCE\":100,\"MARKET_DEMAND\":0,"
-                                + "\"MARKET_DIFFERENTIATION\":0,\"TECH_FEASIBILITY\":0}}"))
+                                + "\"MARKET_DIFFERENTIATION\":0,\"TECH_FEASIBILITY\":0,\"TREND\":0}}"))
                 .andExpect(status().isOk());
 
         var result = evaluate(token, id); // 자료 변화 없음
@@ -241,7 +241,7 @@ class DailyEvaluationFlowTest {
         assertEquals(2, count("select count(*) from idea_score_histories where idea_id = ?", id));
         mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
                 .andExpect(jsonPath("$.data[1].totalScore").value(70.0))
-                .andExpect(jsonPath("$.data[1].totalDifference").value(7.5));
+                .andExpect(jsonPath("$.data[1].totalDifference").value(20.0));
     }
 
     // ===== 수동 API 권한·에러 =====

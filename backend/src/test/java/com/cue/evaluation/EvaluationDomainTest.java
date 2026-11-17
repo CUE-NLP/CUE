@@ -38,10 +38,10 @@ class EvaluationDomainTest {
     void 예약_가중치는_턴_시작에서_적용되고_총점이_바뀐다() {
         Idea idea = idea();
         idea.score(ScoreType.MARKET_DEMAND).applyDifference(new java.math.BigDecimal("80"));
-        idea.recalculateTotal(); // 20.00
+        idea.recalculateTotal(); // 16.00
         idea.reserveWeights(Map.of(ScoreType.PROBLEM_IMPORTANCE, 0, ScoreType.MARKET_DEMAND, 100,
-                ScoreType.MARKET_DIFFERENTIATION, 0, ScoreType.TECH_FEASIBILITY, 0));
-        assertEquals(new java.math.BigDecimal("20.00"), idea.getTotalScore());
+                ScoreType.MARKET_DIFFERENTIATION, 0, ScoreType.TECH_FEASIBILITY, 0, ScoreType.TREND, 0));
+        assertEquals(new java.math.BigDecimal("16.00"), idea.getTotalScore());
         idea.startNextTurn();
         assertEquals(new java.math.BigDecimal("80.00"), idea.getTotalScore());
     }
