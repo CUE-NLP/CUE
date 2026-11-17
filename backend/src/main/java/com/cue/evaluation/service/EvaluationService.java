@@ -38,21 +38,28 @@ public class EvaluationService {
      */
     @Transactional
     public boolean recordChanges(Long ideaId, List<ScoreChange> changes) {
-        return recordChanges(ideaId, changes, null);
+        return recordResults(ideaId, changes, false, null);
     }
 
     /**
-     * 위와 같고, 이번 평가의 근거가 된 외부 자료 요약(trend)이 있으면 각 항목 평가의 {@code trend_id}로 연결한다.
+     * {@link #recordChanges}와 같고, 하루 평가의 결과(키워드 근거 4개 기준 + TREND)를 한 트랜잭션으로 저장하면서 평가 완료 표시도 함께 남긴다.
+     * TREND 변화({@link ScoreChange#trendId()} 있음)는 그 트렌드 행에 연결된다. 총점·이력·날짜는 합쳐서 한 번만 기록한다.
      *
-     * @param trendId 연결할 트렌드 id (없으면 null)
+     * @param completeFull   키워드 근거 전체(초기) 평가를 마쳤으면 true ({@code needs_full_evaluation} 해제)
+     * @param trendEvaluated TREND 평가를 마친 글로벌 트렌드 id (점수가 안 바뀌었어도 기록한다), 안 했으면 null
      */
     @Transactional
-    public boolean recordChanges(Long ideaId, List<ScoreChange> changes, Long trendId) {
+    public boolean recordResults(Long ideaId, List<ScoreChange> changes, boolean completeFull, Long trendEvaluated) {
         Idea idea = ideas.findById(ideaId).orElseThrow(() -> new CustomException(ErrorCode.IDEA_NOT_FOUND));
         if (!idea.isActive()) {
             throw new CustomException(ErrorCode.IDEA_NOT_ACTIVE);
         }
-        Trend trend = trendId == null ? null : trends.getReferenceById(trendId);
+        if (completeFull) {
+            idea.completeFullEvaluation();
+        }
+        if (trendEvaluated != null) {
+            idea.completeTrendEvaluation(trendEvaluated);
+        }
         LocalDateTime now = LocalDateTime.now();
         BigDecimal totalBefore = idea.getTotalScore();
         boolean changed = false;
@@ -64,6 +71,7 @@ public class EvaluationService {
             if (actual.signum() == 0) {
                 continue;
             }
+            Trend trend = change.trendId() == null ? null : trends.getReferenceById(change.trendId());
             Evaluation evaluation = new Evaluation(score, trend, change.evidenceSummary(), actual,
                     score.getWeight(), score.getScore(), now);
             if (change.references() != null) {

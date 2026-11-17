@@ -23,7 +23,7 @@ class PromptTemplatesTest {
 
     private static final List<String> FILES =
             List.of("trend-summary.txt", "item-summary.txt", "trend-item-summary.txt", "global-trend-summary.txt",
-                    "initial-evaluation.txt", "re-evaluation.txt");
+                    "initial-evaluation.txt", "re-evaluation.txt", "trend-evaluation.txt");
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{\\{(\\w+)}}");
     private static final Pattern SECTION = Pattern.compile("^### (\\S+\\.txt)\\s*$");
     private static final Pattern TABLE_ROW = Pattern.compile("^\\|\\s*`\\{\\{(\\w+)}}`");
@@ -56,7 +56,7 @@ class PromptTemplatesTest {
     @Test
     void 문서의_JSON_예시가_유효한_JSON이다() throws IOException {
         List<String> blocks = jsonBlocks(Files.readString(docPath(), StandardCharsets.UTF_8));
-        assertThat(blocks).hasSizeGreaterThanOrEqualTo(6);
+        assertThat(blocks).hasSizeGreaterThanOrEqualTo(8);
         for (String block : blocks) {
             assertThat(objectMapper.readTree(block).isObject()).as(block).isTrue();
         }

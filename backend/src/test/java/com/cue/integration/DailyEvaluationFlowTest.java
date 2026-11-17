@@ -16,6 +16,8 @@ import com.cue.source.dto.SourceCheckResult;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
 import com.cue.source.service.SourceCheckService;
+import com.cue.trend.dto.TrendSnapshot;
+import com.cue.trend.service.GlobalTrendService;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +58,7 @@ class DailyEvaluationFlowTest {
     @MockitoBean GeminiClient gemini;
     @MockitoBean SourceCheckService sourceCheck;
     @MockitoBean com.cue.source.service.SourceSummaryService sourceSummary;
+    @MockitoBean GlobalTrendService globalTrend;
 
     private static final String FULL = "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\","
             + "\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}";
@@ -65,10 +68,26 @@ class DailyEvaluationFlowTest {
             + "{\"type\":\"MARKET_DIFFERENTIATION\",\"score\":40,\"evidenceSummary\":\"경쟁이 많다\"},"
             + "{\"type\":\"TECH_FEASIBILITY\",\"score\":80,\"evidenceSummary\":\"구현 가능\"}]}";
 
+    /** TREND 평가 응답 (첫 평가는 score, 재평가는 difference를 읽는다). */
+    private static final String TREND_REPLY = "{\"score\":65,\"difference\":35,\"evidenceSummary\":\"에이전트 흐름과 맞닿아 있다\","
+            + "\"referenceUrls\":[\"https://news.ycombinator.com/item?id=1\",\"https://not-in-trend.test/x\"]}";
+    private String trendReply = TREND_REPLY;
+
+    /** trends에 실제 행을 넣고 그 행을 가리키는 스냅샷을 만든다 (evaluations.trend_id FK 때문에 실제 행이 필요하다). */
+    private TrendSnapshot newTrend(String summary) {
+        Long id = jdbc.queryForObject("insert into trends (summary, providers, content_hash) values (?, 'HACKER_NEWS', ?) returning id",
+                Long.class, summary, "hash-" + System.nanoTime());
+        return new TrendSnapshot(id, summary, LocalDateTime.now(), List.of(SourceCheckResult.changed(null, ApiProvider.HACKER_NEWS, "",
+                List.of(new SourceItem("Agents everywhere", "https://news.ycombinator.com/item?id=1", "항목 요약", "2026-06-01", "points=900")),
+                LocalDateTime.now())));
+    }
+
     @BeforeEach
     void reset() {
         jdbc.execute("TRUNCATE users, trends RESTART IDENTITY CASCADE");
-        org.mockito.Mockito.reset(gemini, sourceCheck, sourceSummary);
+        org.mockito.Mockito.reset(gemini, sourceCheck, sourceSummary, globalTrend);
+        trendReply = TREND_REPLY;
+        when(globalTrend.today()).thenReturn(newTrend("에이전트 도구가 뜬다"));
         when(gemini.available()).thenReturn(true);
         when(sourceCheck.checkAll(anyLong())).thenReturn(List.of());
         when(sourceSummary.summarize(any())).thenAnswer(inv ->
@@ -77,6 +96,7 @@ class DailyEvaluationFlowTest {
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             Map<?, ?> props = (Map<?, ?>) ((Map<?, ?>) inv.getArgument(1)).get("properties");
             if (props.containsKey("scores")) return mapper.readTree(INITIAL);
+            if (props.containsKey("difference")) return mapper.readTree(trendReply);
             if (props.containsKey("changes")) return mapper.readTree(
                     "{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":35,\"evidenceSummary\":\"관심이 급증했다\","
                             + "\"referenceUrls\":[\"https://github.com/a/b\"]},"
@@ -129,12 +149,21 @@ class DailyEvaluationFlowTest {
         var first = evaluate(token, id);
         assertEquals("EVALUATED", first.get("status").asString());
         assertTrue(first.get("changed").asBoolean());
-        // (70+60+40+80) * 0.2 = 50 (TREND는 0점으로 시작)
-        assertEquals(50.0, first.get("idea").get("totalScore").asDouble());
+        // (70+60+40+80+65) * 0.2 = 63 — 4개 기준(키워드 근거) + TREND 첫 평가
+        assertEquals(63.0, first.get("idea").get("totalScore").asDouble());
         assertTrue(first.get("idea").get("hasNewChange").asBoolean());
-        assertEquals(4, evaluationCount(id));                       // 기준마다 0 → 점수로의 변화가 평가 행으로 남는다
-        assertEquals(1, count("select count(*) from idea_score_histories where idea_id = ?", id));
+        assertEquals(5, evaluationCount(id));                       // 기준마다 0 → 점수로의 변화가 평가 행으로 남는다
+        assertEquals(1, count("select count(*) from idea_score_histories where idea_id = ?", id)); // 하루 평가는 이력 1행
         assertFalse(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id));
+        // TREND 평가만 그날 트렌드 행에 연결되고, 근거 URL은 트렌드 항목에 있는 것만 남는다
+        Long trendId = jdbc.queryForObject("select id from trends", Long.class);
+        assertEquals(trendId, jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
+        assertEquals(1, count("select count(*) from evaluations where trend_id is not null"));
+        assertEquals(trendId, jdbc.queryForObject("select e.trend_id from evaluations e join scores s on s.id = e.score_id "
+                + "where s.type = 'TREND' and s.idea_id = ?", Long.class, id));
+        assertEquals(List.of("https://news.ycombinator.com/item?id=1"), jdbc.queryForList(
+                "select r.url from evaluation_references r join evaluations e on e.id = r.evaluation_id "
+                        + "join scores s on s.id = e.score_id where s.type = 'TREND'", String.class));
 
         // 두 번째: 자료 변화 없음 → Gemini 추가 호출·평가·날짜 갱신 없음
         var lastAt = first.get("idea").get("lastEvaluatedAt").asString();
@@ -144,7 +173,7 @@ class DailyEvaluationFlowTest {
         assertFalse(second.get("changed").asBoolean());
         assertEquals(lastAt, second.get("idea").get("lastEvaluatedAt").asString());
         verify(gemini, never()).generateJson(anyString(), anyMap());
-        assertEquals(4, evaluationCount(id));
+        assertEquals(5, evaluationCount(id));
         assertEquals(1, count("select count(*) from idea_score_histories where idea_id = ?", id));
     }
 
@@ -159,19 +188,22 @@ class DailyEvaluationFlowTest {
                 .content("{\"solution\":\"완전히 다른 해결\"}")).andExpect(status().isOk());
         assertTrue(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id));
 
+        assertNull(jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id)); // TREND도 첫 평가부터 다시
+
         clearInvocations(gemini);
         var again = evaluate(token, id);
         assertEquals("EVALUATED", again.get("status").asString());
         assertFalse(again.get("changed").asBoolean()); // 같은 점수를 돌려줬으므로 점수 변화 없음 → 기록 없음
-        verify(gemini, times(1)).generateJson(anyString(), anyMap());
-        assertEquals(4, evaluationCount(id));
+        verify(gemini, times(2)).generateJson(anyString(), anyMap()); // 4개 기준 초기 평가 1 + TREND 초기 평가 1
+        assertNotNull(jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
+        assertEquals(5, evaluationCount(id));
         assertFalse(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id));
     }
 
     // ===== 자료 변화 → 재평가 =====
 
     @Test
-    void 근거_자료가_바뀌면_변화량을_10으로_제한해_평가하고_트렌드와는_연결하지_않는다() throws Exception {
+    void 근거_자료가_바뀌면_4개_기준만_재평가하고_변화량을_10으로_제한하며_트렌드와는_연결하지_않는다() throws Exception {
         String token = signUpAndLogin("change@cue.com");
         long id = createIdea(token, FULL);
         evaluate(token, id); // 초기 평가: 70/60/40/80
@@ -190,9 +222,10 @@ class DailyEvaluationFlowTest {
         assertEquals(70.0, demand); // 60 + min(35, 10)
         assertEquals(77.0, tech);   // 80 - 3
 
-        assertEquals(0, count("select count(*) from trends")); // 키워드 근거 평가는 trend와 무관하다
-        assertEquals(0, count("select count(*) from evaluations where trend_id is not null"));
+        assertEquals(1, count("select count(*) from evaluations where trend_id is not null")); // 첫 평가의 TREND 1건뿐, 키워드 근거 평가는 연결 없음
         assertEquals(2, count("select count(*) from idea_score_histories where idea_id = ?", id));
+        verify(gemini, times(3)).generateJson(anyString(), anyMap()); // 첫 평가(A·B) 2회 + 재평가는 A만 1회 (소스 요약은 목)
+        
         mvc.perform(get("/api/ideas/" + id + "/evaluations").header("Authorization", token))
                 .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND' && @.difference==10.0)].references[0].url")
                         .value("https://github.com/a/b"));
@@ -212,8 +245,103 @@ class DailyEvaluationFlowTest {
                 .andExpect(jsonPath("$.code").value("G002"));
 
         verify(sourceCheck).restoreHash(eq(1L), any(), any());
+        assertEquals(5, evaluationCount(id));
+    }
+
+    // ===== 글로벌 트렌드(TREND) 평가 =====
+
+    private double trendScore(tools.jackson.databind.JsonNode idea) {
+        for (var s : idea.get("scores")) {
+            if (s.get("type").asString().equals("TREND")) return s.get("score").asDouble();
+        }
+        throw new AssertionError("TREND 점수 없음");
+    }
+
+    @Test
+    void 새_트렌드가_오면_TREND만_재평가하고_변화량을_10으로_제한해_새_트렌드에_연결한다() throws Exception {
+        String token = signUpAndLogin("trend@cue.com");
+        long id = createIdea(token, FULL);
+        evaluate(token, id); // TREND 65
+
+        TrendSnapshot next = newTrend("새로운 흐름");
+        when(globalTrend.today()).thenReturn(next);
+        clearInvocations(gemini);
+        var result = evaluate(token, id);
+
+        assertEquals("EVALUATED", result.get("status").asString());
+        assertTrue(result.get("changed").asBoolean());
+        assertEquals(75.0, trendScore(result.get("idea"))); // 65 + min(35, 10)
+        verify(gemini, times(1)).generateJson(anyString(), anyMap()); // 4개 기준(A)은 호출하지 않는다
+        assertEquals(6, evaluationCount(id));
+        assertEquals(next.id(), jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
+        assertEquals(next.id(), jdbc.queryForObject("select e.trend_id from evaluations e join scores s on s.id = e.score_id "
+                + "where s.type = 'TREND' and s.idea_id = ? order by e.id desc limit 1", Long.class, id));
+        assertEquals(2, count("select count(*) from idea_score_histories where idea_id = ?", id));
+
+        // 같은 트렌드로는 다시 호출하지 않는다
+        clearInvocations(gemini);
+        assertEquals("NO_CHANGE", evaluate(token, id).get("status").asString());
+        verify(gemini, never()).generateJson(anyString(), anyMap());
+    }
+
+    @Test
+    void TREND_평가가_실패해도_키워드_근거_평가는_저장되고_다음_실행에서_TREND만_다시_한다() throws Exception {
+        String token = signUpAndLogin("trendfail@cue.com");
+        long id = createIdea(token, FULL);
+        doAnswer(inv -> {
+            Map<?, ?> props = (Map<?, ?>) ((Map<?, ?>) inv.getArgument(1)).get("properties");
+            if (props.containsKey("difference")) throw new com.cue.global.error.CustomException(com.cue.global.error.ErrorCode.EXTERNAL_SERVER_ERROR);
+            return mapper.readTree(INITIAL);
+        }).when(gemini).generateJson(anyString(), anyMap());
+
+        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
+                .andExpect(status().isBadGateway()).andExpect(jsonPath("$.code").value("G002"));
+
+        assertEquals(4, evaluationCount(id)); // 4개 기준은 저장됨
+        assertFalse(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id));
+        assertNull(jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id)); // TREND는 아직
+
+        doAnswer(inv -> mapper.readTree(trendReply)).when(gemini).generateJson(anyString(), anyMap());
+        clearInvocations(gemini);
+        var retry = evaluate(token, id);
+        verify(gemini, times(1)).generateJson(anyString(), anyMap()); // A는 끝났으니 TREND 호출만
+        assertEquals(65.0, trendScore(retry.get("idea")));
+        assertEquals(5, evaluationCount(id));
+    }
+
+    @Test
+    void 키워드_근거_평가가_실패해도_TREND_평가는_저장되고_실패한_쪽은_다음에_다시_한다() throws Exception {
+        String token = signUpAndLogin("evidencefail@cue.com");
+        long id = createIdea(token, FULL);
+        doAnswer(inv -> {
+            Map<?, ?> props = (Map<?, ?>) ((Map<?, ?>) inv.getArgument(1)).get("properties");
+            if (props.containsKey("scores")) throw new com.cue.global.error.CustomException(com.cue.global.error.ErrorCode.EXTERNAL_SERVER_ERROR);
+            return mapper.readTree(trendReply);
+        }).when(gemini).generateJson(anyString(), anyMap());
+
+        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
+                .andExpect(status().isBadGateway());
+
+        assertEquals(1, evaluationCount(id)); // TREND만 저장됨
+        assertTrue(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id)); // A는 재시도 대상
+        assertNotNull(jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
+    }
+
+    @Test
+    void 글로벌_트렌드를_만들지_못한_날은_TREND_평가를_건너뛰고_키워드_근거만_평가한다() throws Exception {
+        String token = signUpAndLogin("notrend@cue.com");
+        long id = createIdea(token, FULL);
+        when(globalTrend.today()).thenReturn(null);
+
+        var result = evaluate(token, id);
+        assertEquals("EVALUATED", result.get("status").asString());
         assertEquals(4, evaluationCount(id));
-        assertEquals(0, count("select count(*) from trends"));
+        assertNull(jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
+
+        // 트렌드도 없고 키워드 자료 변화도 없으면 아무것도 하지 않는다
+        clearInvocations(gemini);
+        assertEquals("NO_CHANGE", evaluate(token, id).get("status").asString());
+        verify(gemini, never()).generateJson(anyString(), anyMap());
     }
 
     // ===== 가중치 예약 =====
@@ -222,7 +350,7 @@ class DailyEvaluationFlowTest {
     void 예약된_가중치는_평가_턴_시작에_적용되고_총점이_바뀌면_이력_스냅샷만_남긴다() throws Exception {
         String token = signUpAndLogin("weight@cue.com");
         long id = createIdea(token, FULL);
-        evaluate(token, id); // 총점 50, 이력 1건
+        evaluate(token, id); // 총점 63, 이력 1건
         String lastAt = mapper.readTree(mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
                 .andReturn().getResponse().getContentAsString()).get("data").get("lastEvaluatedAt").asString();
 
@@ -236,11 +364,11 @@ class DailyEvaluationFlowTest {
         assertEquals("NO_CHANGE", result.get("status").asString());
         assertEquals(70.0, result.get("idea").get("totalScore").asDouble());
         assertEquals(lastAt, result.get("idea").get("lastEvaluatedAt").asString()); // 평가가 아니므로 날짜는 그대로
-        assertEquals(4, evaluationCount(id));
+        assertEquals(5, evaluationCount(id));
         assertEquals(2, count("select count(*) from idea_score_histories where idea_id = ?", id));
         mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
                 .andExpect(jsonPath("$.data[1].totalScore").value(70.0))
-                .andExpect(jsonPath("$.data[1].totalDifference").value(20.0));
+                .andExpect(jsonPath("$.data[1].totalDifference").value(7.0));
     }
 
     // ===== 수동 API 권한·에러 =====
@@ -290,7 +418,7 @@ class DailyEvaluationFlowTest {
 
         assertEquals(new EvaluationBatchService.Summary(2, 1, 1, 0, 1), summary);
         verify(sourceCheck, never()).checkAll(hold);
-        assertEquals(4, evaluationCount(good));
+        assertEquals(5, evaluationCount(good));
         assertEquals(0, evaluationCount(bad));
         assertEquals(0, evaluationCount(hold));
     }

@@ -38,7 +38,7 @@ class EvaluationAnalyzerTest {
         Map<ScoreType, BigDecimal> scores = new EnumMap<>(ScoreType.class);
         for (ScoreType t : ScoreType.values()) scores.put(t, new BigDecimal("50"));
         scores.put(ScoreType.MARKET_DEMAND, new BigDecimal(demandScore));
-        return new IdeaSnapshot(7L, "문제", "타깃", "해결", "기대", scores, false);
+        return new IdeaSnapshot(7L, "문제", "타깃", "해결", "기대", scores, false, null);
     }
 
     private void respond(String json) {

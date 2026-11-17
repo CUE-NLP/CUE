@@ -39,7 +39,7 @@ import tools.jackson.databind.JsonNode;
 public class EvaluationAnalyzer {
     /** 재평가 한 번에서 기준 하나가 움직일 수 있는 최대 점수(정수). 프롬프트가 어겨도 서버가 한 번 더 제한한다. */
     public static final BigDecimal MAX_DIFFERENCE = BigDecimal.TEN;
-    private static final BigDecimal MAX_SCORE = new BigDecimal("100");
+    static final BigDecimal MAX_SCORE = new BigDecimal("100");
     /** 근거 요약 최대 길이(자름). */
     public static final int MAX_SUMMARY_CHARS = 300;
     private static final String NO_SUMMARY = "AI가 근거 요약을 제공하지 않았습니다.";
@@ -140,7 +140,7 @@ public class EvaluationAnalyzer {
         return vars;
     }
 
-    private static ScoreChange toChange(ScoreType type, BigDecimal diff, JsonNode n, Map<String, SourceCheckResult> byUrl) {
+    static ScoreChange toChange(ScoreType type, BigDecimal diff, JsonNode n, Map<String, SourceCheckResult> byUrl) {
         String summary = n.path("evidenceSummary").asString("").trim();
         List<ReferenceInput> refs = new ArrayList<>();
         Set<String> seen = new java.util.HashSet<>();
@@ -161,7 +161,7 @@ public class EvaluationAnalyzer {
         return new ScoreChange(type, diff, summary.isEmpty() ? NO_SUMMARY : summary, refs);
     }
 
-    private static Map<String, SourceCheckResult> indexByUrl(List<SourceCheckResult> changed) {
+    static Map<String, SourceCheckResult> indexByUrl(List<SourceCheckResult> changed) {
         Map<String, SourceCheckResult> map = new HashMap<>();
         for (SourceCheckResult r : changed) {
             for (SourceItem item : r.items()) {
@@ -187,18 +187,18 @@ public class EvaluationAnalyzer {
         }
     }
 
-    private static BigDecimal number(JsonNode n) {
+    static BigDecimal number(JsonNode n) {
         if (!n.isNumber()) {
             return null;
         }
         return n.decimalValue().setScale(0, java.math.RoundingMode.HALF_UP); // 점수·변화량은 정수
     }
 
-    private static BigDecimal clamp(BigDecimal v, BigDecimal min, BigDecimal max) {
+    static BigDecimal clamp(BigDecimal v, BigDecimal min, BigDecimal max) {
         return v.max(min).min(max);
     }
 
-    private static String nullToEmpty(String s) {
+    static String nullToEmpty(String s) {
         return s == null ? "" : s;
     }
 }
