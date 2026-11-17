@@ -141,6 +141,19 @@ cd backend && ./gradlew test
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순) |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
 
+### 아이디어 종류
+
+대분류 `type`은 현재 `IT` 하나이고(나중에 분야를 늘릴 때를 위해 컬럼 유지), IT 안의 세부 종류 `itCategory`가 검색에 쓰는 외부 API 조합을 정합니다. AI가 분류하며 응답에 `type`과 `itCategory`가 함께 담깁니다. 수정 시 ACTIVE면 다시 분류합니다.
+
+| `itCategory` | 설명 | 검색 API |
+| --- | --- | --- |
+| `AI_ML` | AI·머신러닝 | Hugging Face, Semantic Scholar, GitHub |
+| `DEV_TOOLS_INFRA` | 개발자 도구·인프라 (기본값) | GitHub, Stack Exchange, Hacker News |
+| `WEB_APP_SERVICE` | 웹·앱 서비스 | Hacker News, Stack Exchange, Wikipedia Pageviews |
+| `DATA_ANALYTICS` | 데이터·분석 | GitHub, Hugging Face, Semantic Scholar |
+
+Semantic Scholar·Wikipedia Pageviews 클라이언트는 별도 PR(#8)에서 구현합니다.
+
 ### 검색 키워드
 
 `POST /api/ideas`, `PATCH /api/ideas/{id}`의 선택 필드 `keywords`는 문자열 배열(최대 2개, 각 항목 trim 후 1~50자, 중복 제거, 언어 제한 없음)이며 위반하면 `G004`입니다. 응답에는 `keywords`(없으면 `[]`)와 `keywordOrigin`(`USER`/`AI`, 키워드가 없으면 `null`)이 담깁니다.
@@ -150,7 +163,7 @@ POST /api/ideas
 { "problem": "...", "target": "...", "solution": "...", "expectation": "...", "keywords": ["automated code review"] }
 ```
 
-- 사용자 키워드가 있으면 그 값으로 `sources`를 만들고 AI는 종류(type)만 분류합니다. 없으면 AI가 종류와 키워드(영어 1~2개)를 함께 추출합니다.
+- 사용자 키워드가 있으면 그 값으로 `sources`를 만들고 AI는 세부 종류(itCategory)만 분류합니다. 없으면 AI가 세부 종류와 키워드(영어 1~2개)를 함께 추출합니다.
 - 수정 시 출처가 `USER`이면 내용이 바뀌어도 키워드를 유지하고, `AI`이면 다시 추출합니다. `HOLD`는 키워드를 저장만 하고 `ACTIVE`가 될 때 적용합니다.
 
 ### 가중치
@@ -199,7 +212,7 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | 테이블 | 설명 |
 | --- | --- |
 | `users` | 사용자 |
-| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 검색 키워드(`keywords`, 줄바꿈 구분)와 출처(`keyword_origin`) · 총점 · 최근 변화량 · 확인 시각 |
+| `ideas` | 구조화된 아이디어 · 대분류 `type`(IT)·세부 종류 `it_category` · 상태(`ACTIVE`/`HOLD`) · 검색 키워드(`keywords`, 줄바꿈 구분)와 출처(`keyword_origin`) · 총점 · 최근 변화량 · 확인 시각 |
 | `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
 | `evaluation_references` | 평가 근거 출처 URL |
