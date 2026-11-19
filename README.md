@@ -9,8 +9,12 @@
 
 1. **기록**: 텍스트·음성으로 자유롭게 입력 (음성은 프론트에서 STT 후 전달)
 2. **구조화**: 프론트에서 AI가 타깃·문제·해결·기대효과 4개 항목으로 정리 → **사용자가 검증·수정한 뒤에만 서버에 저장**. 4개가 모두 채워지면 평가 대상(`ACTIVE`), 하나라도 비면 `보류(HOLD)`로 저장됩니다.
-3. **평가**: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성 4개 기준으로 점수화
-4. **갱신(Idea Delta)**: 24시간마다 외부 API 자료를 재확인, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
+3. **평가**: 5개 기준으로 점수화합니다.
+   - **키워드 근거 자료**로 판단하는 4개: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성
+   - **글로벌 트렌드**로 판단하는 1개: **트렌디함(`TREND`)** — 아이디어와 무관하게 하루 1회 모은 Hacker News · GitHub · Hugging Face 급상승 자료를 아이디어에 대입해 판단
+4. **갱신(Idea Delta)**: 매일(기본 03:00 KST) 두 갈래로 재평가합니다. 변화가 있을 때만 Gemini를 호출하고, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
+   - **A. 키워드 근거 자료 → 4개 기준**: 아이디어 종류별 외부 API를 아이디어 키워드로 조회 → 변경 감지 → 상위 항목 원문 읽기 → 항목·소스 요약 → 재평가
+   - **B. 글로벌 트렌드 → TREND**: 하루 1회(아이디어 수와 무관) 키워드 없이 급상승 자료를 수집·요약 → 각 아이디어에 대입해 TREND 점수 갱신 (트렌드가 어제와 같으면 호출하지 않음)
 
 ## 저장소 구조
 
@@ -48,7 +52,7 @@ CUE
 ## 프론트가 맡는 역할
 - 아이디어 입력(텍스트·음성): **음성 인식(STT)은 프론트에서 처리**하고, 서버에는 텍스트만 보냅니다.
 - AI 구조화(타깃 · 문제 · 해결 · 기대효과)와 사용자 확인·수정 후 저장 요청 (서버는 구조화하지 않고 저장만 합니다. 항목이 비어 있으면 `보류`로 저장됩니다)
-- 리더보드(점수 · 순위 · 변화량), Idea Delta, 항목별 가중치 조절 화면
+- 리더보드(점수 · 순위 · 변화량), Idea Delta, 항목별 가중치 조절 화면 (**슬라이더 5개**: 4개 근거 기준 + 트렌디함)
 
 ## 백엔드 연동 참고
 - **응답 형식**: 모든 응답이 `CommonResponse` 래퍼입니다 (`result`, `code`, `message`, `data`, `timestamp`). 자세한 형식은 [응답 형식](#응답-형식)을 참고하세요.
@@ -76,6 +80,11 @@ API 호출 (Authorization: Bearer {accessToken})
 
   - 인증이 필요 없는 API는 회원가입(`POST /api/users`)·로그인·재발급 세 개뿐이고, 나머지 `/api/**`(로그아웃 포함)는 모두 액세스 토큰이 필요합니다. 본인 소유가 아닌 아이디어는 `403 I002`, 없는 아이디어는 `404 I001`입니다. 이메일은 소문자로 정규화되므로 대소문자 구분 없이 가입·로그인합니다.
 - **에러 처리**: `code` 값으로 분기합니다. 토큰 만료는 `A004`입니다. 전체 목록은 [에러 코드](#에러-코드)를 참고하세요.
+- **5개 기준(`TREND` 추가) — 프론트 영향**: `scores`가 아이디어마다 **5행**(`PROBLEM_IMPORTANCE`·`MARKET_DEMAND`·`MARKET_DIFFERENTIATION`·`TECH_FEASIBILITY`·`TREND`)으로 내려오고 가중치 기본값은 각 20%입니다. 가중치 슬라이더를 4개 → 5개로 늘리고, `PATCH /api/ideas/{id}/weights` 요청에 `TREND`를 **반드시 포함**해야 합니다(5개 모두 필요, 합 100). 예전 4개짜리 요청은 `I003`으로 거절됩니다. `/evaluations`의 `scoreType`에도 `TREND`가 나옵니다.
+- **평가는 비동기입니다 (프론트 흐름)**: 아이디어를 저장(`POST /api/ideas`, ACTIVE)하거나 내용을 수정(`PATCH`)하면 서버가 커밋 뒤 **첫 평가를 자동으로 큐에 넣습니다**(`EVALUATION_AUTO_ON_SAVE`). 프론트는 "가능성을 분석하고 있어요" 로딩 화면에서 `GET /api/ideas/{id}`를 **몇 초 간격으로 폴링**하고, `evaluationStatus`가 `IDLE`이면 점수를 보여주고 `FAILED`면 `lastEvaluationErrorCode`로 안내합니다. **평가가 끝날 때까지(`QUEUED`/`RUNNING`) 그 아이디어는 수정할 수 없습니다**(`PATCH`가 `I005`). 저장 직후 자동 평가가 시작되면 로딩 화면 동안 수정 버튼을 비활성화하고, `I005`가 오면 "평가가 끝난 뒤 다시 시도해 주세요"로 안내하세요. 가중치 예약(`/weights`)과 확인 처리(`/check`)는 평가 중에도 됩니다. 수동으로 다시 돌리려면 `POST /api/ideas/{id}/evaluate`(즉시 `202`)를 호출하고 같은 방식으로 폴링합니다.
+  - `evaluationStatus`: `IDLE`(대기·완료) → `QUEUED`(대기열) → `RUNNING`(평가 중) → `IDLE`(완료, 점수·`hasNewChange` 갱신) 또는 `FAILED`(`lastEvaluationErrorCode`에 `G002` 등). `FAILED`는 다시 요청하면 재시도됩니다. 보류(HOLD) 아이디어와 평가 전 상태는 `IDLE`입니다.
+  - 서버는 평가를 한 번에 하나씩만 돌리므로 대기열이 길면 `QUEUED`가 오래 갈 수 있고(수 분), 대기열이 가득 차면 요청이 `E004`로 거절됩니다. 서버 재시작으로 중단된 평가는 `FAILED`(`E005`)가 됩니다.
+- **시연용 버튼 흐름**: 서버를 `DEMO_API_ENABLED=true`로 띄운 뒤 화면의 "지금 조회·평가" 버튼이 `POST /api/demo/evaluations/run`(변화를 눈으로 보여주려면 `{"force": true}`)을 호출 → `202`를 받으면 `queued`의 아이디어마다 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링 → `evaluationStatus`가 `IDLE`이면 점수·`hasNewChange` 갱신 표시, `FAILED`면 에러 코드 안내. `D001`이면 버튼을 숨기고, `D002`는 잠시 뒤 다시 누르도록 안내합니다. **주의**: `force`는 호출 수가 많아(아이디어마다 최대 수십 회) Gemini 무료 한도를 빨리 소진합니다. 큐에 들어간 아이디어는 평가가 끝날 때까지 수정할 수 없습니다(`I005`).
 - **API 문서**: 백엔드 실행 후 `http://localhost:8080/swagger-ui.html` (OpenAPI JSON은 `/v3/api-docs`). 각 API에 요청/응답 예시와 **발생 가능한 에러 코드(code/message)** 가 적혀 있습니다. 우측 상단 **Authorize**에 로그인 응답의 `accessToken`을 넣으면 인증이 필요한 API를 바로 호출해 볼 수 있습니다.
 - **CORS**: 기본 허용 오리진은 `http://localhost:5173`, `http://localhost:3000`입니다. 다른 도메인(배포 주소 등)은 백엔드 환경변수 `CORS_ALLOWED_ORIGINS`(쉼표 구분)에 추가해야 합니다. 허용 헤더는 `Authorization`·`Content-Type`·`Accept`, 메서드는 GET/POST/PUT/PATCH/DELETE/OPTIONS이며 쿠키(credentials)는 쓰지 않습니다.
 
@@ -89,15 +98,16 @@ API 호출 (Authorization: Bearer {accessToken})
 backend/src/main/java/com/cue
 ├── global/
 │   ├── config/      SecurityConfig (JWT, 인증 설정)
+│   ├── ai/          GeminiClient · PromptLoader (평가용 Gemini 호출, 프롬프트 치환)
 │   ├── error/       ErrorCode(전체 에러 코드), CustomException, GlobalExceptionHandler
 │   └── security/    UserPrincipal, JwtTokenProvider, JwtPrincipalConverter
 ├── auth/            로그인 · 리프레시 토큰 재발급 · 로그아웃
 ├── user/            회원가입 · 내 정보
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
-├── score/           항목별 점수 (4개 기준)
-├── evaluation/      재평가 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
-├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange) · 해시 변경 감지
-└── trend/           고정 API 4개로 수집한 트렌드 요약
+├── score/           항목별 점수 (5개 기준: 4개 근거 기준 + TREND)
+├── evaluation/      일일 평가 파이프라인(스케줄러 · 근거 4개 기준 평가 · TREND 평가) · 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
+├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange/Hacker News/Semantic Scholar/Wikipedia Pageviews, 키워드 급상승 조회·원문 읽기) · 해시 변경 감지 · 항목/소스 요약
+└── trend/           글로벌 트렌드(키워드 없음, 하루 1회 수집·요약) — TREND 평가의 근거
 ```
 
 각 도메인은 `controller / service / repository / entity / dto` 로 나누고, 보일러플레이트는 Lombok(`@Getter`, `@RequiredArgsConstructor` 등)으로 줄입니다.
@@ -140,7 +150,22 @@ cd backend && ./gradlew bootRun
 | `GEMINI_BASE_URL` / `GEMINI_TIMEOUT_SECONDS` | `https://generativelanguage.googleapis.com` / `10` | Gemini 엔드포인트 / 호출 타임아웃(초) |
 | `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
 | `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
+| `TREND_DAYS` / `TREND_TOP_N` | `7` / `5` | 글로벌 트렌드: "급상승" 기간(일) / provider(HN·GitHub·Hugging Face)마다 읽고 요약할 상위 항목 수 |
 | `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
+| `SEMANTIC_SCHOLAR_API_KEY` | 없음 | (선택) Semantic Scholar API 키. **없으면 익명 공유 한도가 낮아 429(`G002`)가 잦습니다** |
+| `WIKIMEDIA_USER_AGENT` | 프로젝트 식별용 일반 문자열 | Wikimedia API 필수 User-Agent (개인 이메일을 넣지 마세요) |
+| `SOURCE_PAPERS_YEARS` / `SOURCE_PAGEVIEWS_DAYS` | `2` / `30` | 논문은 최근 N년(올해 포함)만 / 위키 문서 조회수를 합산할 최근 일수 |
+| `SOURCE_TOP_N` / `SOURCE_TRENDING_DAYS` | `5` / `30` | source마다 읽고 요약할 상위 항목 수 / "급상승" 기간(일) |
+| `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | 원문을 자르는 길이 / 같은 URL 요약 재사용 기간(일) |
+| `SOURCE_BATCH_CONTENT_CHARS` / `SOURCE_BATCH_TOTAL_CHARS` | `4000` / `16000` | 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자) |
+| `GEMINI_MIN_INTERVAL_MS` | `6500` | 평가용 Gemini 호출 사이 최소 간격(ms, 무료 티어 분당 한도용) |
+| `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 여부 (테스트는 `false`) |
+| `EVALUATION_CRON` / `EVALUATION_ZONE` | `0 0 3 * * *` / `Asia/Seoul` | 재평가 실행 시각(Spring 6필드 cron: `초 분 시 일 월 요일`) · 시간대. 환경변수로 바로 바꿀 수 있다. 예: `EVALUATION_CRON="0 30 9 * * *"` = 매일 09:30 |
+| `EVALUATION_DELAY_MS` | `15000` | 아이디어 사이 대기(ms) — Gemini 무료 티어 분당 호출 한도용 |
+| `DEMO_API_ENABLED` | `false` | 시연용 `POST /api/demo/evaluations/run` 사용 여부. **꺼져 있으면 `D001`.** 호출이 Gemini 무료 한도를 소진시킬 수 있어 시연 때만 켠다 |
+| `DEMO_COOLDOWN_SECONDS` | `30` | 같은 사용자가 시연 실행을 연달아 누르는 최소 간격(초). 안에 다시 누르면 `D002`(429) |
+| `EVALUATION_AUTO_ON_SAVE` | `true` | ACTIVE로 저장·내용 수정 시 첫 평가를 자동으로 큐에 넣음 (테스트는 `false`) |
+| `EVALUATION_QUEUE_CAPACITY` / `EVALUATION_SHUTDOWN_WAIT_SECONDS` | `50` / `30` | 평가 대기열 상한(가득 차면 `E004`) / 종료 시 진행 중 평가를 기다리는 시간(초) |
 | `DB_PORT` | `5433` | `docker-compose.yml`의 DB 호스트 포트 (`DB_URL` 포트도 함께 맞출 것) |
 
 ### 테스트
@@ -166,11 +191,13 @@ cd backend && ./gradlew test
 | POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
 | GET | `/api/ideas` | ✓ | 리더보드(목록 응답 `data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태 · 항목별 점수 · 가중치 · 최근 변화량 · `hasNewChange`) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출. `keywords`: 생략=유지(출처가 AI면 재추출), `[]`=사용자 키워드 삭제 후 AI 재추출, 1~2개=교체 |
+| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출. `keywords`: 생략=유지(출처가 AI면 재추출), `[]`=사용자 키워드 삭제 후 AI 재추출, 1~2개=교체. **평가가 대기(`QUEUED`)·진행(`RUNNING`) 중이면 `409 I005`로 거절** (`IDLE`·`FAILED`면 가능) |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순, 목록 응답 `data.items`) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순, 목록 응답 `data.items`) |
-| PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
+| POST | `/api/demo/evaluations/run` | ✓ | **시연용** "지금 조회·평가"(`DEMO_API_ENABLED=true`일 때만, 아니면 `D001` 403). 선택 본문 `{"force": boolean}`(기본 false). 글로벌 트렌드 수집(오늘 것이 없거나 `force`일 때)과 **호출한 사용자의 ACTIVE 아이디어 전부**를 평가 큐에 넣고 즉시 `202`. 응답 `data`: `queued`(큐에 넣은 아이디어 id), `skipped`(`[{ideaId, reason}]`, reason은 `ALREADY_QUEUED`/`ALREADY_RUNNING`/`QUEUE_FULL`), `trendRefreshed`(트렌드 수집 작업을 큐에 넣었는지). 보류·다른 사용자 아이디어는 건드리지 않음. `force=true`면 트렌드를 다시 수집하고 source 해시를 바꿔 자료를 다시 읽고 평가함. Gemini 불가 `E001`, 쿨다운 `D002`, 큐 가득 `E004`. 진행은 `GET /api/ideas/{id}`의 `evaluationStatus` 폴링 |
+| POST | `/api/ideas/{id}/evaluate` | ✓ | 평가를 **비동기로** 요청 — 즉시 **`202 Accepted`**(본문 `code`는 다른 성공 응답처럼 `"200"`). 응답 `data`: `status`(`QUEUED` 방금 큐에 넣음 / `RUNNING` 이미 진행 중이라 그대로 둠 — 중복 요청은 에러 없이 멱등), `idea`. 본인 아이디어만(`I002`), 보류 `I004`, Gemini 불가 `E001`, 대기열 가득 `E004`는 요청 시점에 바로 반환. 결과는 `GET /api/ideas/{id}`의 `evaluationStatus`를 폴링해 확인 |
+| PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — **5개 항목(TREND 포함) 모두**, 합 100, **다음 평가 턴부터 적용** |
 
 ### 아이디어 종류
 
@@ -199,12 +226,12 @@ POST /api/ideas
 
 ### 가중치
 
-- 평가 항목 4개(문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성)의 가중치는 아이디어별로 조절하며, 합이 **100%** 여야 합니다. 기본값은 각 25%입니다.
+- 평가 항목 5개(문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성 · 트렌디함)의 가중치는 아이디어별로 조절하며, 합이 **100%** 여야 합니다. 기본값은 각 20%입니다.
 - 변경하면 `pendingWeightPercent`에 예약되고, 현재 점수·순위에는 바로 반영되지 않습니다. 다음 평가 턴 시작 시(`Idea.startNextTurn()`) 적용되고 총점이 다시 계산됩니다.
 
 ```json
 PATCH /api/ideas/1/weights
-{ "weights": { "PROBLEM_IMPORTANCE": 30, "MARKET_DEMAND": 30, "MARKET_DIFFERENTIATION": 20, "TECH_FEASIBILITY": 20 } }
+{ "weights": { "PROBLEM_IMPORTANCE": 30, "MARKET_DEMAND": 25, "MARKET_DIFFERENTIATION": 20, "TECH_FEASIBILITY": 15, "TREND": 10 } }
 ```
 
 ### 응답 형식
@@ -255,10 +282,18 @@ PATCH /api/ideas/1/weights
 | | `U002` | 404 | 사용자 없음 |
 | Idea | `I001` | 404 | 아이디어 없음 |
 | | `I002` | 403 | 본인 아이디어가 아님 |
-| | `I003` | 400 | 가중치 오류 (4개 항목·0~100·합 100) |
+| | `I003` | 400 | 가중치 오류 (5개 항목(TREND 포함)·0~100·합 100) |
 | | `I004` | 409 | 보류(HOLD) 아이디어는 평가 불가 |
+| | `I005` | 409 | 평가가 대기·진행 중인 아이디어는 수정 불가 (끝난 뒤 다시 시도) |
 | Source | `S001` | 404 | 수집 설정(source)을 찾을 수 없음 |
 | | `S002` | 501 | 아직 지원하지 않는 외부 API |
+| | `S003` | 400 | 허용되지 않는 URL (원문 가져오기 SSRF 차단) |
+| Demo | `D001` | 403 | 시연용 API 꺼짐 (`DEMO_API_ENABLED`) |
+| | `D002` | 429 | 시연 실행 쿨다운 |
+| Evaluation | `E001` | 503 | AI 평가 사용 불가 (Gemini 비활성·키 없음) |
+| | `E002` | 502 | AI 평가 응답 해석 불가 |
+| | `E004` | 503 | 평가 대기열 가득 |
+| | `E005` | 503 | 재시작으로 평가 중단 (`FAILED` 상태의 `lastEvaluationErrorCode`로만 노출) |
 
 > 새 코드를 만들 때는 먼저 현재 `ErrorCode`와 열려 있는 PR의 코드를 확인해 번호가 겹치지 않게 합니다. 외부 API(Gemini·수집) 호출 실패는 `G002`입니다.
 
@@ -277,13 +312,15 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | `users` | 사용자 |
 | `refresh_tokens` | 리프레시 토큰 SHA-256 해시 · 만료 시각 · 폐기 시각 (사용자 FK) |
 | `revoked_access_tokens` | 로그아웃으로 폐기된 액세스 토큰의 `jti` · 토큰 만료 시각 (만료 후 정리 작업이 삭제) |
-| `ideas` | 구조화된 아이디어 · 대분류 `type`(IT)·세부 종류 `it_category` · 상태(`ACTIVE`/`HOLD`) · 검색 키워드(`keywords`, 줄바꿈 구분)와 출처(`keyword_origin`) · 총점 · 최근 변화량 · 확인 시각 |
-| `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
-| `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
+| `ideas` | 구조화된 아이디어 · 대분류 `type`(IT)·세부 종류 `it_category` · 상태(`ACTIVE`/`HOLD`) · 검색 키워드(`keywords`, 줄바꿈 구분)와 출처(`keyword_origin`) · 총점 · 최근 변화량 · 확인 시각 · 전체 평가 필요 플래그(`needs_full_evaluation`) · TREND를 마지막으로 평가한 트렌드(`last_trend_id`) · 평가 실행 상태(`evaluation_status`·시작/종료 시각·`last_evaluation_error_code`) |
+| `scores` | 아이디어별 5개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
+| `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜). TREND 평가만 `trend_id`로 그날 트렌드에 연결 |
 | `evaluation_references` | 평가 근거 출처 URL |
 | `idea_score_histories` | 평가 시점의 총점 스냅샷 (점수 이력 차트용) |
-| `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각 |
-| `trends` | 고정 API로 수집한 트렌드 요약 |
+| `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각·소스 단위 요약 |
+| `source_items` | source의 상위 항목 요약(source당 일괄 1회 호출로 생성) (원문은 저장 안 함, 변경 시 덮어쓰기) |
+| `trends` | 글로벌 트렌드 1행/일 (아이디어·키워드와 무관): 최종 요약 · provider · 상위 항목 해시 |
+| `trend_sources` / `trend_items` | 트렌드의 provider별 요약 / 상위 항목과 항목 요약 (원문은 저장 안 함) |
 
 ---
 

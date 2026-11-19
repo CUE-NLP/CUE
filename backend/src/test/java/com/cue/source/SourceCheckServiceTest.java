@@ -91,6 +91,28 @@ class SourceCheckServiceTest {
     }
 
     @Test
+    void 변경이면_상위_목록_전체를_돌려주고_순서만_같고_내용이_같으면_변경_없음이며_복구하면_다시_감지한다() {
+        SourceItem a = new SourceItem("a", "https://a", "s"), b = new SourceItem("b", "https://b", "s");
+        githubItems = List.of(a, b);
+        Source s = new Source(null, ApiProvider.GITHUB, "kw");
+        when(repo.findById(1L)).thenReturn(Optional.of(s));
+        service.check(1L);
+        String before = s.getContentHash();
+        java.time.LocalDateTime beforeAt = s.getCheckedAt();
+
+        assertFalse(service.check(1L).changed());
+        githubItems = List.of(a, new SourceItem("c", "https://c", "s"));
+        SourceCheckResult r = service.check(1L);
+        assertTrue(r.changed());
+        assertEquals(githubItems, r.items()); // 새 항목만이 아니라 상위 목록 전체
+
+        // 평가에 실패하면 이전 해시로 되돌려 다음 조회에서 같은 변화를 다시 감지한다
+        service.restoreHash(1L, before, beforeAt);
+        assertEquals(before, s.getContentHash());
+        assertTrue(service.check(1L).changed());
+    }
+
+    @Test
     void 한_source가_실패해도_나머지는_계속_조회하고_실패한_해시는_유지한다() {
         Source ok = new Source(null, ApiProvider.GITHUB, "a");
         Source bad = new Source(null, ApiProvider.STACK_EXCHANGE, "b");
@@ -114,5 +136,19 @@ class SourceCheckServiceTest {
         when(repo.findById(2L)).thenReturn(Optional.of(new Source(null, ApiProvider.HACKER_NEWS, "k")));
         assertEquals(ErrorCode.SOURCE_PROVIDER_NOT_SUPPORTED,
                 assertThrows(CustomException.class, () -> service.check(2L)).getErrorCode());
+    }
+
+    @Test
+    void 시연용_강제_해시가_들어간_source는_다음_조회에서_변경으로_감지된다() {
+        Source s = new Source(null, ApiProvider.GITHUB, "kw");
+        when(repo.findById(1L)).thenReturn(Optional.of(s));
+        service.check(1L); // 실제 해시 기록
+        assertFalse(service.check(1L).changed());
+
+        s.restore(com.cue.demo.DemoEvaluationService.FORCED_HASH, s.getCheckedAt()); // 시연 API가 해시를 바꾼 상태
+        SourceCheckResult r = service.check(1L);
+        assertTrue(r.changed());
+        assertEquals(githubItems, r.items());
+        assertEquals(SourceHasher.hash(githubItems), s.getContentHash());
     }
 }

@@ -29,7 +29,7 @@ public class SourceCheckService {
         clientList.forEach(c -> clients.put(c.provider(), c));
     }
 
-    /** source 하나를 조회한다. 외부 오류·미지원 provider는 예외로 던진다 (해시·시각은 그대로). */
+    /** source 하나를 조회한다. 변경이면 결과의 items는 이번 조회의 상위 목록 전체다. 외부 오류·미지원 provider는 예외로 던진다 (해시·시각은 그대로). */
     public SourceCheckResult check(Long sourceId) {
         Source source = sourceRepository.findById(sourceId)
                 .orElseThrow(() -> new CustomException(ErrorCode.SOURCE_NOT_FOUND));
@@ -39,6 +39,14 @@ public class SourceCheckService {
     /** 아이디어의 모든 source를 조회한다. 한 source가 실패해도 나머지는 계속하고 실패는 FAILED 결과로 담는다. */
     public List<SourceCheckResult> checkAll(Long ideaId) {
         return sourceRepository.findByIdeaId(ideaId).stream().map(this::checkSafely).toList();
+    }
+
+    /** 평가가 실패해 변경을 반영하지 못했을 때, 해시·시각을 조회 이전 값으로 되돌린다 (다음 조회에서 다시 변경으로 감지). */
+    public void restoreHash(Long sourceId, String contentHash, java.time.LocalDateTime checkedAt) {
+        sourceRepository.findById(sourceId).ifPresent(s -> {
+            s.restore(contentHash, checkedAt);
+            sourceRepository.save(s);
+        });
     }
 
     private SourceCheckResult checkSafely(Source source) {
@@ -61,6 +69,7 @@ public class SourceCheckService {
             throw new CustomException(ErrorCode.SOURCE_PROVIDER_NOT_SUPPORTED);
         }
         List<SourceItem> items = client.search(source.getKeyword());
+        // 변경 = 상위 항목의 해시가 달라짐 (첫 조회는 기준만 기록). 변경이면 상위 목록 전체를 돌려주고 호출하는 쪽이 다시 읽는다.
         boolean changed = source.updateHash(SourceHasher.hash(items));
         sourceRepository.save(source);
         return changed

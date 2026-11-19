@@ -42,6 +42,8 @@ dependencies {
     // Ops / Docs
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3")
+    // 외부 웹 원문(HTML)에서 본문 텍스트만 추출
+    implementation("org.jsoup:jsoup:1.18.3")
 
     // Developer tools
     compileOnly("org.projectlombok:lombok")

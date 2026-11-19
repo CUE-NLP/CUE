@@ -1,5 +1,6 @@
 package com.cue.idea.dto;
 
+import com.cue.idea.entity.EvaluationStatus;
 import com.cue.idea.entity.IdeaStatus;
 import com.cue.idea.entity.ItCategory;
 import com.cue.idea.entity.KeywordOrigin;
@@ -13,6 +14,8 @@ import java.util.List;
  * type: 대분류(현재 IT 고정), itCategory: IT 세부 종류(검색 API 조합 결정).
  * keywords: 검색 키워드(없으면 빈 배열), keywordOrigin: 키워드 출처 USER/AI(키워드가 없으면 null).
  * lastDifference: 가장 최근 평가의 총점 변화량(없으면 null). hasNewChange: 아직 확인하지 않은 새 평가가 있는지.
+ *
+ * evaluationStatus: 평가 실행 상태(IDLE/QUEUED/RUNNING/FAILED, 폴링용). lastEvaluationErrorCode: FAILED일 때의 에러 코드(그 밖은 null).
  */
 @Schema(description = "아이디어 상세/리더보드 항목")
 public record IdeaResponse(
@@ -31,7 +34,10 @@ public record IdeaResponse(
         @Schema(description = "가장 최근 평가 시각. 없으면 null", example = "2026-11-05T15:00:00", nullable = true) LocalDateTime lastEvaluatedAt,
         @Schema(description = "확인하지 않은 새 평가가 있는지. POST /api/ideas/{id}/check 로 해제", example = "true") boolean hasNewChange,
         @Schema(description = "등록 시각", example = "2026-11-01T10:30:00") LocalDateTime createdAt,
-        @Schema(description = "평가 항목 4개의 점수·가중치") List<ScoreResponse> scores,
+        @Schema(description = "평가 항목 5개(근거 4개 + TREND)의 점수·가중치") List<ScoreResponse> scores,
         @Schema(description = "외부 자료 검색 키워드. 없으면 빈 배열", example = "[\"idea scoring\", \"startup validation\"]") List<String> keywords,
         @Schema(description = "키워드 출처. USER=사용자가 직접 입력(AI 추출보다 우선), AI=AI가 추출. 키워드가 없으면 null",
-                example = "AI", nullable = true) KeywordOrigin keywordOrigin) {}
+                example = "AI", nullable = true) KeywordOrigin keywordOrigin,
+        @Schema(description = "평가 실행 상태(폴링용). IDLE=대기·완료, QUEUED=대기열, RUNNING=평가 중, FAILED=실패(lastEvaluationErrorCode 참고). "
+                + "QUEUED·RUNNING 동안은 아이디어를 수정할 수 없다(I005)", example = "IDLE") EvaluationStatus evaluationStatus,
+        @Schema(description = "마지막 평가가 실패했을 때(FAILED)의 에러 코드. 그 밖은 null", example = "G002", nullable = true) String lastEvaluationErrorCode) {}

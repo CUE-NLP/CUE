@@ -17,6 +17,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
+@org.hibernate.annotations.DynamicUpdate // 평가 상태 컬럼은 별도 UPDATE로 바뀌므로 오래된 엔티티가 덮어쓰지 않게 바뀐 컬럼만 갱신한다
 @Table(name = "ideas")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -78,6 +79,29 @@ public class Idea {
     @Column(name = "last_checked_at")
     private LocalDateTime lastCheckedAt;
 
+    /** true면 다음 평가에서 자료 변화와 무관하게 Gemini 전체(초기) 평가를 한 번 한다. 등록·내용 수정 시 켜지고 평가 완료 시 꺼진다. */
+    @Column(name = "needs_full_evaluation", nullable = false)
+    private boolean needsFullEvaluation = true;
+
+    /** 이 아이디어의 TREND 점수를 마지막으로 평가한 글로벌 트렌드 id. null이면 TREND 첫 평가 전 (내용이 바뀌면 다시 null). */
+    @Column(name = "last_trend_id")
+    private Long lastTrendId;
+
+    /** 평가 실행 상태. 상태 전이는 {@code IdeaRepository}의 조건부 UPDATE로만 한다(동시 요청에도 한 번만 전이). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "evaluation_status", nullable = false, length = 10)
+    private EvaluationStatus evaluationStatus = EvaluationStatus.IDLE;
+
+    @Column(name = "evaluation_started_at")
+    private LocalDateTime evaluationStartedAt;
+
+    @Column(name = "evaluation_finished_at")
+    private LocalDateTime evaluationFinishedAt;
+
+    /** 마지막 평가가 실패했을 때 사용자에게 안내할 에러 코드(예: G002). FAILED가 아니면 null. */
+    @Column(name = "last_evaluation_error_code", length = 10)
+    private String lastEvaluationErrorCode;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -111,13 +135,41 @@ public class Idea {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    /** 항목 수정. null이면 그대로 두고, 빈 문자열이면 비운다. 수정 후 상태를 다시 판단한다. */
-    public void edit(String problem, String target, String solution, String expectation) {
+    /**
+     * 항목 수정. null이면 그대로 두고, 빈 문자열이면 비운다. 수정 후 상태를 다시 판단한다.
+     *
+     * @return 4개 항목의 내용이 실제로 바뀌었으면 true
+     */
+    public boolean edit(String problem, String target, String solution, String expectation) {
+        String[] before = {this.problem, this.target, this.solution, this.expectation};
         if (problem != null) this.problem = blankToNull(problem);
         if (target != null) this.target = blankToNull(target);
         if (solution != null) this.solution = blankToNull(solution);
         if (expectation != null) this.expectation = blankToNull(expectation);
         refreshStatus();
+        String[] after = {this.problem, this.target, this.solution, this.expectation};
+        boolean contentChanged = !java.util.Arrays.equals(before, after);
+        if (contentChanged) {
+            needsFullEvaluation = true; // 내용이 바뀌었으니 다음 평가에서 전체 재평가 (TREND도 첫 평가부터 다시)
+            lastTrendId = null;
+        }
+        return contentChanged;
+    }
+
+    /** 평가 근거가 달라지는 변경(예: 검색 키워드)이 있었음을 기록한다: 다음 평가는 근거 4개 기준·TREND 모두 첫 평가부터 다시 한다. */
+    public void markContentChanged() {
+        needsFullEvaluation = true;
+        lastTrendId = null;
+    }
+
+    /** 전체(초기) 평가를 끝냈음을 기록한다. */
+    public void completeFullEvaluation() {
+        needsFullEvaluation = false;
+    }
+
+    /** 글로벌 트렌드({@code trendId})로 TREND 평가를 끝냈음을 기록한다 (점수가 안 바뀌었어도 평가는 한 것이다). */
+    public void completeTrendEvaluation(Long trendId) {
+        lastTrendId = trendId;
     }
 
     /** 키워드 목록. 없으면 빈 리스트. */
@@ -174,7 +226,7 @@ public class Idea {
     }
 
     /**
-     * 항목별 가중치(퍼센트 정수)를 예약한다. 4개 항목이 모두 있어야 하고 합이 100이어야 한다.
+     * 항목별 가중치(퍼센트 정수)를 예약한다. 5개 기준(TREND 포함)이 모두 있어야 하고 합이 100이어야 한다.
      * 현재 점수·총점에는 영향이 없으며, 다음 평가 턴에 {@link #startNextTurn()} 으로 적용된다.
      */
     public void reserveWeights(Map<ScoreType, Integer> percents) {

@@ -6,6 +6,7 @@ import com.cue.global.response.CommonResponse;
 import com.cue.global.response.ListData;
 import com.cue.global.security.UserPrincipal;
 import com.cue.idea.dto.CreateIdeaRequest;
+import com.cue.idea.dto.EvaluateIdeaResponse;
 import com.cue.idea.dto.EvaluationResponse;
 import com.cue.idea.dto.IdeaHistoryResponse;
 import com.cue.idea.dto.IdeaResponse;
@@ -13,6 +14,7 @@ import com.cue.idea.dto.UpdateIdeaRequest;
 import com.cue.idea.dto.UpdateWeightsRequest;
 import com.cue.idea.entity.IdeaSort;
 import com.cue.idea.entity.IdeaStatus;
+import com.cue.idea.service.IdeaEvaluationService;
 import com.cue.idea.service.IdeaService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -29,13 +31,15 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class IdeaController {
     private final IdeaService ideaService;
+    private final IdeaEvaluationService ideaEvaluationService;
 
     @Operation(summary = "아이디어 저장",
             description = "프론트가 구조화하고 사용자가 확인한 아이디어를 저장한다. 문제·타깃·해결·기대효과가 **모두 채워지면 ACTIVE**(평가 대상이 되고 외부 자료 검색 설정을 만든다), "
                     + "**하나라도 비면 HOLD**(보류, AI 호출·평가 없음)로 서버가 정한다. "
                     + "**키워드(`keywords`, 최대 2개·각 1~50자)를 보내면 AI 추출 없이 그 값을 쓰고(`keywordOrigin=USER`), 비어 있을 때만 AI가 추출한다(`keywordOrigin=AI`).** "
                     + "IT 세부 종류(`itCategory`: AI_ML·DEV_TOOLS_INFRA·WEB_APP_SERVICE·DATA_ANALYTICS)는 키워드와 무관하게 항상 AI가 판단하고, 대분류 `type`은 항상 IT다. "
-                    + "점수는 첫 평가 전까지 0, 가중치는 25/25/25/25. 키워드가 3개 이상이거나 빈 문자열·50자 초과면 `G004`.")
+                    + "점수는 첫 평가 전까지 0, 가중치는 5개 기준(문제 중요성·시장 수요·시장 차별성·기술적 실현 가능성·트렌디함) 각 20%. "
+                    + "**ACTIVE로 저장되면 서버가 커밋 뒤 첫 평가를 비동기로 자동 시작한다**(`evaluationStatus`가 QUEUED→RUNNING→IDLE; 폴링은 `GET /api/ideas/{id}`). 키워드가 3개 이상이거나 빈 문자열·50자 초과면 `G004`.")
     @ApiErrors(ErrorCode.USER_NOT_FOUND)
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -45,7 +49,8 @@ public class IdeaController {
     }
 
     @Operation(summary = "아이디어 상세 조회",
-            description = "상태·구조화 항목·총점·항목별 점수/가중치(현재·예약)·최근 변화량·`hasNewChange`를 반환한다.")
+            description = "상태·구조화 항목·총점·항목별 점수/가중치(현재·예약)·최근 변화량·`hasNewChange`를 반환한다. "
+                    + "평가 진행 상황 폴링용으로 `evaluationStatus`(IDLE/QUEUED/RUNNING/FAILED)와 실패 시 `lastEvaluationErrorCode`를 함께 돌려준다.")
     @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED})
     @GetMapping("/{id}")
     public CommonResponse<IdeaResponse> get(@AuthenticationPrincipal UserPrincipal principal, @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id) {
@@ -54,9 +59,9 @@ public class IdeaController {
 
     /** 항목별 가중치(%)를 변경한다. 합이 100이어야 하며 다음 평가 턴부터 적용된다. */
     @Operation(summary = "가중치 변경 예약",
-            description = "4개 평가 항목의 가중치(%)를 모두 0~100 정수로 보내며 합은 정확히 100이어야 한다. "
-                    + "현재 점수·순위에는 바로 반영되지 않고 `pendingWeightPercent`에 예약되어 다음 평가 턴부터 적용된다. "
-                    + "예: `{\"weights\": {\"PROBLEM_IMPORTANCE\": 30, \"MARKET_DEMAND\": 30, \"MARKET_DIFFERENTIATION\": 20, \"TECH_FEASIBILITY\": 20}}`")
+            description = "5개 평가 항목(TREND 포함)의 가중치(%)를 모두 0~100 정수로 보내며 합은 정확히 100이어야 한다. 4개짜리 예전 형식은 `I003`. "
+                    + "현재 점수·순위에는 바로 반영되지 않고 `pendingWeightPercent`에 예약되어 다음 평가 턴부터 적용된다(그래서 평가 중에도 호출할 수 있다). "
+                    + "예: `{\"weights\": {\"PROBLEM_IMPORTANCE\": 30, \"MARKET_DEMAND\": 25, \"MARKET_DIFFERENTIATION\": 20, \"TECH_FEASIBILITY\": 15, \"TREND\": 10}}`")
     @ApiErrors({ErrorCode.INVALID_WEIGHT, ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED})
     @PatchMapping("/{id}/weights")
     public CommonResponse<IdeaResponse> reserveWeights(@AuthenticationPrincipal UserPrincipal principal, @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id,
@@ -68,8 +73,10 @@ public class IdeaController {
     @Operation(summary = "아이디어 수정",
             description = "보낸 항목만 수정한다(생략/null=유지, 빈 문자열=비움). 수정 뒤 4개 항목이 모두 채워져 있으면 ACTIVE가 되고 세부 종류(`itCategory`)를 항상 AI로 다시 판단하며, "
                     + "하나라도 비면 HOLD가 된다. 키워드: `keywords` 생략=유지, **빈 배열=사용자 키워드를 지우고 AI가 다시 추출**, "
-                    + "1개 이상=그 값으로 교체(AI 추출 없음, `keywordOrigin=USER`). 키워드 검증 실패(3개 이상·빈 문자열·50자 초과)는 `G004`.")
-    @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED})
+                    + "1개 이상=그 값으로 교체(AI 추출 없음, `keywordOrigin=USER`). 키워드 검증 실패(3개 이상·빈 문자열·50자 초과)는 `G004`. "
+                    + "내용이나 검색 키워드가 실제로 바뀐 ACTIVE 아이디어는 커밋 뒤 **첫 평가가 자동으로 다시 시작**된다. "
+                    + "**평가가 대기(QUEUED)·진행(RUNNING) 중이면 수정할 수 없고 `I005`(409)**를 돌려준다(IDLE·FAILED면 가능).")
+    @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED, ErrorCode.IDEA_EVALUATING})
     @PatchMapping("/{id}")
     public CommonResponse<IdeaResponse> update(@AuthenticationPrincipal UserPrincipal principal, @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id,
                                                @Valid @RequestBody UpdateIdeaRequest req) {
@@ -83,6 +90,26 @@ public class IdeaController {
     @PostMapping("/{id}/check")
     public CommonResponse<IdeaResponse> check(@AuthenticationPrincipal UserPrincipal principal, @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id) {
         return CommonResponse.onSuccess(ideaService.markChecked(principal.id(), id));
+    }
+
+    /**
+     * 평가를 비동기로 요청한다: 즉시 <b>202 Accepted</b>로 돌아오고(본문 code는 다른 성공 응답처럼 "200"), 평가는 서버 큐에서 돈다.
+     * 본인 아이디어만(I002), 보류는 I004, Gemini 불가는 E001, 대기열이 가득 차면 E004를 요청 시점에 바로 돌려준다.
+     * 이미 평가 대기·진행 중이면 에러 없이 현재 상태(QUEUED/RUNNING)를 돌려준다. 결과는 GET /api/ideas/{id}의 evaluationStatus를 폴링해 확인한다.
+     */
+    @Operation(summary = "평가 비동기 요청",
+            description = "이 아이디어의 평가(키워드 근거 4개 기준 + 글로벌 트렌드 TREND)를 서버 큐에 넣고 **기다리지 않고 즉시 `202 Accepted`**를 돌려준다"
+                    + "(본문 `code`는 다른 성공 응답처럼 `\"200\"`). `data.status`는 방금 큐에 넣었으면 `QUEUED`, 이미 대기·진행 중이면 에러 없이 현재 상태(`QUEUED`/`RUNNING`)를 돌려준다(멱등). "
+                    + "본인 아이디어만(`I002`), 없음 `I001`, 보류(HOLD) `I004`, Gemini 사용 불가 `E001`, 대기열이 가득 차면 `E004`는 요청 시점에 바로 반환한다. "
+                    + "평가는 서버에서 한 번에 하나씩 순서대로 돈다. 결과는 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링해 `evaluationStatus`가 `IDLE`이면 갱신된 점수·`hasNewChange`로, `FAILED`면 `lastEvaluationErrorCode`로 확인한다. "
+                    + "평가가 끝날 때까지 이 아이디어는 수정할 수 없다(`PATCH`가 `I005`).")
+    @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED, ErrorCode.IDEA_NOT_ACTIVE,
+            ErrorCode.AI_NOT_CONFIGURED, ErrorCode.EVALUATION_QUEUE_FULL})
+    @PostMapping("/{id}/evaluate")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public CommonResponse<EvaluateIdeaResponse> evaluate(@AuthenticationPrincipal UserPrincipal principal,
+                                                         @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id) {
+        return CommonResponse.onSuccess(ideaEvaluationService.request(principal.id(), id));
     }
 
     /** 점수 이력 차트용 총점 이력 (오래된 순). */

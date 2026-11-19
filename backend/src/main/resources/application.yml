@@ -40,16 +40,59 @@ cue:
     model: ${GEMINI_MODEL:gemini-2.5-flash}
     base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com}
     timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:10}
+    # 평가용 호출 사이 최소 간격(ms). 무료 티어 분당 한도(약 10회)용. 0이면 제한 없음
+    min-interval-ms: ${GEMINI_MIN_INTERVAL_MS:6500}
+  evaluation:
+    # 일일 재평가 스케줄러. 테스트에서는 enabled=false.
+    enabled: ${EVALUATION_ENABLED:true}
+    cron: ${EVALUATION_CRON:0 0 3 * * *}
+    zone: ${EVALUATION_ZONE:Asia/Seoul}
+    # 아이디어 사이 대기(ms). Gemini 무료 티어 분당 호출 한도용 (아이디어당 최대 2회 호출)
+    delay-ms: ${EVALUATION_DELAY_MS:15000}
+    # 등록·내용 수정으로 ACTIVE가 되면 첫 평가를 자동으로 큐에 넣는다 (프론트 "분석 중" 화면용). 테스트에서는 false
+    auto-on-save: ${EVALUATION_AUTO_ON_SAVE:true}
+    # 평가 대기열 상한(가득 차면 E004) / 종료 시 진행 중 평가를 기다리는 시간(초). 평가는 한 번에 하나만 실행한다
+    queue-capacity: ${EVALUATION_QUEUE_CAPACITY:50}
+    shutdown-wait-seconds: ${EVALUATION_SHUTDOWN_WAIT_SECONDS:30}
+  trend:
+    # 글로벌 트렌드(5번째 평가 기준 TREND): 고정 provider(HN·GitHub·Hugging Face)를 키워드 없이 하루 1회 수집한다.
+    # 최근 N일 안에 올라온 글·저장소를 인기 순으로 보고, provider마다 상위 top-n개를 읽어 요약한다 (Gemini 호출 수에 비례)
+    days: ${TREND_DAYS:7}
+    top-n: ${TREND_TOP_N:5}
   source:
     # 외부 자료 API 토큰/키: 모두 선택. 없으면 익명 호출(rate limit 낮음). 값은 환경변수로만 주입하고 커밋하지 않는다.
     connect-timeout: 3s
     read-timeout: 5s
+    # source마다 읽고 요약할 상위 항목 수 (Gemini 호출 수에 비례)
+    top-n: ${SOURCE_TOP_N:5}
+    # "급상승" 판단 기간(일): 최근 N일 안의 글·저장소를 인기 순으로
+    trending-days: ${SOURCE_TRENDING_DAYS:30}
+    # 원문을 Gemini에 보내기 전 자르는 글자 수 / 웹 원문 응답 크기 상한(바이트) / 리다이렉트 최대 횟수
+    max-content-chars: ${SOURCE_MAX_CONTENT_CHARS:8000}
+    fetch-max-bytes: 1048576
+    max-redirects: 3
+    # 같은 URL의 항목 요약을 재사용하는 기간(일). 0이면 항상 다시 요약
+    summary-reuse-days: ${SOURCE_SUMMARY_REUSE_DAYS:7}
+    # 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자)
+    batch-content-chars: ${SOURCE_BATCH_CONTENT_CHARS:4000}
+    batch-total-chars: ${SOURCE_BATCH_TOTAL_CHARS:16000}
+    # Semantic Scholar: 최근 N년(올해 포함) 논문만 / Wikipedia: 문서 조회수를 합산할 최근 일수 / Wikimedia 필수 User-Agent(개인 이메일 금지)
+    papers-years: ${SOURCE_PAPERS_YEARS:2}
+    pageviews-days: ${SOURCE_PAGEVIEWS_DAYS:30}
+    wikimedia-user-agent: ${WIKIMEDIA_USER_AGENT:CUE-idea-portfolio/1.0 (student project; non-commercial)}
     github:
       token: ${GITHUB_TOKEN:}
     hugging-face:
       token: ${HUGGING_FACE_TOKEN:}
     stack-exchange:
       token: ${STACK_EXCHANGE_KEY:}
+    semantic-scholar:
+      token: ${SEMANTIC_SCHOLAR_API_KEY:}
+
+  demo:
+    # 시연용 "지금 조회·평가" API(POST /api/demo/evaluations/run). 기본 꺼짐: 호출이 Gemini 무료 한도를 소진시킬 수 있다
+    enabled: ${DEMO_API_ENABLED:false}
+    cooldown-seconds: ${DEMO_COOLDOWN_SECONDS:30}
 
 management:
   endpoints:

@@ -11,12 +11,14 @@ import com.cue.idea.dto.IdeaResponse;
 import com.cue.idea.dto.ScoreResponse;
 import com.cue.idea.dto.UpdateIdeaRequest;
 import com.cue.idea.dto.UpdateWeightsRequest;
+import com.cue.idea.entity.EvaluationStatus;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaSort;
 import com.cue.idea.entity.IdeaStatus;
 import com.cue.idea.entity.IdeaType;
 import com.cue.idea.entity.ItCategory;
 import com.cue.idea.entity.KeywordOrigin;
+import com.cue.idea.event.IdeaEvaluationRequested;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.source.entity.ApiProvider;
 import com.cue.source.entity.Source;
@@ -40,6 +42,7 @@ public class IdeaService {
     private final IdeaScoreHistoryRepository histories;
     private final SourceRepository sources;
     private final IdeaAnalyzer analyzer;
+    private final org.springframework.context.ApplicationEventPublisher events;
 
     /**
      * 프론트가 구조화한 아이디어를 저장한다. 서버가 4개 항목 채움 여부로 ACTIVE/HOLD를 정하고,
@@ -56,21 +59,34 @@ public class IdeaService {
         }
         if (idea.isActive()) {
             extractAndRegisterSources(idea);
+            events.publishEvent(new IdeaEvaluationRequested(idea.getId())); // 커밋 뒤 첫 평가 자동 시작
         }
         return toResponse(idea);
     }
 
-    /** 아이디어를 수정한다. 모두 채워진 상태(ACTIVE)면 종류·키워드를 다시 추출한다. 재평가는 평가 단계에서 처리한다. */
+    /**
+     * 아이디어를 수정한다. 모두 채워진 상태(ACTIVE)면 종류·키워드를 다시 추출한다. 재평가는 평가 단계에서 처리한다.
+     * 평가가 대기(QUEUED)·진행(RUNNING) 중이면 {@code I005}로 거절한다. 행을 잠근 채 상태를 확인하고 수정하므로, 평가를 시작하는 쪽의
+     * 상태 전이(조건부 UPDATE)는 이 트랜잭션이 끝날 때까지 기다린다: 평가가 먼저 시작됐으면 수정이 거절되고, 수정이 먼저면 평가는 수정된 내용으로 시작한다.
+     */
     @Transactional
     public IdeaResponse update(Long userId, Long ideaId, UpdateIdeaRequest req) {
-        Idea idea = findOwned(userId, ideaId);
-        idea.edit(req.problem(), req.target(), req.solution(), req.expectation());
+        Idea idea = findOwnedForUpdate(userId, ideaId); // I001 → I002 → I005 순서로 검사
+        List<String> keywordsBefore = idea.keywordList();
+        boolean contentChanged = idea.edit(req.problem(), req.target(), req.solution(), req.expectation());
         if (req.keywords() != null) {
             // 1개 이상이면 교체(USER), 빈 배열이면 사용자 키워드를 지우고 아래에서 AI로 다시 추출한다 (HOLD면 저장만).
             idea.applyKeywords(normalizeKeywords(req.keywords()), KeywordOrigin.USER);
+            if (!keywordsBefore.equals(idea.keywordList())) {
+                idea.markContentChanged(); // 검색 키워드가 바뀌면 근거 자료가 달라지므로 첫 평가부터 다시
+                contentChanged = true;
+            }
         }
         if (idea.isActive()) {
             extractAndRegisterSources(idea);
+            if (contentChanged) { // HOLD → ACTIVE 포함. 내용이 그대로면 평가를 다시 시작하지 않는다
+                events.publishEvent(new IdeaEvaluationRequested(idea.getId()));
+            }
         }
         return toResponse(idea);
     }
@@ -112,6 +128,26 @@ public class IdeaService {
     @Transactional(readOnly = true)
     public IdeaResponse get(Long userId, Long ideaId) {
         return toResponse(findOwned(userId, ideaId));
+    }
+
+    /** 평가 가능한지 확인한다: 없으면 I001, 남의 것이면 I002, 보류면 I004. */
+    @Transactional(readOnly = true)
+    public void assertEvaluable(Long userId, Long ideaId) {
+        if (!findOwned(userId, ideaId).isActive()) {
+            throw new CustomException(ErrorCode.IDEA_NOT_ACTIVE);
+        }
+    }
+
+    private Idea findOwnedForUpdate(Long userId, Long ideaId) {
+        Idea idea = ideas.findByIdForUpdate(ideaId).orElseThrow(() -> new CustomException(ErrorCode.IDEA_NOT_FOUND));
+        if (!idea.getUser().getId().equals(userId)) {
+            throw new CustomException(ErrorCode.IDEA_ACCESS_DENIED);
+        }
+        EvaluationStatus status = idea.getEvaluationStatus();
+        if (status == EvaluationStatus.QUEUED || status == EvaluationStatus.RUNNING) {
+            throw new CustomException(ErrorCode.IDEA_EVALUATING);
+        }
+        return idea;
     }
 
     private Idea findOwned(Long userId, Long ideaId) {
@@ -181,7 +217,7 @@ public class IdeaService {
         return new IdeaResponse(idea.getId(), idea.getType(), idea.getItCategory(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
                 idea.getSolution(), idea.getExpectation(), idea.getTotalScore(), idea.getLastDifference(),
                 idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores,
-                idea.keywordList(), idea.getKeywordOrigin());
+                idea.keywordList(), idea.getKeywordOrigin(), idea.getEvaluationStatus(), idea.getLastEvaluationErrorCode());
     }
 
     private static Integer percent(BigDecimal fraction) {

@@ -7,7 +7,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.ErrorCode;
+import com.cue.source.service.SourceCheckService;
+import com.cue.trend.service.GlobalTrendService;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
@@ -19,6 +22,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpMethod;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.access.AccessDeniedException;
@@ -39,7 +44,23 @@ import tools.jackson.databind.ObjectMapper;
  * 인증 정책 통합 테스트: 회원가입·로그인·재발급·로그아웃을 뺀 모든 /api/** 는 액세스 토큰이 필요하고,
  * 토큰 상태별로 올바른 A00x 코드가 나가며, 타인의 아이디어는 I002로 막힌다. (엔드포인트 목록 순회)
  */
+@TestPropertySource(properties = "cue.demo.enabled=true") // 시연 API도 정책 순회 대상 (꺼져 있으면 D001이라 성공 케이스를 못 본다)
 class ApiAuthPolicyTest extends PostgresIntegrationTest {
+
+    // 평가·시연 엔드포인트를 실제로 호출해도 외부 네트워크로 나가지 않도록 Gemini·자료 조회·트렌드를 목으로 막는다.
+    @MockitoBean GeminiClient gemini;
+    @MockitoBean SourceCheckService sourceCheck;
+    @MockitoBean GlobalTrendService globalTrend;
+
+    @org.junit.jupiter.api.BeforeEach
+    void stubExternal() {
+        org.mockito.Mockito.when(gemini.available()).thenReturn(true);
+        org.mockito.Mockito.when(sourceCheck.checkAll(org.mockito.ArgumentMatchers.anyLong())).thenReturn(List.of());
+        org.mockito.Mockito.when(globalTrend.isCurrent()).thenReturn(true);
+        org.mockito.Mockito.when(globalTrend.today()).thenReturn(null);
+        org.mockito.Mockito.when(gemini.generateJson(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyMap()))
+                .thenThrow(new com.cue.global.error.CustomException(ErrorCode.EXTERNAL_SERVER_ERROR)); // 평가는 즉시 FAILED
+    }
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
@@ -53,8 +74,8 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
     }
 
     static final String IDEA_BODY = "{\"problem\":\"p\",\"target\":\"t\",\"solution\":\"s\",\"expectation\":\"e\",\"keywords\":[\"kw1\"]}";
-    static final String WEIGHTS_BODY = "{\"weights\":{\"PROBLEM_IMPORTANCE\":25,\"MARKET_DEMAND\":25,"
-            + "\"MARKET_DIFFERENTIATION\":25,\"TECH_FEASIBILITY\":25}}";
+    static final String WEIGHTS_BODY = "{\"weights\":{\"PROBLEM_IMPORTANCE\":20,\"MARKET_DEMAND\":20,"
+            + "\"MARKET_DIFFERENTIATION\":20,\"TECH_FEASIBILITY\":20,\"TREND\":20}}";
 
     static List<Endpoint> protectedEndpoints() {
         return List.of(
@@ -66,6 +87,8 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
                 new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}", "{\"problem\":\"x\"}"),
                 new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}/weights", WEIGHTS_BODY),
                 new Endpoint(HttpMethod.POST, "/api/ideas/{id}/check", null),
+                new Endpoint(HttpMethod.POST, "/api/ideas/{id}/evaluate", null),
+                new Endpoint(HttpMethod.POST, "/api/demo/evaluations/run", "{\"force\":false}"),
                 new Endpoint(HttpMethod.GET, "/api/ideas/{id}/history", null),
                 new Endpoint(HttpMethod.GET, "/api/ideas/{id}/evaluations", null));
     }
