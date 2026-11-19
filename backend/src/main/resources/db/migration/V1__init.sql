@@ -13,11 +13,14 @@ CREATE TABLE ideas (
     id                BIGSERIAL PRIMARY KEY,
     user_id           BIGINT        NOT NULL REFERENCES users (id),
     type              VARCHAR(30)   NOT NULL,
+    it_category       VARCHAR(30)   NOT NULL,
     status            VARCHAR(20)   NOT NULL,
     problem           TEXT,
     target            TEXT,
     solution          TEXT,
     expectation       TEXT,
+    keywords          TEXT,
+    keyword_origin    VARCHAR(20),
     total_score       DECIMAL(7, 2) NOT NULL DEFAULT 0,
     last_difference   DECIMAL(7, 2),
     last_evaluated_at TIMESTAMP,
@@ -140,3 +143,23 @@ CREATE TABLE source_items (
     summarized_at TIMESTAMP   NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_source_items_source_id ON source_items (source_id);
+
+-- 리프레시 토큰: 원문은 저장하지 않고 SHA-256 해시만 저장한다. 회전 시 사용된 토큰은 revoked_at을 채워 남겨 두고(재사용 탐지), 재사용이 감지되면 해당 사용자의 모든 토큰을 폐기한다.
+CREATE TABLE refresh_tokens (
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    expires_at TIMESTAMP   NOT NULL,
+    revoked_at TIMESTAMP,
+    created_at TIMESTAMP   NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_refresh_tokens_user ON refresh_tokens (user_id);
+
+-- 로그아웃으로 폐기된 액세스 토큰의 jti. 토큰 자체의 만료 시각(expires_at)까지만 보관하며 이후에는 정리 작업이 삭제한다.
+CREATE TABLE revoked_access_tokens (
+    jti        VARCHAR(36) PRIMARY KEY,
+    user_id    BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    expires_at TIMESTAMP   NOT NULL,
+    revoked_at TIMESTAMP   NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_revoked_access_tokens_expires ON revoked_access_tokens (expires_at);

@@ -38,10 +38,28 @@ class SourceCheckServiceTest {
     private final SourceCheckService service = new SourceCheckService(repo, List.of(github, stack));
 
     @Test
-    void 같은_내용은_같은_해시_다른_내용은_다른_해시() {
-        assertEquals(SourceHasher.hash(githubItems), SourceHasher.hash(new ArrayList<>(githubItems)));
-        assertNotEquals(SourceHasher.hash(githubItems), SourceHasher.hash(List.of(new SourceItem("t", "u", "s2"))));
+    void 요약만_달라지면_같은_해시() {
+        assertEquals(SourceHasher.hash(githubItems), SourceHasher.hash(List.of(new SourceItem("t", "u", "다른 요약"))));
         assertEquals(64, SourceHasher.hash(List.of()).length());
+    }
+
+    @Test
+    void 순서만_다르면_같은_해시() {
+        SourceItem a = new SourceItem("A", "https://a", "");
+        SourceItem b = new SourceItem("B", "https://b", "");
+        assertEquals(SourceHasher.hash(List.of(a, b)), SourceHasher.hash(List.of(b, a)));
+    }
+
+    @Test
+    void 항목이_추가_교체되거나_제목_URL이_바뀌면_다른_해시() {
+        SourceItem a = new SourceItem("A", "https://a", "");
+        SourceItem b = new SourceItem("B", "https://b", "");
+        String base = SourceHasher.hash(List.of(a, b));
+        assertNotEquals(base, SourceHasher.hash(List.of(a)));
+        assertNotEquals(base, SourceHasher.hash(List.of(a, b, new SourceItem("C", "https://c", ""))));
+        assertNotEquals(base, SourceHasher.hash(List.of(a, new SourceItem("C", "https://c", ""))));
+        assertNotEquals(base, SourceHasher.hash(List.of(a, new SourceItem("B2", "https://b", ""))));
+        assertNotEquals(base, SourceHasher.hash(List.of(a, new SourceItem("B", "https://b2", ""))));
     }
 
     @Test
@@ -61,6 +79,9 @@ class SourceCheckServiceTest {
         when(repo.findById(1L)).thenReturn(Optional.of(s));
         service.check(1L);
         assertFalse(service.check(1L).changed()); // 같은 내용
+
+        githubItems = List.of(new SourceItem("t", "u", "요약만 변경"));
+        assertFalse(service.check(1L).changed()); // 요약 변경은 변경이 아님
 
         githubItems = List.of(new SourceItem("new", "https://x", "sum"));
         SourceCheckResult r = service.check(1L);

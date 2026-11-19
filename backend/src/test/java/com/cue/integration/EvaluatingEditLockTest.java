@@ -10,7 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cue.global.ai.GeminiClient;
-import com.cue.idea.entity.IdeaType;
+import com.cue.idea.entity.ItCategory;
 import com.cue.idea.service.IdeaAnalysis;
 import com.cue.idea.service.IdeaAnalyzer;
 import com.cue.source.service.SourceCheckService;
@@ -79,7 +79,7 @@ class EvaluatingEditLockTest {
         }).when(gemini).generateJson(anyString(), anyMap());
         doAnswer(inv -> {
             assertTrue(analyzerGate.await(10, TimeUnit.SECONDS)); // 수정 트랜잭션(행 잠금 보유 중)을 붙잡아 둔다
-            return new IdeaAnalysis(IdeaType.IT, List.of("kw"));
+            return new IdeaAnalysis(ItCategory.DEV_TOOLS_INFRA, List.of("kw"));
         }).when(analyzer).analyze(any());
     }
 

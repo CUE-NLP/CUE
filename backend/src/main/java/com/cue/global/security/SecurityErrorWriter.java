@@ -33,7 +33,9 @@ public class SecurityErrorWriter implements AuthenticationEntryPoint, AccessDeni
 
     /** 토큰 상태에 따라 JWT 에러를 구분해 프론트가 "만료 → 재로그인" 등으로 분기할 수 있게 한다. */
     private ErrorCode resolveAuthError(HttpServletRequest req, AuthenticationException e) {
-        if (req.getHeader("Authorization") == null) {
+        String authorization = req.getHeader("Authorization");
+        // 헤더가 없거나 Bearer 방식이 아니면(Basic 등) 토큰이 없는 것으로 본다.
+        if (authorization == null || !authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
             return ErrorCode.JWT_MISSING;
         }
         String msg = e.getMessage() == null ? "" : e.getMessage().toLowerCase();

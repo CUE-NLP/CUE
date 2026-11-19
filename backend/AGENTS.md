@@ -17,18 +17,19 @@ CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근�
 - Spring Web MVC, Validation, Data JPA, Flyway, PostgreSQL 17
 - Spring Security + OAuth2 Resource Server (JWT, HS256), Actuator, springdoc 3.0.3(Swagger), RestClient 스타터
 - Lombok, DevTools, Docker Compose Support, Testcontainers
-- **Redis는 쓰지 않는다.** 리프레시 토큰/재발급은 아직 없고, 필요해지면 DB 테이블로 구현한다.
+- **Redis는 쓰지 않는다.** 리프레시 토큰은 DB 테이블(`refresh_tokens`)에 해시로 저장한다.
 
 ## 패키지 구조 (도메인별)
 `backend/src/main/java/com/cue`
 ```
 global/
-  config/     SecurityConfig (JWT 설정, PasswordEncoder, JwtEncoder/Decoder 빈)
+  config/     SecurityConfig (JWT·CORS 설정, PasswordEncoder, JwtEncoder/Decoder 빈), OpenApiConfig (Swagger 제목·bearerAuth)
   ai/         GeminiClient(평가용 Gemini 호출, cue.gemini.* 재사용), PromptLoader(prompts/*.txt의 {{name}} 치환)
   error/      ErrorCode(전체 에러 코드), CustomException, GlobalExceptionHandler
-  response/   CommonResponse (모든 응답 래퍼)
-  security/   UserPrincipal, JwtProperties, JwtTokenProvider, JwtPrincipalConverter, SecurityErrorWriter
-auth/         controller / service / dto   — 로그인(JWT 발급)
+  response/   CommonResponse (모든 응답 래퍼), ListData (목록 응답 data: items+count)
+  docs/       Swagger 지원: ApiErrors(에러 코드 선언), PublicApi(인증 불필요 표시), ApiErrorCustomizer(에러 응답 자동 생성)
+  security/   UserPrincipal, JwtProperties, CorsProperties, JwtTokenProvider, JwtPrincipalConverter, SecurityErrorWriter
+auth/         controller / service / repository / entity / dto — 로그인(JWT 발급), 리프레시 토큰 재발급·로그아웃
 user/         controller / service / repository / entity / dto — 회원가입, 내 정보
 idea/         controller / service / repository / entity / dto — 아이디어 저장·조회·리더보드·가중치
 score/        entity (Score, ScoreType — 5개 기준: 근거 4개 + TREND)
@@ -39,20 +40,29 @@ trend/        entity (Trend, TrendSource, TrendItem) / repository / service (Glo
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
 
 ## DB (Flyway, `src/main/resources/db/migration`)
-- 마이그레이션은 **`V1__init.sql` 하나뿐**이다 (users, ideas, scores, trends, trend_sources, trend_items, evaluations, evaluation_references, idea_score_histories, sources, source_items).
+- 마이그레이션은 **`V1__init.sql` 하나뿐**이다 (users, ideas, scores, refresh_tokens, revoked_access_tokens, trends, trend_sources, trend_items, evaluations, evaluation_references, idea_score_histories, sources, source_items).
 - **스키마가 확정되기 전(개발 중)에는 `V1__init.sql`을 직접 수정한다.** Flyway 이력 관리(`V2__...` 추가)는 스키마가 확정되는 마지막 단계에 시작한다. 그래서 V1이 바뀌면 이미 V1을 적용한 로컬 DB는 체크섬 불일치로 기동이 실패하니, **`docker compose down -v` 후 다시 실행**해 DB를 새로 만든다 (PR 설명에 적는다).
 - `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 V1도 같은 PR에서 고친다.
 
 ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea_score_histories, scores 1:N evaluations, trends 1:N trend_sources, trends 1:N trend_items, trends 0..1:N evaluations(TREND 평가만 연결), trends 0..1:N ideas(`last_trend_id`), evaluations 1:N evaluation_references, evaluations 0..1:N sources.
-- `ideas`: `needs_full_evaluation`(전체 평가 필요 플래그, 아래 "일일 재평가" 참고), `type`(`IdeaType`: IT/HEALTHCARE/EDUCATION/FINANCE/COMMERCE/CONTENT/OTHER, varchar30에 문자열 저장; 종류별 검색 API 조합은 `IdeaType.searchProviders()`, IT 외 조합은 임시 값), `status`(`ACTIVE`/`HOLD`), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각), `evaluation_status`(IDLE/QUEUED/RUNNING/FAILED)·`evaluation_started_at`·`evaluation_finished_at`·`last_evaluation_error_code`(비동기 평가 상태, 아래 "비동기 평가 실행"), `last_trend_id`(TREND를 마지막으로 평가한 글로벌 트렌드 `trends.id`. null이면 TREND 첫 평가 전이고, 내용이 바뀐 수정에서도 null로 돌아가 첫 평가부터 다시 한다. 같은 트렌드면 TREND 평가를 다시 하지 않는 근거).
+- `ideas`: `type`(대분류 `IdeaType`, 현재 `IT` 하나뿐이며 IT 고정 — IT 외 분야는 나중에 `IdeaType`을 확장), `it_category`(IT 세부 종류 `ItCategory`, varchar30 NOT NULL, 기본 `DEV_TOOLS_INFRA`; 검색 API 조합을 결정, `ItCategory.searchProviders()`), `status`(`ACTIVE`/`HOLD`), `keywords`(TEXT, 줄바꿈 구분, 최대 2개)·`keyword_origin`(`USER`/`AI`, varchar20; 키워드가 없으면 둘 다 null), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각), `needs_full_evaluation`(전체 평가 필요 플래그, 아래 "일일 재평가" 참고), `evaluation_status`(IDLE/QUEUED/RUNNING/FAILED)·`evaluation_started_at`·`evaluation_finished_at`·`last_evaluation_error_code`(비동기 평가 상태, 아래 "비동기 평가 실행"), `last_trend_id`(TREND를 마지막으로 평가한 글로벌 트렌드 `trends.id`. null이면 TREND 첫 평가 전이고, 내용·키워드가 바뀐 수정에서도 null로 돌아가 첫 평가부터 다시 한다. 같은 트렌드면 TREND 평가를 다시 하지 않는 근거).
 - `scores`: 아이디어당 **5행**(`ScoreType`: 근거 4개 + `TREND`, 기본 가중치 각 0.200), `(idea_id, type)` 유니크. `weight`는 0~1 비율(DECIMAL 4,3), `pending_weight`는 변경 예약.
 - `evaluations`: **항목(score) 단위** 평가 이력. 점수가 바뀔 때만 생성. `difference`(변화량), `score_after`(변경 후 점수), `weight`(평가 당시 가중치), `evidence_summary`(근거 요약), `created_at`(재평가 날짜), nullable `trend_id`(TREND 평가가 근거로 쓴 그날의 글로벌 트렌드, `trends`. 키워드 근거 4개 기준 평가는 항상 null).
 - `evaluation_references`: 평가 근거 출처 URL (평가 1 : N).
 - `idea_score_histories`: 평가 시점의 **총점 스냅샷**(`total_score`, `total_difference`, `evaluated_at`). 점수 이력 차트용. 가중치가 바뀌어도 당시 총점을 보존하려고 변화량 누적 대신 스냅샷으로 저장한다.
 - `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash`로 변경 감지 + `checked_at`(수집 확인 시각) + `summary`/`summarized_at`(소스 단위 최종 요약, 변경 시 덮어씀).
-- `source_items`: source의 상위 N개 **항목 요약**(`url`, `title`, `published_at`, `metrics`, `summary`, `summarized_at`). 원문은 저장하지 않는다. 변경 감지 시 source 단위로 삭제 후 다시 저장하고, 같은 URL의 요약이 `summary-reuse-days`(기본 7일) 안에 있으면 다시 읽지 않고 재사용한다. 아이디어가 ACTIVE로 등록·수정될 때 종류별 API × 추출 키워드로 새로 만든다.
-- `trends`: **글로벌 트렌드 1행/일**(아이디어·키워드와 무관). `summary`(최종 요약), `providers`(쉼표 목록), `content_hash`(상위 항목 제목·URL·요약의 `SourceHasher` 해시), `created_at`. 상위 항목이 어제와 같으면 새 행을 만들지 않고 기존 행을 쓴다. `trend_sources`: provider별 요약. `trend_items`: 상위 항목과 항목 요약(원문 저장 안 함, 같은 URL은 `summary-reuse-days` 안이면 재사용).
-- 외부 API는 6종(`ApiProvider`): 키워드 근거용 종류별 검색 조합은 `IdeaType.searchProviders()`(IT는 GitHub·HuggingFace·StackExchange·HackerNews 4개, **현재 조합은 임시 값**(TODO: 팀 확정)). 글로벌 트렌드용 고정 3개는 `ApiProvider.TREND_PROVIDERS` = Hacker News · GitHub · Hugging Face.
+- `source_items`: source의 상위 N개 **항목 요약**(`url`, `title`, `published_at`, `metrics`, `summary`, `summarized_at`). 원문은 저장하지 않는다. 변경 감지 시 source 단위로 삭제 후 다시 저장하고, 같은 URL의 요약이 `summary-reuse-days`(기본 7일) 안에 있으면 다시 읽지 않고 재사용한다. 아이디어가 ACTIVE로 등록·수정될 때 세부 종류의 API 3개 × 키워드로 새로 만든다.
+- `trends`: **글로벌 트렌드 1행/일**(아이디어·키워드와 무관). `summary`(최종 요약), `providers`(쉼표 목록), `content_hash`(상위 항목 제목·URL의 `SourceHasher` 해시), `created_at`. 상위 항목이 어제와 같으면 새 행을 만들지 않고 기존 행을 쓴다. `trend_sources`: provider별 요약. `trend_items`: 상위 항목과 항목 요약(원문 저장 안 함, 같은 URL은 `summary-reuse-days` 안이면 재사용).
+- 외부 API는 6종(`ApiProvider`): 키워드 근거용 검색 조합은 IT 세부 종류(`ItCategory`)가 정하고, 글로벌 트렌드용 고정 3개는 `ApiProvider.TREND_PROVIDERS` = Hacker News · GitHub · Hugging Face(Semantic Scholar 제외).
+
+  | `ItCategory` | 설명 | 검색 API 3개 |
+  | --- | --- | --- |
+  | `AI_ML` | AI·머신러닝 | Hugging Face, Semantic Scholar, GitHub |
+  | `DEV_TOOLS_INFRA` | 개발자 도구·인프라 (기본값·폴백) | GitHub, Stack Exchange, Hacker News |
+  | `WEB_APP_SERVICE` | 웹·앱 서비스 | Hacker News, Stack Exchange, Wikipedia Pageviews |
+  | `DATA_ANALYTICS` | 데이터·분석 | GitHub, Hugging Face, Semantic Scholar |
+
+  아이디어당 sources = 세부 종류의 provider 3개 × 키워드 수(1~2) = 최대 6개. 6개 provider 클라이언트가 모두 구현돼 있다.
 
 ## 핵심 규칙·컨벤션
 
@@ -61,21 +71,39 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 형식: `{result: SUCCESS|FAIL, code, message, data(null이면 생략), timestamp}`. 성공 `code`는 `"200"` 고정.
 - 입력 검증 실패(`G004`)는 `data`에 `[{field, reason}]`.
 - 서비스는 DTO를 반환하고, 래핑은 컨트롤러에서 한다.
+- **목록(List)은 반드시 목록 응답 래퍼를 쓴다**: 반환 타입 `CommonResponse<ListData<DTO>>`, 반환 `CommonResponse.onSuccessList(list)`. `data`에 배열을 직접 내보내지 않는다. 형태는 `data: {items: [...], count: N}`(빈 목록은 `items: []`, `count: 0`). 페이지네이션 필드는 `ListData`에 nullable로 추가한다(null은 응답에서 생략). 테스트의 JSON 경로는 `$.data.items[0]`. 단건/객체 응답은 기존 `CommonResponse<T>`.
 
 ### 에러: `ErrorCode` 하나로 관리
-- `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집, E 평가. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
+- `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집, D 시연, E 평가. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
 - 외부 자료(S): `S001` source 없음 / `S002` 미지원 provider / `S003` 허용되지 않는 URL(SSRF 차단).
 - 시연(D): `D001` 시연 API 꺼짐(403) / `D002` 시연 실행 쿨다운(429).
 - 아이디어(I): `I005` 평가가 대기·진행 중인 아이디어는 수정 불가(409).
 - 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E004` 평가 대기열 가득(503) / `E005` 재시작으로 평가 중단(503, `FAILED` 상태의 `last_evaluation_error_code`로만 노출). AI 통신 실패 자체는 `G002`. (`E003`은 비동기 전환으로 없앴다: 이미 진행 중이면 에러 없이 현재 상태를 돌려준다.)
+- 코드 번호를 새로 만들기 전에 열려 있는 PR 브랜치의 `ErrorCode`도 확인해 번호가 겹치지 않게 한다 (예: 외부 자료 수집의 `S001·S002`). 현재 G001~G007, A001~A010, U001~U002, I001~I005, S001~S003, D001~D002, E001·E002·E004·E005.
+- **범용 예외로 새지 않게 한다**: 실패 경로는 `IllegalArgumentException`/`IllegalStateException`/메시지 없는 던지기 대신 `CustomException(ErrorCode)`로 던진다. 프레임워크 예외(`HttpMediaTypeNotSupportedException` 등)는 `GlobalExceptionHandler`에서 코드로 매핑한다. 새 ErrorCode를 만들면 `GlobalExceptionHandler`/서비스에서 실제로 쓰이는지, Swagger(`@ApiErrors`)에 나열됐는지 확인한다.
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
-- JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효 `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
-- 필터 단계 에러(401/403)는 `SecurityErrorWriter`가 CommonResponse로 응답한다.
+- 리프레시 토큰 실패: 무효 `A008` / 만료 `A009` / 재사용 `A010`. 액세스 토큰 만료는 `A004` 유지(프론트 재발급 트리거). 재발급 흐름은 README의 프론트 연동 섹션에 순서도로 정리했다.
+- JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효(변조·jti 없음·로그아웃된 토큰) `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
+- 필터 단계 에러(401/403)는 `SecurityErrorWriter`가 CommonResponse로 응답한다. `Authorization` 헤더가 없거나 `Bearer `로 시작하지 않으면(Basic 등) `A006`, 서명은 맞지만 `sub`가 사용자 ID가 아닌 토큰은 `A005`(`JwtPrincipalConverter`).
+- 입력 검증 실패는 `G004`(`data`에 `[{field, reason}]`), 바디 형식 오류·잘못된 enum 값은 `G003`, Content-Type이 JSON이 아니면 `G007`. 이메일은 가입·로그인 시 trim+소문자로 정규화한다(`UserService.normalizeEmail`; 기존 대문자 데이터가 있으면 DB 초기화). 이메일 동시 가입 경합도 `U001`로 응답한다(`UserService`가 유니크 제약 예외를 변환).
+
+### Swagger(API 문서) 작성 규칙
+**새 API를 만들면 반드시 아래를 같이 단다.** (`OpenApiDocsTest`가 모든 경로에 Tag/summary/description/에러 응답이 있는지 검사한다.)
+- 컨트롤러 클래스에 `@Tag(name, description)`, 메서드에 `@Operation(summary, description)` (한국어, 동작·주의점·상태 전이를 적는다).
+- 요청/응답 DTO(record)의 모든 필드에 `@Schema(description, example)`. enum은 타입에 `@Schema(description)`로 값 의미를 적고, 쿼리 파라미터는 `@Parameter(description)`. 가중치처럼 형식이 까다로운 요청은 예시를 넣는다.
+- **에러는 `@ApiErrors({ErrorCode...})`로 선언**한다. 메서드가 던지는 `CustomException` 코드(예: `I001`, `I002`, `I003`)를 나열하면 `ApiErrorCustomizer`가 HTTP 상태별 응답(설명에 code/message 목록 + CommonResponse 실패 예시)을 만든다. 공통 에러는 자동으로 붙으므로 적지 않는다: 인증 필요 API는 `401 A001·A003~A006`, 바디가 있으면 `G003·G007`, 바디/파라미터가 있으면 `G004`, 모든 API에 `G001`.
+- **인증이 필요 없는 API만 `@PublicApi`** 를 단다 (보안 요구 `bearerAuth`와 401 인증 에러를 뺀다). 나머지는 전역 `bearerAuth`가 기본이다. `@PublicApi`와 `SecurityConfig`의 permitAll은 반드시 함께 바꾼다 — `OpenApiDocsTest`가 문서의 공개 여부와 실제 동작이 일치하는지, `ApiAuthPolicyTest`가 열린 경로 범위를 검사한다.
+- 성공 응답 래퍼(`CommonResponse<T>`, 목록은 `CommonResponse<ListData<DTO>>`)는 반환 타입에서 자동으로 문서화된다(`OpenApiDocsTest`가 목록 스키마를 검사). 서비스가 아니라 컨트롤러에서 래핑한다.
 
 ### 인증
-- `POST /api/auth/login` → JWT(access token) 발급. 클레임: sub=userId, email, nickname.
-- 컨트롤러에서 로그인 사용자는 `@AuthenticationPrincipal UserPrincipal principal` (`id`, `email`, `nickname`)로 받는다. **요청 바디/파라미터로 userId를 받지 않는다.** 요청마다 DB를 조회하지 않고 토큰 클레임에서 복원한다.
-- 인증 없이 열린 경로: `POST /api/users`, `POST /api/auth/login`, `/actuator/health/**`, `/v3/api-docs/**`, `/swagger-ui/**`. 나머지는 인증 필요. 열린 경로를 추가하면 `SecurityConfig`를 수정한다.
+- `POST /api/auth/login` → JWT(access token) + 리프레시 토큰 발급. 클레임: sub=userId, email, nickname. 응답 `{accessToken, tokenType, refreshToken}`.
+- 리프레시 토큰: 랜덤 32바이트(base64url) 불투명 값. **DB에는 SHA-256 해시만** 저장(`refresh_tokens`: user_id FK, token_hash 유니크, expires_at, revoked_at). 유효 시간 `JWT_REFRESH_DAYS`(기본 14).
+- `POST /api/auth/refresh`(바디 `refreshToken`)는 **회전**: 사용된 토큰은 `revoked_at`을 채워 남기고 새 쌍을 발급한다. 폐기된 토큰이 다시 오면 탈취로 보고 그 사용자의 모든 토큰을 폐기하고 `A010` (이 폐기가 커밋되도록 `noRollbackFor = CustomException`). `POST /api/auth/logout`은 **액세스 토큰 필수**: 현재 액세스 토큰의 `jti`를 `revoked_access_tokens`(jti, user_id, expires_at — 토큰 만료 시각까지만 보관)에 넣어 즉시 무효화하고, 바디 `refreshToken`(현재 기기, 본인 소유일 때만)을 폐기한다. 멱등이며 전 기기 로그아웃 옵션은 없다.
+- **액세스 토큰에는 `jti`(UUID) 클레임이 있다.** `SecurityConfig.jwtDecoder`가 기본 검증(서명·만료)에 더해 `jti`가 없거나 폐기 목록에 있으면 거부한다 → `A005`. 개발 단계라 `jti` 없는 옛 토큰은 호환하지 않고 무효 처리한다(배포 후 재로그인 필요). 보호된 요청마다 PK 조회 1회가 추가된다(사용자 정보는 여전히 토큰 클레임에서 복원).
+- 정리: `AuthCleanupScheduler`가 매일 `cue.auth.cleanup.cron`(기본 `0 0 4 * * *`, 환경변수 `AUTH_CLEANUP_CRON`, `-`면 비활성 — 테스트는 비활성) 시각에 만료된 `refresh_tokens`와 `revoked_access_tokens` 행을 지운다. 폐기됐지만 아직 만료 전인 리프레시 행은 재사용 탐지(`A010`)에 필요해 남긴다.
+- CORS: `SecurityConfig.corsConfigurationSource` — `CORS_ALLOWED_ORIGINS`(쉼표 구분, 기본 `http://localhost:5173,http://localhost:3000`), 메서드 GET/POST/PUT/PATCH/DELETE/OPTIONS, 헤더 Authorization/Content-Type/Accept, credentials 미허용(토큰은 헤더·바디).
+- 컨트롤러에서 로그인 사용자는 `@AuthenticationPrincipal UserPrincipal principal` (`id`, `email`, `nickname`)로 받는다. **요청 바디/파라미터로 userId를 받지 않는다.** 사용자 정보는 토큰 클레임에서 복원한다(폐기 여부 확인용 jti 조회 1회만 DB 사용).
+- 인증 없이 열린 경로: `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `/actuator/health/**`, `/v3/api-docs/**`, `/swagger-ui/**`. 나머지는 인증 필요. 열린 경로를 추가하면 `SecurityConfig`를 수정한다.
 - 자신의 리소스만 접근 가능해야 하는 API는 소유자 검사를 한다 (예: `IdeaService.findOwned` → `I002`).
 
 ### 코드 스타일
@@ -101,12 +129,18 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 
 ### 보류(HOLD)와 등록·수정 흐름
 - `POST /api/ideas`: 4개 항목이 모두 채워지면 `ACTIVE`, 하나라도 비면 `HOLD`. 클라이언트가 status를 보내지 않는다.
-- `ACTIVE`일 때만 `IdeaAnalyzer`로 종류·키워드를 추출하고 `sources`를 만든다. HOLD는 AI를 호출하지 않고 일일 평가에서도 제외한다.
-- `PATCH /api/ideas/{id}`: 보낸 항목만 수정(null 유지, 빈 문자열은 비움). 수정 뒤 `ACTIVE`면 종류·키워드를 다시 추출해 `sources`를 교체한다(평가 근거로 연결된 행은 유지, 해시는 초기화). HOLD → ACTIVE가 되면 같은 파이프라인을 탄다. 수정으로 내용이 실제로 바뀌면 `needs_full_evaluation`이 켜져 다음 평가에서 전체 재평가된다(아래 "일일 재평가").
-- `IdeaAnalyzer`는 `GeminiIdeaAnalyzer`(`@Primary`)가 구현한다: RestClient로 `generateContent`(`x-goog-api-key` 헤더)를 호출하고 `responseMimeType=application/json` + `responseSchema`(type enum, keywords 최대 3개)로 구조화 응답을 받아 `IdeaAnalysis`로 파싱한다. 알 수 없는 종류는 `OTHER`, 키워드는 공백·중복 제거 후 3개까지.
-- **실패 방침: 폴백.** 호출 실패·타임아웃·파싱 실패·API 키 없음이면 `SimpleIdeaAnalyzer`(종류 IT, 긴 단어 3개)로 대체한다. 근거: 키워드 추출은 등록의 부가 단계이고 AI 장애 때문에 사용자가 쓴 아이디어 저장이 실패하면 안 된다. 내부적으로는 `requestAnalysis()`가 `G002`(`EXTERNAL_SERVER_ERROR`)를 던지고 `analyze()`가 잡아 로그(warn)만 남긴다. 폴백 결과는 품질이 낮으므로 이후 수정(PATCH) 시 다시 추출된다.
+- `ACTIVE`일 때만 `IdeaAnalyzer`로 IT 세부 종류·키워드를 추출하고 `sources`를 만든다. HOLD는 AI를 호출하지 않고 일일 평가에서도 제외한다.
+- `PATCH /api/ideas/{id}`: 보낸 항목만 수정(null 유지, 빈 문자열은 비움). 수정 뒤 `ACTIVE`면 종류·키워드를 다시 추출해 `sources`를 교체한다(평가 근거로 연결된 행은 유지, 해시는 초기화). HOLD → ACTIVE가 되면 같은 파이프라인을 탄다. **수정으로 내용·검색 키워드가 실제로 바뀌면 `needs_full_evaluation`이 켜지고 커밋 뒤 첫 평가가 자동 큐에 들어간다(아래 "비동기 평가 실행"). 평가가 대기·진행 중이면 수정은 `I005`.**
+- `IdeaAnalyzer`는 `GeminiIdeaAnalyzer`(`@Primary`)가 구현한다: RestClient로 `generateContent`(`x-goog-api-key` 헤더)를 호출하고 `responseMimeType=application/json` + `responseSchema`(`itCategory` enum 4개, keywords 1~2개; AI는 대분류 type을 분류하지 않는다)로 구조화 응답을 받아 `IdeaAnalysis`로 파싱한다. 알 수 없는 세부 종류는 `DEV_TOOLS_INFRA`, 키워드는 공백·중복 제거 후 2개까지(영어 검색어, 한글이 섞이면 경고 로그).
+- **실패 방침: 폴백.** 호출 실패·타임아웃·파싱 실패·API 키 없음이면 `SimpleIdeaAnalyzer`(세부 종류 `DEV_TOOLS_INFRA`, 긴 단어 2개)로 대체한다. 근거: 키워드 추출은 등록의 부가 단계이고 AI 장애 때문에 사용자가 쓴 아이디어 저장이 실패하면 안 된다. 내부적으로는 `requestAnalysis()`가 `G002`(`EXTERNAL_SERVER_ERROR`)를 던지고 `analyze()`가 잡아 로그(warn)만 남긴다. 폴백 결과는 품질이 낮으므로 이후 수정(PATCH) 시 다시 추출된다.
 - 설정은 `cue.gemini.*`(`GEMINI_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_BASE_URL`, `GEMINI_TIMEOUT_SECONDS`). `enabled=false`면 `GeminiIdeaAnalyzer` 빈이 없어 `SimpleIdeaAnalyzer`만 쓴다. 통합 테스트는 `cue.gemini.enabled=false`.
 
+### 검색 키워드 우선순위 (USER > AI)
+- 요청 `keywords`(선택, `POST /api/ideas`·`PATCH /api/ideas/{id}`): 최대 2개, 각 항목 trim 후 1~50자, 빈 문자열 불가, 중복은 제거, 언어 제한 없음. 위반은 `G004`(DTO `@Size`/`@NotBlank` 검증, PATCH에도 `@Valid`).
+- 등록: ACTIVE이고 키워드가 없거나 `[]`이면 `IdeaAnalyzer.analyze`로 종류·키워드(출처 `AI`) 추출. 사용자 키워드가 있으면(출처 `USER`) 키워드 추출은 건너뛰고 `IdeaAnalyzer.analyzeCategory`로 **세부 종류만** 분류한다(검색 provider 조합이 세부 종류에 의존). Gemini는 type만 받는 경량 스키마/프롬프트(`TYPE_ONLY_NOTICE`)를 쓰고 실패하면 `DEV_TOOLS_INFRA` 폴백.
+- 수정: `keywords` 생략(null)이면 유지. 단 출처가 `AI`(또는 없음)면 ACTIVE에서 기존대로 재추출, `USER`면 내용이 바뀌어도 유지. `[]`는 사용자 키워드를 지우고 AI 재추출, 1~2개는 교체(출처 `USER`). HOLD는 키워드를 저장만 하고 sources·AI 호출 없이, ACTIVE가 될 때 위 규칙을 적용한다.
+- `sources`는 종류별 provider × 키워드(최대 2개)로 새로 만든다. 응답 `IdeaResponse`에 `type`(IT)·`itCategory`·`keywords`(없으면 `[]`)·`keywordOrigin`. 수정(PATCH) 시 ACTIVE면 세부 종류도 다시 분류한다.
+- AI 키워드 프롬프트 규칙: 영어 검색어 1~2개, 각 1~3단어, 아이디어 전체를 대표(한 항목에 치우치지 않음), 너무 일반적이지 않게. 한글이 섞여 오면 경고 로그만 남기고 그대로 쓴다.
 ### 일일 재평가 (`evaluation`)
 - **진입점**: 스케줄러 `EvaluationScheduler`(`@Scheduled`, 기본 `0 0 3 * * *` Asia/Seoul) → `EvaluationBatchService.runAll()` → ACTIVE 아이디어 id마다 `EvaluationJobService.execute(id)` → `DailyEvaluationService.evaluate(id)`. 수동 `POST /api/ideas/{id}/evaluate`와 저장 직후 자동 평가는 `EvaluationJobService.submit`으로 큐에 넣어 같은 `execute`를 탄다. HOLD는 대상에서 제외(수동은 `I004`).
 - **아이디어 단위 격리**: 배치는 아이디어마다 try/catch로 로그만 남기고 계속한다. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 `DailyEvaluationService`는 `@Transactional`을 쓰지 않고 `TransactionTemplate`/`EvaluationService`의 짧은 트랜잭션으로 저장한다. 아이디어 사이에는 `cue.evaluation.delay-ms`(기본 15초)만큼 쉰다(Gemini를 쓰지 않은 `NO_CHANGE`는 쉬지 않음). Gemini 호출 수는 아래 "호출량" 참고.
@@ -124,7 +158,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | 새 트렌드만 있음 | 1회 (TREND) |
 | 변경도 새 트렌드도 없음 | 0회 |
 
-  - 하루 총합 = 7(트렌드) + Σ아이디어(최대 14). 키워드가 1개면 source 3개라 최악 8회/아이디어. (예전의 "IT 4 provider × 키워드 3개 = 12 source, 최악 26회" 가정은 폐기.)
+  - 하루 총합 = 7(트렌드) + Σ아이디어(최대 14). 키워드가 1개면 source 3개라 최악 8회/아이디어.
   - 호출 간격: `GEMINI_MIN_INTERVAL_MS`(기본 6500ms ≈ 분당 9회)는 **호출당** 적용되므로 소요 시간 ≈ 호출 수 × 6.5초. 트렌드 수집 7회 ≈ 45초, 최악 아이디어(14회) ≈ **1분 30초**. 아이디어 N개가 한 줄로 직렬 처리되므로 최악 총 시간 ≈ 45초 + N × 1분 30초 (아이디어 사이 대기 `EVALUATION_DELAY_MS`는 배치에서만 추가). 일일 한도(RPD)는 키 수령 후 확인이 필요하며 한도에 닿으면 `G002`로 그 갈래가 실패하고(A는 해시 복구, B는 평가 완료 미기록) 다음 배치에서 다시 시도한다.
   - **일괄 요약의 입력 크기**: 항목당 원문은 `SOURCE_BATCH_CONTENT_CHARS`(기본 4000자, 단건 모드의 8000보다 작게), 한 호출 합계는 `SOURCE_BATCH_TOTAL_CHARS`(기본 16000자)로 자른다(넘으면 항목당 길이를 균등하게 줄임, 최소 200자). 응답은 `{"items":[{"url","summary"}]}`이며 서버가 검증한다(입력에 있던 URL만·중복 제거·500자 제한, 빠진 항목은 건너뛰고 원래 조회한 짧은 요약 사용).
   - **항목 요약과 소스 요약을 한 호출로 합치지 않은 이유**: 호출이 source당 1회로 줄지만 ① 응답이 길어져 JSON이 잘리거나 항목 요약 품질이 떨어질 위험이 있고 ② 항목 요약이 전부 재사용된 날에도 소스 요약은 따로 필요해 결국 호출 경로가 둘로 갈라진다. 한도가 더 부족하면 다음 후보다.
@@ -200,7 +234,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `GET /api/ideas?status=ACTIVE|HOLD&sort=TOTAL|RECENT_RISE`. 기본은 `ACTIVE` + `TOTAL`(총점순). `RECENT_RISE`는 `last_difference` 내림차순(없으면 뒤). 보류 탭은 `status=HOLD`.
 
 ### 외부 자료 변경 감지
-- **변경 감지 = `content_hash` 비교**: `Source.updateHash(newHash)`가 이전 해시와 다르면 true(첫 조회는 해시만 기록하고 false). 해시는 상위 N개의 제목·URL·요약만 쓴다(날짜·지표 제외). 변경이 감지되면 새 항목만 가려내지 않고 **상위 N개를 전부 다시 읽고 다시 요약해 덮어쓴다**(직전 URL diff 방식은 폐기). 변경이 있을 때만 재평가를 트리거한다.
+- **변경 감지 = `content_hash` 비교**: `Source.updateHash(newHash)`가 이전 해시와 다르면 true(첫 조회는 해시만 기록하고 false). 해시는 바뀌지 않는 값인 **제목·URL만** 쓰고 url 기준으로 정렬한 뒤 계산한다(`SourceHasher`: 요약·지표·날짜·순위는 넣지 않아 순위만 바뀌거나 요약만 바뀐 것은 변경이 아니다). 변경이 감지되면 새 항목만 가려내지 않고 **상위 N개를 전부 다시 읽고 다시 요약해 덮어쓴다**(직전 URL diff 방식은 폐기). 변경이 있을 때만 재평가를 트리거한다.
 - `SourceClient`(provider당 구현체 1개, 빈으로 등록하면 자동 인식)는 두 가지를 한다: `search(keyword)`로 상위 `cue.source.top-n`(기본 5)개를 `SourceItem(title,url,summary,publishedAt,metrics)`로 반환, `fetchContent(item)`으로 항목의 **원문**을 텍스트로 읽는다(기본 구현은 빈 문자열).
 
 | provider | 조회 정렬 (급상승 기준) | 원문 |
@@ -208,13 +242,13 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | GITHUB | `q={kw} pushed:>{오늘−N일}` + `sort=stars` — 최근 N일 안에 활동한 저장소 중 인기순. (`created:>`만 쓰면 오래 유지되는 좋은 프로젝트의 활동을 놓치고 전체 stars 순은 거의 안 변하므로 pushed를 택함) | README (`/repos/{full_name}/readme`, raw 미디어 타입) |
 | HUGGING_FACE | `sort=trendingScore` (허브의 최근 인기 점수) | 모델 카드 `/{id}/raw/main/README.md` (YAML 머리말 제외) |
 | STACK_EXCHANGE | `search/advanced`는 `hot`/`week` 정렬이 없어 `fromdate={오늘−N일}` + `sort=votes` — 최근 N일 안 생성된 질문 득표순 | 질문 본문 + 최고 득표 답변 본문 (`filter=withbody`, HTML→텍스트) |
-| SEMANTIC_SCHOLAR | Graph API `/graph/v1/paper/search`(`query`, `limit=top-n`, `year={올해-(papers-years-1)}-`, `fields=title,abstract,url,year,citationCount,publicationDate`)로 **최근 `cue.source.papers-years`년(기본 2) 논문**만 받아 **인용 수 내림차순**(같으면 제목순)으로 정리. 인용 수는 `metrics`(`citations=N`)로만 쓰고 해시에서 뺀다(단, 순서가 인용 수로 정해지므로 순위가 바뀌면 해시가 바뀔 수 있다) | 초록(abstract)을 그대로 원문으로 사용(PDF는 읽지 않음, 검색 응답에 이미 있어 추가 호출 없음, `summary`에 앞 1500자 저장). url이 없으면 `https://www.semanticscholar.org/paper/{paperId}`. API 키(`SEMANTIC_SCHOLAR_API_KEY`, `x-api-key` 헤더)는 선택이지만 **없으면 익명 공유 한도라 429가 잦다**(모두 `G002`) |
+| SEMANTIC_SCHOLAR | Graph API `/graph/v1/paper/search`(`query`, `limit=top-n`, `year={올해-(papers-years-1)}-`, `fields=title,abstract,url,year,citationCount,publicationDate`)로 **최근 `cue.source.papers-years`년(기본 2) 논문**만 받아 **인용 수 내림차순**(같으면 제목순)으로 정리. 인용 수는 `metrics`(`citations=N`)로만 쓰고 해시에서 뺀다(해시는 url 정렬 후 제목·URL만 쓰므로 인용 수 순위가 바뀌어도 변경으로 잡히지 않는다) | 초록(abstract)을 그대로 원문으로 사용(PDF는 읽지 않음, 검색 응답에 이미 있어 추가 호출 없음, `summary`에 앞 1500자 저장). url이 없으면 `https://www.semanticscholar.org/paper/{paperId}`. API 키(`SEMANTIC_SCHOLAR_API_KEY`, `x-api-key` 헤더)는 선택이지만 **없으면 익명 공유 한도라 429가 잦다**(모두 `G002`) |
 | WIKIPEDIA_PAGEVIEWS | 영어 위키 `w/api.php?action=query&list=search&srsearch={kw}&srlimit=top-n&srnamespace=0`로 문서를 찾고, 문서마다 Wikimedia REST pageviews(`per-article/en.wikipedia/all-access/user/{title}/daily/{start}/{end}`)의 **최근 `cue.source.pageviews-days`일(기본 30, 어제까지) 일별 조회수를 합산**해 `metrics`(`views_30d=N`). 조회수 호출이 실패·데이터 없음이면 그 문서의 metrics만 비운다. 조회수는 해시에서 뺀다(제목·URL·snippet만) | 문서 소개 `api/rest_v1/page/summary/{title}`의 `extract`. 요약은 검색 snippet(HTML 태그 제거). **User-Agent 필수**(Wikimedia 정책): `WIKIMEDIA_USER_AGENT`(기본은 프로젝트 식별용 일반 문자열, 개인 이메일 금지) |
 | HACKER_NEWS | Algolia `/search` + `tags=story` + `numericFilters=created_at_i>{오늘−N일}` (관련도 뒤에 points·댓글 반영) | 연결된 기사 URL 본문(`WebContentFetcher`), 외부 링크가 없으면 글 텍스트(`/api/v1/items/{id}`) |
 
   N일은 `cue.source.trending-days`(기본 30). 점수·댓글 수·stars 등은 `metrics`로만 전달하고 해시에서는 뺀다.
 - **웹 원문 가져오기 안전장치** (`source/fetch`: `WebContentFetcher`, `UrlGuard`, `JdkTransport`, `HtmlText`): http/https만, 사용자정보(`user:pass@`) 거부, 호스트가 가리키는 **모든** IP가 공개 주소여야 함(루프백·사설·링크로컬·멀티캐스트·미지정·CGNAT 100.64/10·IPv6 ULA 차단), 자동 리다이렉트 끄고 직접 따라가며 **매 홉마다 재검사**(`cue.source.max-redirects` 기본 3), 연결·읽기 타임아웃, 응답 `fetch-max-bytes`(1MB) 상한, `text/*`·HTML만 허용, HTML은 jsoup(`org.jsoup:jsoup:1.18.3`)으로 script/style/nav 등을 제거하고 본문 텍스트만 추출, 글자 수는 `max-content-chars`(8000). 실패는 `S003`(차단)/`G002`로 던지고 호출하는 쪽이 그 항목만 건너뛴다. **한계**: 검사와 실제 연결 사이에 DNS 응답이 바뀌는 DNS rebinding은 완전히 막지 못한다. 외부 본문은 신뢰하지 않는 데이터이며 프롬프트의 '데이터로만 취급' 문구로 방어한다.
-- `SourceCheckService.check(sourceId)`: 조회 → `SourceHasher`(제목·URL·요약의 SHA-256 hex) → `updateHash`로 `content_hash`·`checked_at` 갱신 → `SourceCheckResult`(CHANGED는 items 포함 / UNCHANGED). `checkAll(ideaId)`는 한 source가 실패해도 계속하고 실패는 `FAILED` 결과(해시·시각 유지)로 담는다. 외부 오류(4xx/5xx·타임아웃·파싱 실패)는 `G002`, 없는 source `S001`, 미지원 provider `S002`.
+- `SourceCheckService.check(sourceId)`: 조회 → `SourceHasher`(제목·URL만, url 정렬 후 SHA-256 hex) → `updateHash`로 `content_hash`·`checked_at` 갱신 → `SourceCheckResult`(CHANGED는 items 포함 / UNCHANGED). `checkAll(ideaId)`는 한 source가 실패해도 계속하고 실패는 `FAILED` 결과(해시·시각 유지)로 담는다. 외부 오류(4xx/5xx·타임아웃·파싱 실패)는 `G002`, 없는 source `S001`, 미지원 provider `S002`.
 - 외부 HTTP 호출 중 DB 트랜잭션을 잡지 않으려고 이 서비스만 `@Transactional`을 쓰지 않는다 (저장은 `repository.save` 단위). 해시 입력에서 별점·갱신일 등 자주 변하는 값은 뺀다.
 - 평가 연결은 아래 "일일 재평가". 평가가 실패하면 `SourceCheckService.restoreHash`로 해시를 되돌려 다음에 같은 변화를 다시 감지한다.
 
@@ -222,20 +256,22 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | Method | Path | 인증 | 설명 |
 | --- | --- | --- | --- |
 | POST | `/api/users` | ✕ | 회원가입 |
-| POST | `/api/auth/login` | ✕ | 로그인 (JWT 발급) |
+| POST | `/api/auth/login` | ✕ | 로그인 (JWT + 리프레시 토큰 발급) |
+| POST | `/api/auth/refresh` | ✕ | 리프레시 토큰 회전 재발급 |
+| POST | `/api/auth/logout` | ✓ | 로그아웃: 현재 액세스 토큰 즉시 무효화 + 리프레시 토큰 폐기 (현재 기기만) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD) |
-| GET | `/api/ideas` | ✓ | 리더보드. `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD). 선택 `keywords`(최대 2개)가 있으면 AI 키워드 추출 생략 |
+| GET | `/api/ideas` | ✓ | 리더보드(`data.items`). `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태·점수·가중치·최근 변화량·hasNewChange) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 키워드 재추출) |
+| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 출처가 AI일 때 키워드 재추출). `keywords`: 생략=유지, `[]`=삭제 후 AI, 1~2개=교체. 평가가 대기·진행 중이면 `I005`(409) |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 가중치 변경 예약 (5개 기준 모두, 합 100) |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 (새 변화 알림 해제) |
-| GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순) |
-| GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량·근거 요약·출처, 최신순) |
+| GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순, `data.items`) |
+| GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량·근거 요약·출처, 최신순, `data.items`) |
 | POST | `/api/demo/evaluations/run` | ✓ | 시연용 "지금 조회·평가" (`cue.demo.enabled`, 아래 "시연용 API"). 응답 `{queued, skipped, trendRefreshed}`, 202 |
 | POST | `/api/ideas/{id}/evaluate` | ✓ | 평가 비동기 요청 — 즉시 **202**. 본인만(`I002`), HOLD `I004`, Gemini 불가 `E001`, 대기열 가득 `E004`는 동기 검사. 응답 `{status: QUEUED|RUNNING, idea}`(이미 진행 중이면 멱등). 결과는 `GET /api/ideas/{id}`의 `evaluationStatus` 폴링 |
 
-Swagger: `/swagger-ui.html`, 헬스체크: `/actuator/health`.
+Swagger: `/swagger-ui.html` (Authorize 버튼에 accessToken 입력), OpenAPI JSON: `/v3/api-docs`, 헬스체크: `/actuator/health`.
 
 ## 팀원 온보딩 (로컬 환경 세팅)
 
@@ -270,6 +306,9 @@ cd CUE/backend
 | `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | 위 로컬 DB | 로컬에서는 설정 불필요 |
 | `JWT_SECRET` | 개발용 임시 값 | **개발 서버·운영에서는 반드시 교체** (32바이트 이상). 서버 인스턴스끼리 같은 값이어야 한다 |
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간 |
+| `JWT_REFRESH_DAYS` | `14` | 리프레시 토큰 유효 시간(일) |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | CORS 허용 오리진(쉼표 구분). 운영에서는 실제 프론트 도메인으로 제한 |
+| `AUTH_CLEANUP_CRON` | `0 0 4 * * *` | 만료 토큰 정리 주기(cron). `-`이면 비활성 |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 자동 기동 여부. `bootRun`이 켜 준다 |
 | `GITHUB_TOKEN` | 없음 | 선택. GitHub 검색 rate limit 완화 |
 | `HUGGING_FACE_TOKEN` | 없음 | 선택. Hugging Face API 토큰 |
@@ -293,14 +332,18 @@ cd CUE/backend
 | `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성 |
 | `GEMINI_BASE_URL` / `GEMINI_TIMEOUT_SECONDS` | `https://generativelanguage.googleapis.com` / `10` | 엔드포인트, 연결·읽기 타임아웃(초) |
 
-- 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 키·토큰(위 표)은 변수 이름만 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
+- 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 토큰(위 선택 값)과 Gemini 등 키는 이 표에 변수 이름만 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
 
 ### 협업 시 주의
 - **`V1__init.sql` 충돌**: 개발 중에는 모두가 이 한 파일을 고치므로 충돌이 잦다. 스키마 변경 PR은 작게 유지하고 머지 전에 `main`을 반영한다. 스키마 확정 후에는 이 파일을 고정하고 `V2__*.sql`부터 추가한다.
 - 엔티티를 바꾸면 `V1__init.sql`도 같은 PR에 넣는다 (`ddl-auto: validate`라서 어긋나면 서버가 안 뜬다).
 - 에러 코드(`ErrorCode`)와 `V1__init.sql`은 충돌이 잦은 파일이다. PR을 작게 유지하고 자주 `main`을 반영한다.
 - 통합 테스트는 Docker가 켜져 있어야 통과한다.
-- 프론트 연동: 아직 **CORS 설정이 없다.** 프론트가 브라우저에서 호출하기 시작하면 허용 도메인을 설정해야 한다 (TODO).
+- 프론트 연동: CORS는 설정돼 있다. 프론트 주소가 기본값(5173/3000)이 아니면 `CORS_ALLOWED_ORIGINS`에 추가한다.
+
+## AI 프롬프트
+- Gemini 프롬프트는 `src/main/resources/prompts/`(`trend-summary.txt`, `initial-evaluation.txt`, `re-evaluation.txt`)에 있고 플레이스홀더는 `{{name}}` 형식이다. 입력·출력 JSON 규격, 점수 앵커, 운용 팁은 [docs/ai-prompts.md](../docs/ai-prompts.md).
+- **프롬프트를 바꾸면 `docs/ai-prompts.md`(플레이스홀더 표·JSON 예시)와 `PromptTemplatesTest`를 함께 갱신한다.** 파일명·플레이스홀더·출력 JSON 키는 `PromptLoader`/평가 코드와의 계약이다.
 
 ## AI 프롬프트
 - Gemini 프롬프트는 `src/main/resources/prompts/`(`item-summary-batch.txt`, `trend-summary.txt`, `trend-item-summary-batch.txt`, `global-trend-summary.txt`, `initial-evaluation.txt`, `re-evaluation.txt`, `trend-evaluation.txt`)에 있고 플레이스홀더는 `{{name}}` 형식이다. 입력·출력 JSON 규격, 점수 앵커, 운용 팁은 [docs/ai-prompts.md](../docs/ai-prompts.md).
@@ -312,13 +355,14 @@ cd backend && ./gradlew bootRun    # 루트 docker-compose.yml의 DB를 자동 �
 cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (Docker 필요)
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
-- 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `DOCKER_COMPOSE_ENABLED`, `GEMINI_*`, `EVALUATION_*`(위 표).
-- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer: 급상승 정렬 파라미터·원문 읽기·Semantic Scholar 연도 필터/인용 정렬/키 헤더·Wikipedia 조회수 합산/User-Agent/HTML 제거·429→G002), `source/UrlGuardTest`·`WebContentFetcherTest`(SSRF·리다이렉트·HTML 추출), `source/SourceSummaryServiceTest`(항목→소스 요약 순서·호출 수·덮어쓰기·재사용), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `global/ai/PromptLoaderTest`·`GeminiClientTest`, `evaluation/EvaluationAnalyzerTest`(근거 4개 기준 클램프·필터·초기 평가 변환·TREND 거부)·`evaluation/TrendEvaluatorTest`(TREND 첫 평가/재평가·클램프·URL 필터)·`EvaluationSchedulerConfigTest`(enabled 설정)·`EvaluationDomainTest`, `trend/GlobalTrendServiceTest`(수집→항목·provider·최종 요약 순서와 호출 수·해시 같으면 재사용·항목 요약 재사용·실패 격리), `source/SourceTextFormatTest`, `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/DailyEvaluationFlowTest`(Gemini·자료 조회·글로벌 트렌드는 목: 첫 평가(근거 4+TREND)·변경 없음·새 트렌드 시 TREND만 재평가·한 갈래 실패 시 다른 갈래 저장·트렌드 없는 날·실패 복구·가중치 턴·수동 API 권한/에러·배치 HOLD 제외/실패 격리), `integration/AsyncEvaluationFlowTest`(실제 단일 스레드 실행기: 202 즉시 응답·폴링·멱등·동기 검사·FAILED 기록·대기열 가득 E004·부팅 정리·배치 상태)·`integration/AutoEvaluationOnSaveTest`(커밋 뒤 자동 큐 투입)·`integration/DemoEvaluationApiTest`·`DemoApiDisabledTest`·`DemoQueueFullTest`(시연 API: 본인 ACTIVE만 큐 투입·보류/다른 사용자 제외·진행 중 건너뜀·force 해시 변경·쿨다운 D002·꺼짐 D001·미인증 A006·E004)·`integration/EvaluatingEditLockTest`(평가 중 수정 I005·완료/실패 뒤 수정·I002 우선·weights/check 허용·행 잠금 경쟁), `integration/GeminiEnabledBootTest`(기본 설정 부팅).
+- 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `JWT_REFRESH_DAYS`, `CORS_ALLOWED_ORIGINS`, `DOCKER_COMPOSE_ENABLED`, `AUTH_CLEANUP_CRON`, `GEMINI_*`, `SOURCE_*`, `TREND_*`, `EVALUATION_*`, `DEMO_*`와 선택 토큰·키(`GITHUB_TOKEN`, `HUGGING_FACE_TOKEN`, `STACK_EXCHANGE_KEY`, `SEMANTIC_SCHOLAR_API_KEY`, `WIKIMEDIA_USER_AGENT`)(위 표).
+- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer: 급상승 정렬 파라미터·원문 읽기·Semantic Scholar 연도 필터/인용 정렬/키 헤더·Wikipedia 조회수 합산/User-Agent/HTML 제거·429→G002), `source/UrlGuardTest`·`WebContentFetcherTest`(SSRF·리다이렉트·HTML 추출), `source/SourceSummaryServiceTest`(항목→소스 요약 순서·호출 수·덮어쓰기·재사용), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `global/ai/PromptLoaderTest`·`GeminiClientTest`, `evaluation/EvaluationAnalyzerTest`(근거 4개 기준 클램프·필터·초기 평가 변환·TREND 거부)·`evaluation/TrendEvaluatorTest`(TREND 첫 평가/재평가·클램프·URL 필터)·`EvaluationSchedulerConfigTest`(enabled 설정)·`EvaluationDomainTest`, `trend/GlobalTrendServiceTest`(수집→항목·provider·최종 요약 순서와 호출 수·해시 같으면 재사용·항목 요약 재사용·실패 격리), `source/SourceTextFormatTest`, `integration/ApiAuthPolicyTest`(모든 보호 엔드포인트를 순회해 토큰 없음/형식 오류/만료/무효/변조 → A006/A003/A004/A005, 타인 아이디어 I002·없음 I001, 열린 경로 범위; 평가·시연 API 포함), `integration/OpenApiDocsTest`(`/v3/api-docs` 200, bearerAuth, 경로·Tag·에러 응답·새 스키마, 문서의 공개 여부 = 실제 permitAll), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/RefreshTokenCorsTest`(CORS preflight, 로그인→리프레시→재사용 거부→로그아웃, 만료·무효), `integration/DailyEvaluationFlowTest`(Gemini·자료 조회·글로벌 트렌드는 목: 첫 평가(근거 4+TREND)·변경 없음·새 트렌드 시 TREND만 재평가·한 갈래 실패 시 다른 갈래 저장·트렌드 없는 날·실패 복구·가중치 턴·수동 API 권한/에러·배치 HOLD 제외/실패 격리), `integration/AsyncEvaluationFlowTest`(실제 단일 스레드 실행기: 202 즉시 응답·폴링·멱등·동기 검사·FAILED 기록·대기열 가득 E004·부팅 정리·배치 상태)·`integration/AutoEvaluationOnSaveTest`(커밋 뒤 자동 큐 투입)·`integration/DemoEvaluationApiTest`·`DemoApiDisabledTest`·`DemoQueueFullTest`(시연 API: 본인 ACTIVE만 큐 투입·보류/다른 사용자 제외·진행 중 건너뜀·force 해시 변경·쿨다운 D002·꺼짐 D001·미인증 A006·E004)·`integration/EvaluatingEditLockTest`(평가 중 수정 I005·완료/실패 뒤 수정·I002 우선·weights/check 허용·행 잠금 경쟁), `integration/GeminiEnabledBootTest`(기본 설정 부팅)
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
 ## 작업 규칙 (backend)
 - 코드 변경 시 테스트를 함께 추가/수정하고 `cd backend && ./gradlew test`를 통과시킨 뒤 알린다.
+- 새 API/DTO/에러 코드는 위 "Swagger 작성 규칙"을 지키고, `ApiAuthPolicyTest.protectedEndpoints()`에 엔드포인트를 추가한다.
 - 동작이 바뀌면 루트 `README.md`의 Backend 섹션과 이 문서를 함께 갱신한다.
 - 스키마 변경은 확정 전까지 `V1__init.sql`을 수정하고 PR에 "DB 초기화 필요"를 적는다. 확정 후에는 새 버전 파일만 추가한다.
 
@@ -326,10 +370,9 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - 평가 호출 보호: 수동 `POST /api/ideas/{id}/evaluate`는 대기열 상한(`E004`)만 있고 사용자별 호출 횟수 제한이 없어 Gemini 무료 티어를 소진시킬 수 있다(사용자당 쿨다운/일일 횟수 제한 필요 여부는 **열린 결정**). 429 응답 재시도/백오프도 아직 없다(실패하면 다음 배치로 넘김).
 - 글로벌 트렌드 열린 결정: ① 트렌드가 매일 조금씩 바뀌어 거의 매일 아이디어 수만큼 TREND 호출이 생긴다(재평가 대상을 줄이는 방법: 요약 유사도 임계값, 주 1회 평가 등) ② 트렌드 provider 3개·정렬 기준·`days=7`은 제안값이라 팀 확정 필요 ③ 근거 4개 기준 평가에 소스 요약(`sources.summary`)·`trend-summary` 결과를 프롬프트에 넣을지(지금은 항목 요약만 쓰고 소스 요약은 저장만 함) ④ 트렌드 API(`GET /api/trends/latest` 등)를 프론트에 노출할지 — 아직 컨트롤러 없음.
 - `GeminiIdeaAnalyzer`가 `GeminiClient`와 HTTP 호출 코드를 중복한다(공통화 가능). 분석기는 `GEMINI_MIN_INTERVAL_MS` 적용 대상이 아니다.
-- 외부 API 클라이언트 6종 모두 구현(검색+원문 읽기): GitHub·Hugging Face·Stack Exchange·Hacker News·Semantic Scholar·Wikipedia Pageviews. 클라이언트 빈이 등록되면 종류별 조합(`IdeaType.searchProviders`)에서 자동으로 쓰인다. 한도 경고: Semantic Scholar는 키 없이 호출하면 공유 한도(낮음)라 429가 나기 쉽고, Wikipedia는 문서마다 조회수 호출이 1회 더 있다(상위 N개면 검색 1 + 조회수 N + 원문 N회의 HTTP).
-- **열린 결정**: 종류별 검색 API 조합(`IdeaType.searchProviders`)을 팀이 확정해야 한다. 해시에 넣는 필드(현재 제목·URL·요약, 상위 5건)도 평가 정책과 함께 재검토. 점수 앵커·±10 한도·자료 개수 상한은 `docs/ai-prompts.md` "열린 결정" 참고.
-- 리프레시 토큰/로그아웃(Redis 미사용 → DB 저장), 이메일 인증·약관 등 가입 부가 기능은 필요 시.
-- 운영 전: `JWT_SECRET` 교체, CORS 허용 도메인 제한(현재 CORS 설정 없음), 비밀번호 정책 검토.
+- **열린 결정**: 트렌드 provider 3개·정렬 기준은 제안값이다. 해시에 넣는 필드(제목·URL)와 상위 N건 수는 평가 정책과 함께 재검토. 점수 앵커·±10 한도·자료 개수 상한은 `docs/ai-prompts.md` "열린 결정" 참고. IT 외 분야를 추가할 때 `IdeaType`을 확장한다.
+- 이메일 인증·약관 등 가입 부가 기능은 필요 시.
+- 운영 전: `JWT_SECRET` 교체, `CORS_ALLOWED_ORIGINS`를 운영 프론트 도메인으로 제한, 비밀번호 정책 검토.
 
 ## 참고
 - `~/Desktop/Ceased/LoopOn/loop-on-backend`(이전 프로젝트)에서 에러 코드 체계·CommonResponse 형식을 참고했다. LoopOn의 Redis 기반 리프레시 토큰, 코드 중복 문제는 가져오지 않았다.

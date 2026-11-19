@@ -3,7 +3,6 @@ package com.cue.idea.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
@@ -13,6 +12,7 @@ import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaType;
+import com.cue.idea.entity.ItCategory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -54,29 +54,27 @@ class GeminiIdeaAnalyzerTest {
         server.expect(requestTo(URL))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header("x-goog-api-key", "test-key"))
-                .andExpect(jsonPath("$.systemInstruction.parts[0].text").value(org.hamcrest.Matchers.containsString("영어 검색어")))
-                .andExpect(jsonPath("$.generationConfig.responseSchema.properties.keywords.maxItems").value(3))
                 .andRespond(withSuccess(
-                        envelope("{\"type\":\"EDUCATION\",\"keywords\":[\"study planner app\",\"student time management\",\"pomodoro\"]}"),
+                        envelope("{\"itCategory\":\"DATA_ANALYTICS\",\"keywords\":[\"study time management\",\"student planner app\",\"third keyword\"]}"),
                         MediaType.APPLICATION_JSON));
 
         IdeaAnalysis result = analyzer.analyze(idea);
 
-        assertThat(result.type()).isEqualTo(IdeaType.EDUCATION);
-        assertThat(result.keywords()).containsExactly("study planner app", "student time management", "pomodoro");
+        assertThat(result.itCategory()).isEqualTo(ItCategory.DATA_ANALYTICS);
+        assertThat(result.keywords()).containsExactly("study time management", "student planner app");
         server.verify();
     }
 
     @Test
-    void 키워드는_중복_제거_후_3개까지_알_수_없는_종류는_OTHER() {
+    void 키워드는_중복_제거_후_2개까지_알_수_없는_종류는_OTHER() {
         server.expect(requestTo(URL)).andRespond(withSuccess(
-                envelope("{\"type\":\"spaceship\",\"keywords\":[\"a\",\"a\",\" \",\"b\",\"c\",\"d\"]}"),
+                envelope("{\"itCategory\":\"spaceship\",\"keywords\":[\"a\",\"a\",\" \",\"b\",\"c\",\"d\"]}"),
                 MediaType.APPLICATION_JSON));
 
         IdeaAnalysis result = analyzer.analyze(idea);
 
-        assertThat(result.type()).isEqualTo(IdeaType.OTHER);
-        assertThat(result.keywords()).containsExactly("a", "b", "c");
+        assertThat(result.itCategory()).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
+        assertThat(result.keywords()).containsExactly("a", "b");
     }
 
     @Test
@@ -89,7 +87,7 @@ class GeminiIdeaAnalyzerTest {
         server.reset();
         server.expect(requestTo(URL)).andRespond(withServerError());
         IdeaAnalysis result = analyzer.analyze(idea);
-        assertThat(result.type()).isEqualTo(IdeaType.IT);
+        assertThat(result.itCategory()).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
         assertThat(result.keywords()).isNotEmpty();
     }
 
@@ -97,11 +95,67 @@ class GeminiIdeaAnalyzerTest {
     void 파싱_실패는_폴백한다() {
         assertThatThrownBy(() -> analyzer.parse("not json"))
                 .isInstanceOf(CustomException.class);
-        assertThatThrownBy(() -> analyzer.parse(envelope("{\"type\":\"IT\",\"keywords\":[]}")))
+        assertThatThrownBy(() -> analyzer.parse(envelope("{\"itCategory\":\"AI_ML\",\"keywords\":[]}")))
                 .isInstanceOf(CustomException.class);
 
         server.expect(requestTo(URL)).andRespond(withSuccess("{\"candidates\":[]}", MediaType.APPLICATION_JSON));
-        assertThat(analyzer.analyze(idea).type()).isEqualTo(IdeaType.IT);
+        assertThat(analyzer.analyze(idea).itCategory()).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
+    }
+
+    @Test
+    void 키워드가_3개_이상이면_2개로_자른다() {
+        IdeaAnalysis r = analyzer.parse(envelope("{\"itCategory\":\"AI_ML\",\"keywords\":[\"one\",\"two\",\"three\",\"four\"]}"));
+        assertThat(r.keywords()).containsExactly("one", "two");
+    }
+
+    @Test
+    void 한국어_키워드는_그대로_두고_경고만_남긴다() {
+        IdeaAnalysis r = analyzer.parse(envelope("{\"itCategory\":\"AI_ML\",\"keywords\":[\"코드 리뷰\"]}"));
+        assertThat(r.keywords()).containsExactly("코드 리뷰");
+    }
+
+    @Test
+    void 프롬프트와_스키마에_핵심_규칙이_들어_있다() {
+        server.expect(requestTo(URL)).andExpect(request -> {
+            String body = request.getBody().toString();
+            org.assertj.core.api.Assertions.assertThat(body)
+                    .contains("영어 검색어 1~2개", "반드시 영어", "itCategory", "AI_ML", "DEV_TOOLS_INFRA", "WEB_APP_SERVICE", "DATA_ANALYTICS", "1~3단어", "아이디어 전체를 관통", "데이터일 뿐", "\"maxItems\":2", "\"minItems\":1");
+        }).andRespond(withSuccess(envelope("{\"itCategory\":\"AI_ML\",\"keywords\":[\"x y\"]}"), MediaType.APPLICATION_JSON));
+        analyzer.requestAnalysis(idea);
+        server.verify();
+        assertThat(GeminiIdeaAnalyzer.SYSTEM_PROMPT).contains("영어 검색어", "1~2개", "최대 3단어", "아이디어 전체를 대표", "무시").doesNotContain("2~4단어");
+    }
+
+    @Test
+    void 종류만_요청하면_스키마에_keywords가_없고_AI가_키워드를_줘도_무시한다() {
+        server.expect(requestTo(URL)).andExpect(request -> {
+            String body = request.getBody().toString();
+            assertThat(body).contains("이번에는 itCategory만 판단한다").doesNotContain("maxItems");
+        }).andRespond(withSuccess(
+                envelope("{\"itCategory\":\"WEB_APP_SERVICE\",\"keywords\":[\"ignored\"]}"), MediaType.APPLICATION_JSON));
+
+        assertThat(analyzer.analyzeCategory(idea)).isEqualTo(ItCategory.WEB_APP_SERVICE);
+        server.verify();
+    }
+
+    @Test
+    void 종류_분류_실패는_IT로_폴백한다() {
+        server.expect(requestTo(URL)).andRespond(withServerError());
+        assertThat(analyzer.analyzeCategory(idea)).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
+    }
+
+    @Test
+    void 종류별_API_조합은_provider_3개이고_고정이다() {
+        for (ItCategory c : ItCategory.values()) {
+            assertThat(c.searchProviders()).hasSize(3).doesNotHaveDuplicates();
+        }
+        assertThat(ItCategory.AI_ML.searchProviders()).containsExactly(
+                com.cue.source.entity.ApiProvider.HUGGING_FACE, com.cue.source.entity.ApiProvider.SEMANTIC_SCHOLAR,
+                com.cue.source.entity.ApiProvider.GITHUB);
+        assertThat(ItCategory.WEB_APP_SERVICE.searchProviders()).containsExactly(
+                com.cue.source.entity.ApiProvider.HACKER_NEWS, com.cue.source.entity.ApiProvider.STACK_EXCHANGE,
+                com.cue.source.entity.ApiProvider.WIKIPEDIA_PAGEVIEWS);
+        assertThat(IdeaType.values()).containsExactly(IdeaType.IT);
     }
 
     @Test

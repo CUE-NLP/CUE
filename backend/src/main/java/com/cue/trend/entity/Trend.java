@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 
 /**
  * 글로벌 트렌드 1행(하루 1회 수집, 키워드 없음). 5번째 평가 기준 TREND의 근거로, 그 평가의 {@code evaluations.trend_id}가 가리킨다.
- * {@code content_hash}는 상위 항목(제목·URL·요약)의 해시라서 어제와 같으면 새 행을 만들지 않고 기존 행을 그대로 쓴다.
+ * {@code content_hash}는 상위 항목(제목·URL)의 해시라서 어제와 같으면 새 행을 만들지 않고 기존 행을 그대로 쓴다.
  */
 @Entity
 @Table(name = "trends")

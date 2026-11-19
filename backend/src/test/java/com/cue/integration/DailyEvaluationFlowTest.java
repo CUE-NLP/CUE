@@ -239,7 +239,7 @@ class DailyEvaluationFlowTest {
         verify(gemini, times(3)).generateJson(anyString(), anyMap()); // 첫 평가(A·B) 2회 + 재평가는 A만 1회 (소스 요약은 목)
         
         mvc.perform(get("/api/ideas/" + id + "/evaluations").header("Authorization", token))
-                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND' && @.difference==10.0)].references[0].url")
+                .andExpect(jsonPath("$.data.items[?(@.scoreType=='MARKET_DEMAND' && @.difference==10.0)].references[0].url")
                         .value("https://github.com/a/b"));
     }
 
@@ -390,8 +390,8 @@ class DailyEvaluationFlowTest {
         assertEquals(5, evaluationCount(id));
         assertEquals(2, count("select count(*) from idea_score_histories where idea_id = ?", id));
         mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
-                .andExpect(jsonPath("$.data[1].totalScore").value(70.0))
-                .andExpect(jsonPath("$.data[1].totalDifference").value(7.0));
+                .andExpect(jsonPath("$.data.items[1].totalScore").value(70.0))
+                .andExpect(jsonPath("$.data.items[1].totalDifference").value(7.0));
     }
 
     // ===== 수동 API 권한·에러 =====

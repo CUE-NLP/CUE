@@ -22,8 +22,17 @@ jwt:
   # 운영에서는 반드시 JWT_SECRET 환경변수로 32바이트 이상 값을 주입한다.
   secret: ${JWT_SECRET:dev-only-secret-key-change-me-please-32bytes!!}
   access-token-minutes: ${JWT_ACCESS_MINUTES:60}
+  refresh-token-days: ${JWT_REFRESH_DAYS:14}
+
+cors:
+  # 쉼표로 여러 개 지정. 운영에서는 실제 프론트 도메인으로 제한한다.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 
 cue:
+  auth:
+    cleanup:
+      # 만료된 리프레시 토큰·폐기 액세스 토큰 정리 주기(cron). "-" 면 비활성화
+      cron: ${AUTH_CLEANUP_CRON:0 0 4 * * *}
   gemini:
     # false면 Gemini를 쓰지 않고 SimpleIdeaAnalyzer만 사용 (테스트 등). 키가 비어 있으면 호출 없이 폴백한다.
     enabled: ${GEMINI_ENABLED:true}

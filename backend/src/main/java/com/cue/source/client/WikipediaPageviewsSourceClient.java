@@ -17,7 +17,7 @@ import tools.jackson.databind.JsonNode;
  * 영어 위키백과 문서 검색 + 최근 N일 조회수. 키워드로 {@code list=search}를 호출해 상위 N개 문서를 받고, 문서마다 Wikimedia REST pageviews API
  * ({@code per-article/en.wikipedia/all-access/user/{title}/daily/{start}/{end}})의 일별 조회수를 최근 {@code cue.source.pageviews-days}일(기본 30)
  * 합산해 metrics({@code views_30d=N})에 담는다. 조회수 호출이 실패하거나 데이터가 없으면 그 문서의 metrics만 비우고 계속한다.
- * 조회수는 해시에 넣지 않는다(제목·URL·요약만). 요약은 검색 snippet(HTML 태그 제거), 원문은 문서 소개({@code /api/rest_v1/page/summary/{title}}의 extract).
+ * 조회수·요약은 해시에 넣지 않는다(제목·URL만). 요약은 검색 snippet(HTML 태그 제거), 원문은 문서 소개({@code /api/rest_v1/page/summary/{title}}의 extract).
  * Wikimedia 정책상 User-Agent 헤더가 필수라 모든 요청에 보낸다 (개인 이메일을 넣지 않는 일반 식별 문자열).
  */
 public class WikipediaPageviewsSourceClient implements SourceClient {
