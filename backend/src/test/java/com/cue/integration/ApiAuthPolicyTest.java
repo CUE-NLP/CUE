@@ -52,7 +52,7 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
         @Override public String toString() { return method + " " + path; }
     }
 
-    static final String IDEA_BODY = "{\"problem\":\"p\",\"target\":\"t\",\"solution\":\"s\",\"expectation\":\"e\"}";
+    static final String IDEA_BODY = "{\"problem\":\"p\",\"target\":\"t\",\"solution\":\"s\",\"expectation\":\"e\",\"keywords\":[\"kw1\"]}";
     static final String WEIGHTS_BODY = "{\"weights\":{\"PROBLEM_IMPORTANCE\":25,\"MARKET_DEMAND\":25,"
             + "\"MARKET_DIFFERENTIATION\":25,\"TECH_FEASIBILITY\":25}}";
 
@@ -275,5 +275,20 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
                 ErrorCode.UNSUPPORTED_MEDIA_TYPE);
         expectError(mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON).content("{broken")),
                 ErrorCode.BAD_REQUEST);
+    }
+
+    @Test
+    void 키워드_검증_실패는_G004_필드_목록을_반환한다() throws Exception {
+        String token = signUpAndLogin("kw-" + System.nanoTime() + "@cue.com");
+        Long ideaId = createIdea(token);
+        for (String keywords : List.of("[\"a\",\"b\",\"c\"]", "[\"\"]", "[\"" + "x".repeat(51) + "\"]")) {
+            mvc.perform(post("/api/ideas").header("Authorization", token).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"problem\":\"p\",\"keywords\":" + keywords + "}"))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("G004"))
+                    .andExpect(jsonPath("$.data[0].field").value(org.hamcrest.Matchers.startsWith("keywords")));
+            mvc.perform(patch("/api/ideas/" + ideaId).header("Authorization", token).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"keywords\":" + keywords + "}"))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("G004"));
+        }
     }
 }

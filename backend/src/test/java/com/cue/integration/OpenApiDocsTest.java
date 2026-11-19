@@ -160,4 +160,36 @@ class OpenApiDocsTest extends PostgresIntegrationTest {
             assertTrue(wrapper.at("/properties").has(f), "래퍼에 " + f + " 없음");
         }
     }
+
+    @Test
+    void 키워드와_세부_종류_필드가_스키마와_설명에_있다() {
+        JsonNode create = docs.at("/components/schemas/CreateIdeaRequest/properties/keywords");
+        assertTrue(create.get("type").toString().contains("array")); // nullable이면 ["array","null"]
+        assertEquals(2, create.get("maxItems").asInt());
+        assertTrue(create.get("description").asString().contains("AI"));
+        assertTrue(docs.at("/components/schemas/UpdateIdeaRequest/properties").has("keywords"));
+
+        JsonNode response = docs.at("/components/schemas/IdeaResponse/properties");
+        for (String f : List.of("type", "itCategory", "keywords", "keywordOrigin")) {
+            assertTrue(response.has(f), "IdeaResponse." + f + " 없음");
+        }
+        assertEquals(List.of("AI_ML", "DEV_TOOLS_INFRA", "WEB_APP_SERVICE", "DATA_ANALYTICS"), schemaEnum(response.get("itCategory")));
+        assertEquals(List.of("USER", "AI"), schemaEnum(response.get("keywordOrigin")));
+        assertTrue(response.at("/itCategory").toString().contains("AI_ML=AI"));
+
+        for (String op : List.of("/paths/~1api~1ideas/post", "/paths/~1api~1ideas~1{id}/patch")) {
+            assertTrue(docs.at(op + "/description").asString().contains("keywords"), op + " 설명에 keywords 없음");
+            assertTrue(docs.at(op + "/responses/400/description").asString().contains("`G004`"), op + " G004 없음");
+        }
+        assertTrue(docs.at("/paths/~1api~1ideas/post/description").asString().contains("itCategory"));
+    }
+
+    /** 프로퍼티 스키마의 enum 값. $ref(또는 allOf)로 분리돼 있으면 components 에서 찾는다. */
+    private List<String> schemaEnum(JsonNode prop) {
+        JsonNode ref = prop.has("$ref") ? prop.get("$ref") : prop.path("allOf").path(0).get("$ref");
+        JsonNode node = ref != null
+                ? docs.at("/components/schemas/" + ref.asString().substring(ref.asString().lastIndexOf('/') + 1))
+                : prop;
+        return node.get("enum").valueStream().map(JsonNode::asString).toList();
+    }
 }
