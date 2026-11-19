@@ -207,6 +207,10 @@ cd CUE/backend
 - 통합 테스트는 Docker가 켜져 있어야 통과한다.
 - 프론트 연동: CORS는 설정돼 있다. 프론트 주소가 기본값(5173/3000)이 아니면 `CORS_ALLOWED_ORIGINS`에 추가한다.
 
+## AI 프롬프트
+- Gemini 프롬프트는 `src/main/resources/prompts/`(`trend-summary.txt`, `initial-evaluation.txt`, `re-evaluation.txt`)에 있고 플레이스홀더는 `{{name}}` 형식이다. 입력·출력 JSON 규격, 점수 앵커, 운용 팁은 [docs/ai-prompts.md](../docs/ai-prompts.md).
+- **프롬프트를 바꾸면 `docs/ai-prompts.md`(플레이스홀더 표·JSON 예시)와 `PromptTemplatesTest`를 함께 갱신한다.** 파일명·플레이스홀더·출력 JSON 키는 `PromptLoader`/평가 코드와의 계약이다.
+
 ## 실행·테스트
 ```bash
 cd backend && ./gradlew bootRun    # 루트 docker-compose.yml의 DB를 자동 기동 (어느 디렉터리에서 실행해도 됨)
@@ -214,7 +218,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
 - 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `JWT_REFRESH_DAYS`, `CORS_ALLOWED_ORIGINS`, `DOCKER_COMPOSE_ENABLED`, `GEMINI_*`와 선택 토큰(`GITHUB_TOKEN`, `HUGGING_FACE_TOKEN`, `STACK_EXCHANGE_KEY`)(위 표).
-- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/RefreshTokenCorsTest`(CORS preflight, 로그인→리프레시→재사용 거부→로그아웃, 만료·무효).
+- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/RefreshTokenCorsTest`(CORS preflight, 로그인→리프레시→재사용 거부→로그아웃, 만료·무효).
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 

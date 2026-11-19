@@ -35,7 +35,7 @@ CUE
 | Frontend | React, TypeScript |
 | Backend | Java 21, Spring Boot 4, Spring Security (JWT), Spring Data JPA, Lombok, RestClient, Actuator, springdoc(Swagger) |
 | Database | PostgreSQL 17, Flyway |
-| AI | Gemini API (프론트: 구조화 / 백엔드: 키워드 추출 · 평가), 음성인식 STT |
+| AI | Gemini API (프론트: 구조화 / 백엔드: 키워드 추출 · 평가), 음성인식 STT. 백엔드 프롬프트: `backend/src/main/resources/prompts/`, 설계는 [docs/ai-prompts.md](docs/ai-prompts.md) |
 | Test | JUnit 5, Testcontainers (PostgreSQL) |
 | Infra | Docker, GitHub Actions |
 
