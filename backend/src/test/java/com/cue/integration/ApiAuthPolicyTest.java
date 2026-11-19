@@ -223,7 +223,8 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
         String other = signUpAndLogin("lb-other-" + System.nanoTime() + "@cue.com");
         createIdea(owner);
         mvc.perform(get("/api/ideas").header("Authorization", other))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(0));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.items.length()").value(0))
+                .andExpect(jsonPath("$.data.count").value(0));
     }
 
     // ---------- 열린 경로 범위 ----------

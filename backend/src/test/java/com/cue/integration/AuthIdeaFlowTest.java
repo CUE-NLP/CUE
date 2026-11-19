@@ -67,7 +67,8 @@ class AuthIdeaFlowTest {
 
         mvc.perform(get("/api/ideas").header("Authorization", token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(1));
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.count").value(1));
     }
 
     @Test
@@ -184,9 +185,12 @@ class AuthIdeaFlowTest {
 
         // 기본 목록(ACTIVE)에는 없고 HOLD 목록에는 있다
         mvc.perform(get("/api/ideas").header("Authorization", token))
-                .andExpect(jsonPath("$.data.length()").value(0));
+                .andExpect(jsonPath("$.data.items").isArray())
+                .andExpect(jsonPath("$.data.items.length()").value(0))
+                .andExpect(jsonPath("$.data.count").value(0));
         mvc.perform(get("/api/ideas?status=HOLD").header("Authorization", token))
-                .andExpect(jsonPath("$.data.length()").value(1));
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.count").value(1));
     }
 
     @Test
@@ -369,16 +373,17 @@ class AuthIdeaFlowTest {
                 .andExpect(jsonPath("$.data.hasNewChange").value(true));
 
         mvc.perform(get("/api/ideas/" + id + "/evaluations").header("Authorization", token))
-                .andExpect(jsonPath("$.data.length()").value(2))
-                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].difference").value(80.0))
-                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].weightPercent").value(25))
-                .andExpect(jsonPath("$.data[?(@.scoreType=='MARKET_DEMAND')].references[0].url")
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.count").value(2))
+                .andExpect(jsonPath("$.data.items[?(@.scoreType=='MARKET_DEMAND')].difference").value(80.0))
+                .andExpect(jsonPath("$.data.items[?(@.scoreType=='MARKET_DEMAND')].weightPercent").value(25))
+                .andExpect(jsonPath("$.data.items[?(@.scoreType=='MARKET_DEMAND')].references[0].url")
                         .value("https://github.com/trending"));
 
         mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
-                .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].totalScore").value(30.0))
-                .andExpect(jsonPath("$.data[0].totalDifference").value(30.0));
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].totalScore").value(30.0))
+                .andExpect(jsonPath("$.data.items[0].totalDifference").value(30.0));
 
         mvc.perform(post("/api/ideas/" + id + "/check").header("Authorization", token))
                 .andExpect(jsonPath("$.data.hasNewChange").value(false));
@@ -388,9 +393,9 @@ class AuthIdeaFlowTest {
                 new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.MARKET_DEMAND,
                         new java.math.BigDecimal("20"), "수요가 더 커짐", null)));
         mvc.perform(get("/api/ideas/" + id + "/history").header("Authorization", token))
-                .andExpect(jsonPath("$.data.length()").value(2))
-                .andExpect(jsonPath("$.data[1].totalScore").value(35.0))
-                .andExpect(jsonPath("$.data[1].totalDifference").value(5.0));
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[1].totalScore").value(35.0))
+                .andExpect(jsonPath("$.data.items[1].totalDifference").value(5.0));
 
         // 최근 상승 정렬은 변화량(25 > 5), 총점 정렬은 총점(35 > 25) 기준이다
         long other = createIdea(token, FULL);
@@ -398,9 +403,9 @@ class AuthIdeaFlowTest {
                 new com.cue.evaluation.dto.ScoreChange(com.cue.score.entity.ScoreType.MARKET_DEMAND,
                         new java.math.BigDecimal("100"), "아주 큰 수요", null)));
         mvc.perform(get("/api/ideas?sort=RECENT_RISE").header("Authorization", token))
-                .andExpect(jsonPath("$.data[0].id").value(other));
+                .andExpect(jsonPath("$.data.items[0].id").value(other));
         mvc.perform(get("/api/ideas?sort=TOTAL").header("Authorization", token))
-                .andExpect(jsonPath("$.data[0].id").value(id));
+                .andExpect(jsonPath("$.data.items[0].id").value(id));
     }
 
     @Test

@@ -162,6 +162,35 @@ class OpenApiDocsTest extends PostgresIntegrationTest {
     }
 
     @Test
+    void 목록_응답은_CommonResponse_ListData_DTO로_문서화된다() {
+        record Case(String path, String dto) {}
+        for (Case c : List.of(new Case("/api/ideas", "IdeaResponse"),
+                new Case("/api/ideas/{id}/history", "IdeaHistoryResponse"),
+                new Case("/api/ideas/{id}/evaluations", "EvaluationResponse"))) {
+            String esc = c.path().replace("/", "~1");
+            JsonNode schema = docs.at("/paths/" + esc + "/get/responses/200/content/*~1*/schema");
+            JsonNode wrapper = resolve(schema);
+            assertTrue(wrapper.at("/properties").has("data"), c.path() + " 래퍼에 data 없음");
+            JsonNode listData = resolve(wrapper.at("/properties/data"));
+            assertEquals("array", listData.at("/properties/items/type").asString(), c.path() + " data.items 는 배열이어야 한다");
+            String itemRef = listData.at("/properties/items/items/$ref").asString();
+            assertTrue(itemRef.endsWith("/" + c.dto()), c.path() + " items 항목은 " + c.dto() + " 이어야 한다: " + itemRef);
+            assertEquals("integer", listData.at("/properties/count/type").asString(), c.path() + " count");
+        }
+        // 단건 응답은 ListData 가 아니다.
+        JsonNode single = resolve(docs.at("/paths/~1api~1ideas~1{id}/get/responses/200/content/*~1*/schema"));
+        assertFalse(resolve(single.at("/properties/data")).at("/properties").has("items"));
+    }
+
+    private JsonNode resolve(JsonNode node) {
+        if (!node.has("$ref")) {
+            return node;
+        }
+        String ref = node.get("$ref").asString();
+        return docs.at("/components/schemas/" + ref.substring(ref.lastIndexOf('/') + 1));
+    }
+
+    @Test
     void 키워드와_세부_종류_필드가_스키마와_설명에_있다() {
         JsonNode create = docs.at("/components/schemas/CreateIdeaRequest/properties/keywords");
         assertTrue(create.get("type").toString().contains("array")); // nullable이면 ["array","null"]

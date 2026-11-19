@@ -25,7 +25,7 @@ CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근�
 global/
   config/     SecurityConfig (JWT·CORS 설정, PasswordEncoder, JwtEncoder/Decoder 빈), OpenApiConfig (Swagger 제목·bearerAuth)
   error/      ErrorCode(전체 에러 코드), CustomException, GlobalExceptionHandler
-  response/   CommonResponse (모든 응답 래퍼)
+  response/   CommonResponse (모든 응답 래퍼), ListData (목록 응답 data: items+count)
   docs/       Swagger 지원: ApiErrors(에러 코드 선언), PublicApi(인증 불필요 표시), ApiErrorCustomizer(에러 응답 자동 생성)
   security/   UserPrincipal, JwtProperties, CorsProperties, JwtTokenProvider, JwtPrincipalConverter, SecurityErrorWriter
 auth/         controller / service / repository / entity / dto — 로그인(JWT 발급), 리프레시 토큰 재발급·로그아웃
@@ -69,6 +69,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 형식: `{result: SUCCESS|FAIL, code, message, data(null이면 생략), timestamp}`. 성공 `code`는 `"200"` 고정.
 - 입력 검증 실패(`G004`)는 `data`에 `[{field, reason}]`.
 - 서비스는 DTO를 반환하고, 래핑은 컨트롤러에서 한다.
+- **목록(List)은 반드시 목록 응답 래퍼를 쓴다**: 반환 타입 `CommonResponse<ListData<DTO>>`, 반환 `CommonResponse.onSuccessList(list)`. `data`에 배열을 직접 내보내지 않는다. 형태는 `data: {items: [...], count: N}`(빈 목록은 `items: []`, `count: 0`). 페이지네이션 필드는 `ListData`에 nullable로 추가한다(null은 응답에서 생략). 테스트의 JSON 경로는 `$.data.items[0]`. 단건/객체 응답은 기존 `CommonResponse<T>`.
 
 ### 에러: `ErrorCode` 하나로 관리
 - `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
@@ -86,7 +87,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 요청/응답 DTO(record)의 모든 필드에 `@Schema(description, example)`. enum은 타입에 `@Schema(description)`로 값 의미를 적고, 쿼리 파라미터는 `@Parameter(description)`. 가중치처럼 형식이 까다로운 요청은 예시를 넣는다.
 - **에러는 `@ApiErrors({ErrorCode...})`로 선언**한다. 메서드가 던지는 `CustomException` 코드(예: `I001`, `I002`, `I003`)를 나열하면 `ApiErrorCustomizer`가 HTTP 상태별 응답(설명에 code/message 목록 + CommonResponse 실패 예시)을 만든다. 공통 에러는 자동으로 붙으므로 적지 않는다: 인증 필요 API는 `401 A001·A003~A006`, 바디가 있으면 `G003·G007`, 바디/파라미터가 있으면 `G004`, 모든 API에 `G001`.
 - **인증이 필요 없는 API만 `@PublicApi`** 를 단다 (보안 요구 `bearerAuth`와 401 인증 에러를 뺀다). 나머지는 전역 `bearerAuth`가 기본이다. `@PublicApi`와 `SecurityConfig`의 permitAll은 반드시 함께 바꾼다 — `OpenApiDocsTest`가 문서의 공개 여부와 실제 동작이 일치하는지, `ApiAuthPolicyTest`가 열린 경로 범위를 검사한다.
-- 성공 응답 래퍼(`CommonResponse<T>`)는 반환 타입에서 자동으로 문서화된다. 서비스가 아니라 컨트롤러에서 래핑한다.
+- 성공 응답 래퍼(`CommonResponse<T>`, 목록은 `CommonResponse<ListData<DTO>>`)는 반환 타입에서 자동으로 문서화된다(`OpenApiDocsTest`가 목록 스키마를 검사). 서비스가 아니라 컨트롤러에서 래핑한다.
 
 ### 인증
 - `POST /api/auth/login` → JWT(access token) + 리프레시 토큰 발급. 클레임: sub=userId, email, nickname. 응답 `{accessToken, tokenType, refreshToken}`.
@@ -157,13 +158,13 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | POST | `/api/auth/logout` | ✓ | 로그아웃: 현재 액세스 토큰 즉시 무효화 + 리프레시 토큰 폐기 (현재 기기만) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
 | POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD). 선택 `keywords`(최대 2개)가 있으면 AI 키워드 추출 생략 |
-| GET | `/api/ideas` | ✓ | 리더보드. `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
+| GET | `/api/ideas` | ✓ | 리더보드(`data.items`). `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태·점수·가중치·최근 변화량·hasNewChange) |
 | PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 출처가 AI일 때 키워드 재추출). `keywords`: 생략=유지, `[]`=삭제 후 AI, 1~2개=교체 |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 가중치 변경 예약 |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 (새 변화 알림 해제) |
-| GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순) |
-| GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량·근거 요약·출처, 최신순) |
+| GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순, `data.items`) |
+| GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량·근거 요약·출처, 최신순, `data.items`) |
 
 Swagger: `/swagger-ui.html` (Authorize 버튼에 accessToken 입력), OpenAPI JSON: `/v3/api-docs`, 헬스체크: `/actuator/health`.
 
