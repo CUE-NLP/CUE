@@ -1,20 +1,9 @@
 package com.cue.idea.entity;
 
-import com.cue.source.entity.ApiProvider;
-import java.util.List;
-
-/** 아이디어 종류. 종류별로 검색에 쓰는 외부 API 조합이 달라진다. 현재는 IT만 지원. */
+/**
+ * 아이디어 대분류. 현재는 IT 하나뿐이며 {@code ideas.type}은 IT 고정이다 (나중에 IT 외 분야를 추가할 때를 위해 컬럼 유지).
+ * 외부 API 조합은 대분류가 아니라 IT 내부의 세부 종류({@link ItCategory})가 결정한다.
+ */
 public enum IdeaType {
-    // TODO: 팀 확정 후 조합 조정
-    IT(List.of(ApiProvider.GITHUB, ApiProvider.HUGGING_FACE, ApiProvider.STACK_EXCHANGE));
-
-    private final List<ApiProvider> searchProviders;
-
-    IdeaType(List<ApiProvider> searchProviders) {
-        this.searchProviders = searchProviders;
-    }
-
-    public List<ApiProvider> searchProviders() {
-        return searchProviders;
-    }
+    IT
 }

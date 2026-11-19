@@ -31,8 +31,11 @@ public class IdeaController {
     private final IdeaService ideaService;
 
     @Operation(summary = "아이디어 저장",
-            description = "프론트가 구조화하고 사용자가 확인한 아이디어를 저장한다. 문제·타깃·해결·기대효과가 **모두 채워지면 ACTIVE**(AI로 종류·검색 키워드를 추출해 평가 대상이 됨), "
-                    + "**하나라도 비면 HOLD**(보류, AI 호출·평가 없음)로 서버가 정한다. 점수는 첫 평가 전까지 0, 가중치는 25/25/25/25.")
+            description = "프론트가 구조화하고 사용자가 확인한 아이디어를 저장한다. 문제·타깃·해결·기대효과가 **모두 채워지면 ACTIVE**(평가 대상이 되고 외부 자료 검색 설정을 만든다), "
+                    + "**하나라도 비면 HOLD**(보류, AI 호출·평가 없음)로 서버가 정한다. "
+                    + "**키워드(`keywords`, 최대 2개·각 1~50자)를 보내면 AI 추출 없이 그 값을 쓰고(`keywordOrigin=USER`), 비어 있을 때만 AI가 추출한다(`keywordOrigin=AI`).** "
+                    + "IT 세부 종류(`itCategory`: AI_ML·DEV_TOOLS_INFRA·WEB_APP_SERVICE·DATA_ANALYTICS)는 키워드와 무관하게 항상 AI가 판단하고, 대분류 `type`은 항상 IT다. "
+                    + "점수는 첫 평가 전까지 0, 가중치는 25/25/25/25. 키워드가 3개 이상이거나 빈 문자열·50자 초과면 `G004`.")
     @ApiErrors(ErrorCode.USER_NOT_FOUND)
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -63,8 +66,9 @@ public class IdeaController {
 
     /** 아이디어 수정. 보낸 항목만 바꾸고(null은 유지, 빈 문자열은 비움), 모두 채워진 상태면 키워드를 다시 추출한다. */
     @Operation(summary = "아이디어 수정",
-            description = "보낸 항목만 수정한다(생략/null=유지, 빈 문자열=비움). 수정 뒤 4개 항목이 모두 채워져 있으면 ACTIVE가 되고 종류·키워드를 다시 추출하며, "
-                    + "하나라도 비면 HOLD가 된다.")
+            description = "보낸 항목만 수정한다(생략/null=유지, 빈 문자열=비움). 수정 뒤 4개 항목이 모두 채워져 있으면 ACTIVE가 되고 세부 종류(`itCategory`)를 항상 AI로 다시 판단하며, "
+                    + "하나라도 비면 HOLD가 된다. 키워드: `keywords` 생략=유지, **빈 배열=사용자 키워드를 지우고 AI가 다시 추출**, "
+                    + "1개 이상=그 값으로 교체(AI 추출 없음, `keywordOrigin=USER`). 키워드 검증 실패(3개 이상·빈 문자열·50자 초과)는 `G004`.")
     @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED})
     @PatchMapping("/{id}")
     public CommonResponse<IdeaResponse> update(@AuthenticationPrincipal UserPrincipal principal, @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id,

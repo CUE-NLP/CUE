@@ -35,7 +35,7 @@ CUE
 | Frontend | React, TypeScript |
 | Backend | Java 21, Spring Boot 4, Spring Security (JWT), Spring Data JPA, Lombok, RestClient, Actuator, springdoc(Swagger) |
 | Database | PostgreSQL 17, Flyway |
-| AI | Gemini API (프론트: 구조화 / 백엔드: 키워드 추출 · 평가), 음성인식 STT |
+| AI | Gemini API (프론트: 구조화 / 백엔드: 키워드 추출 · 평가), 음성인식 STT. 백엔드 프롬프트: `backend/src/main/resources/prompts/`, 설계는 [docs/ai-prompts.md](docs/ai-prompts.md) |
 | Test | JUnit 5, Testcontainers (PostgreSQL) |
 | Infra | Docker, GitHub Actions |
 
@@ -96,7 +96,7 @@ backend/src/main/java/com/cue
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
 ├── score/           항목별 점수 (4개 기준)
 ├── evaluation/      재평가 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
-├── source/          아이디어별 외부 자료 수집 설정 · 변경 감지 (ApiProvider)
+├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange) · 해시 변경 감지
 └── trend/           고정 API 4개로 수집한 트렌드 요약
 ```
 
@@ -134,6 +134,13 @@ cd backend && ./gradlew bootRun
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | CORS 허용 오리진(쉼표 구분). 운영에서는 실제 프론트 도메인으로 제한 |
 | `AUTH_CLEANUP_CRON` | `0 0 4 * * *` | 만료된 리프레시·폐기 액세스 토큰 정리 주기(cron), `-`이면 비활성 |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
+| `GEMINI_API_KEY` | (없음) | Gemini API 키(아이디어 종류·키워드 추출). 커밋 금지. 없거나 호출 실패 시 임시 분석기로 대체되어 등록은 계속 동작 |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
+| `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성(테스트 등) |
+| `GEMINI_BASE_URL` / `GEMINI_TIMEOUT_SECONDS` | `https://generativelanguage.googleapis.com` / `10` | Gemini 엔드포인트 / 호출 타임아웃(초) |
+| `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
+| `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
+| `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
 | `DB_PORT` | `5433` | `docker-compose.yml`의 DB 호스트 포트 (`DB_URL` 포트도 함께 맞출 것) |
 
 ### 테스트
@@ -156,14 +163,39 @@ cd backend && ./gradlew test
 | POST | `/api/auth/refresh` | ✕ | 리프레시 토큰으로 재발급 (회전: 사용한 토큰은 폐기, 바디 `refreshToken`) |
 | POST | `/api/auth/logout` | ✓ | 로그아웃 — 현재 액세스 토큰 즉시 무효화 + 바디 `refreshToken` 폐기 (현재 기기만, 멱등) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD` |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
 | GET | `/api/ideas` | ✓ | 리더보드(목록 응답 `data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태 · 항목별 점수 · 가중치 · 최근 변화량 · `hasNewChange`) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출 |
+| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출. `keywords`: 생략=유지(출처가 AI면 재추출), `[]`=사용자 키워드 삭제 후 AI 재추출, 1~2개=교체 |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순, 목록 응답 `data.items`) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순, 목록 응답 `data.items`) |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 항목별 가중치(%) 변경 예약 — 4개 항목 모두, 합 100, **다음 평가 턴부터 적용** |
+
+### 아이디어 종류
+
+대분류 `type`은 현재 `IT` 하나이고(나중에 분야를 늘릴 때를 위해 컬럼 유지), IT 안의 세부 종류 `itCategory`가 검색에 쓰는 외부 API 조합을 정합니다. AI가 분류하며 응답에 `type`과 `itCategory`가 함께 담깁니다. 수정 시 ACTIVE면 다시 분류합니다.
+
+| `itCategory` | 설명 | 검색 API |
+| --- | --- | --- |
+| `AI_ML` | AI·머신러닝 | Hugging Face, Semantic Scholar, GitHub |
+| `DEV_TOOLS_INFRA` | 개발자 도구·인프라 (기본값) | GitHub, Stack Exchange, Hacker News |
+| `WEB_APP_SERVICE` | 웹·앱 서비스 | Hacker News, Stack Exchange, Wikipedia Pageviews |
+| `DATA_ANALYTICS` | 데이터·분석 | GitHub, Hugging Face, Semantic Scholar |
+
+Semantic Scholar·Wikipedia Pageviews 클라이언트는 별도 PR(#8)에서 구현합니다.
+
+### 검색 키워드
+
+`POST /api/ideas`, `PATCH /api/ideas/{id}`의 선택 필드 `keywords`는 문자열 배열(최대 2개, 각 항목 trim 후 1~50자, 중복 제거, 언어 제한 없음)이며 위반하면 `G004`입니다. 응답에는 `keywords`(없으면 `[]`)와 `keywordOrigin`(`USER`/`AI`, 키워드가 없으면 `null`)이 담깁니다.
+
+```json
+POST /api/ideas
+{ "problem": "...", "target": "...", "solution": "...", "expectation": "...", "keywords": ["automated code review"] }
+```
+
+- 사용자 키워드가 있으면 그 값으로 `sources`를 만들고 AI는 세부 종류(itCategory)만 분류합니다. 없으면 AI가 세부 종류와 키워드(영어 1~2개)를 함께 추출합니다.
+- 수정 시 출처가 `USER`이면 내용이 바뀌어도 키워드를 유지하고, `AI`이면 다시 추출합니다. `HOLD`는 키워드를 저장만 하고 `ACTIVE`가 될 때 적용합니다.
 
 ### 가중치
 
@@ -225,8 +257,10 @@ PATCH /api/ideas/1/weights
 | | `I002` | 403 | 본인 아이디어가 아님 |
 | | `I003` | 400 | 가중치 오류 (4개 항목·0~100·합 100) |
 | | `I004` | 409 | 보류(HOLD) 아이디어는 평가 불가 |
+| Source | `S001` | 404 | 수집 설정(source)을 찾을 수 없음 |
+| | `S002` | 501 | 아직 지원하지 않는 외부 API |
 
-> 다른 브랜치에서 추가 중인 코드(예: 외부 API 클라이언트 PR의 `S001`·`S002`)는 해당 PR이 병합되면 이 표에 합쳐집니다. 새 코드를 만들 때는 먼저 현재 `ErrorCode`와 열려 있는 PR의 코드를 확인해 번호가 겹치지 않게 합니다.
+> 새 코드를 만들 때는 먼저 현재 `ErrorCode`와 열려 있는 PR의 코드를 확인해 번호가 겹치지 않게 합니다. 외부 API(Gemini·수집) 호출 실패는 `G002`입니다.
 
 > **프론트 연동 참고 (호환성 변경)**: 목록 응답 형태가 배열에서 `data.items`(+`data.count`)로 바뀌었습니다. 기존의 `res.data[0]`, `res.data.map(...)`은 `res.data.items[0]`, `res.data.items.map(...)`으로 고쳐야 합니다. 단건/객체 응답은 그대로입니다.
 
@@ -243,7 +277,7 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | `users` | 사용자 |
 | `refresh_tokens` | 리프레시 토큰 SHA-256 해시 · 만료 시각 · 폐기 시각 (사용자 FK) |
 | `revoked_access_tokens` | 로그아웃으로 폐기된 액세스 토큰의 `jti` · 토큰 만료 시각 (만료 후 정리 작업이 삭제) |
-| `ideas` | 구조화된 아이디어 · 상태(`ACTIVE`/`HOLD`) · 총점 · 최근 변화량 · 확인 시각 |
+| `ideas` | 구조화된 아이디어 · 대분류 `type`(IT)·세부 종류 `it_category` · 상태(`ACTIVE`/`HOLD`) · 검색 키워드(`keywords`, 줄바꿈 구분)와 출처(`keyword_origin`) · 총점 · 최근 변화량 · 확인 시각 |
 | `scores` | 아이디어별 4개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜) |
 | `evaluation_references` | 평가 근거 출처 URL |
