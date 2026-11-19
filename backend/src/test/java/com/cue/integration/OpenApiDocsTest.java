@@ -47,7 +47,7 @@ class OpenApiDocsTest extends PostgresIntegrationTest {
     void 모든_컨트롤러_경로가_문서에_있다() {
         for (String p : List.of("/api/users", "/api/users/me", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout",
                 "/api/ideas", "/api/ideas/{id}", "/api/ideas/{id}/weights", "/api/ideas/{id}/check",
-                "/api/ideas/{id}/history", "/api/ideas/{id}/evaluations")) {
+                "/api/ideas/{id}/history", "/api/ideas/{id}/evaluations", "/api/ideas/{id}/evaluate", "/api/demo/evaluations/run")) {
             assertTrue(docs.at("/paths").has(p), p + " 가 문서에 없다");
         }
     }
@@ -211,6 +211,58 @@ class OpenApiDocsTest extends PostgresIntegrationTest {
             assertTrue(docs.at(op + "/responses/400/description").asString().contains("`G004`"), op + " G004 없음");
         }
         assertTrue(docs.at("/paths/~1api~1ideas/post/description").asString().contains("itCategory"));
+    }
+
+    @Test
+    void 비동기_평가_API는_202와_에러코드_스키마가_문서에_있다() {
+        JsonNode evaluate = docs.at("/paths/~1api~1ideas~1{id}~1evaluate/post");
+        assertTrue(evaluate.at("/responses").has("202"), "evaluate 는 202 로 문서화돼야 한다");
+        assertTrue(evaluate.get("description").asString().contains("202") && evaluate.get("description").asString().contains("폴링"));
+        assertTrue(evaluate.at("/responses/404/description").asString().contains("`I001`"));
+        assertTrue(evaluate.at("/responses/403/description").asString().contains("`I002`"));
+        assertTrue(evaluate.at("/responses/409/description").asString().contains("`I004`"));
+        String r503 = evaluate.at("/responses/503/description").asString();
+        assertTrue(r503.contains("`E001`") && r503.contains("`E004`"));
+        assertEquals(List.of("IDLE", "QUEUED", "RUNNING", "FAILED"), schemaEnum(
+                docs.at("/components/schemas/EvaluateIdeaResponse/properties/status")));
+        assertTrue(docs.at("/components/schemas/EvaluateIdeaResponse/properties").has("idea"));
+
+        // 평가 중 수정 차단 I005 가 PATCH 에 문서화된다
+        JsonNode patch = docs.at("/paths/~1api~1ideas~1{id}/patch");
+        assertTrue(patch.at("/responses/409/description").asString().contains("`I005`"));
+        assertTrue(patch.get("description").asString().contains("I005"));
+    }
+
+    @Test
+    void 시연_API와_IdeaResponse_평가_상태_필드가_문서에_있다() {
+        JsonNode demo = docs.at("/paths/~1api~1demo~1evaluations~1run/post");
+        assertTrue(demo.at("/responses").has("202"));
+        assertFalse(demo.get("tags").isEmpty());
+        assertTrue(demo.at("/responses/403/description").asString().contains("`D001`"));
+        assertTrue(demo.at("/responses/429/description").asString().contains("`D002`"));
+        String r503 = demo.at("/responses/503/description").asString();
+        assertTrue(r503.contains("`E001`") && r503.contains("`E004`"));
+        JsonNode request = docs.at("/components/schemas/DemoRunRequest/properties/force");
+        assertFalse(request.isMissingNode());
+        JsonNode response = docs.at("/components/schemas/DemoRunResponse/properties");
+        for (String f : List.of("queued", "skipped", "trendRefreshed")) {
+            assertTrue(response.has(f), "DemoRunResponse." + f + " 없음");
+        }
+        assertTrue(docs.at("/components/schemas/Skipped/properties").has("reason") || docs.at("/components/schemas").toString().contains("ALREADY_QUEUED"));
+
+        JsonNode idea = docs.at("/components/schemas/IdeaResponse/properties");
+        assertTrue(idea.has("evaluationStatus") && idea.has("lastEvaluationErrorCode"));
+        assertTrue(idea.at("/evaluationStatus").toString().contains("EvaluationStatus") || idea.at("/evaluationStatus").has("description"));
+        assertEquals(List.of("IDLE", "QUEUED", "RUNNING", "FAILED"), schemaEnum(idea.get("evaluationStatus")));
+    }
+
+    @Test
+    void 가중치_요청_예시는_5개_기준이다() {
+        String schema = docs.at("/components/schemas/UpdateWeightsRequest").toString();
+        assertTrue(schema.contains("TREND"));
+        assertEquals(List.of("PROBLEM_IMPORTANCE", "MARKET_DEMAND", "MARKET_DIFFERENTIATION", "TECH_FEASIBILITY", "TREND"),
+                schemaEnum(docs.at("/components/schemas/ScoreResponse/properties/type")));
+        assertTrue(docs.at("/paths/~1api~1ideas~1{id}~1weights/patch/description").asString().contains("TREND"));
     }
 
     /** 프로퍼티 스키마의 enum 값. $ref(또는 allOf)로 분리돼 있으면 components 에서 찾는다. */
