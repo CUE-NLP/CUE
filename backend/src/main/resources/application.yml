@@ -29,6 +29,10 @@ cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 
 cue:
+  auth:
+    cleanup:
+      # 만료된 리프레시 토큰·폐기 액세스 토큰 정리 주기(cron). "-" 면 비활성화
+      cron: ${AUTH_CLEANUP_CRON:0 0 4 * * *}
   gemini:
     # false면 Gemini를 쓰지 않고 SimpleIdeaAnalyzer만 사용 (테스트 등). 키가 비어 있으면 호출 없이 폴백한다.
     enabled: ${GEMINI_ENABLED:true}

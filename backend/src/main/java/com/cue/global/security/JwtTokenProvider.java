@@ -19,6 +19,7 @@ public class JwtTokenProvider {
     public String issue(UserPrincipal user) {
         Instant now = Instant.now();
         JwtClaimsSet claims = JwtClaimsSet.builder()
+                .id(java.util.UUID.randomUUID().toString())
                 .subject(String.valueOf(user.id()))
                 .issuedAt(now)
                 .expiresAt(now.plus(props.accessTokenMinutes(), ChronoUnit.MINUTES))

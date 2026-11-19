@@ -23,7 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest
 @AutoConfigureMockMvc
 @Testcontainers
-@TestPropertySource(properties = {"spring.docker.compose.enabled=false", "cue.gemini.enabled=false"})
+@TestPropertySource(properties = {"spring.docker.compose.enabled=false", "cue.gemini.enabled=false", "cue.auth.cleanup.cron=-"})
 class AuthIdeaFlowTest {
 
     @Container
@@ -417,5 +417,18 @@ class AuthIdeaFlowTest {
         mvc.perform(get("/api/ideas?sort=NOPE").header("Authorization", token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("G004"));
+    }
+
+    @Test
+    void 이메일은_대소문자를_구분하지_않는다() throws Exception {
+        mvc.perform(post("/api/users").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"nickname\":\"kj\",\"email\":\"Case.User@Cue.com\",\"password\":\"password123\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.data.email").value("case.user@cue.com"));
+        mvc.perform(post("/api/users").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"nickname\":\"kj\",\"email\":\"CASE.USER@cue.com\",\"password\":\"password123\"}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("U001"));
+        mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"CASE.user@CUE.com\",\"password\":\"password123\"}"))
+                .andExpect(status().isOk());
     }
 }

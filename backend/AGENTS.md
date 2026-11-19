@@ -23,9 +23,10 @@ CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근�
 `backend/src/main/java/com/cue`
 ```
 global/
-  config/     SecurityConfig (JWT·CORS 설정, PasswordEncoder, JwtEncoder/Decoder 빈)
+  config/     SecurityConfig (JWT·CORS 설정, PasswordEncoder, JwtEncoder/Decoder 빈), OpenApiConfig (Swagger 제목·bearerAuth)
   error/      ErrorCode(전체 에러 코드), CustomException, GlobalExceptionHandler
   response/   CommonResponse (모든 응답 래퍼)
+  docs/       Swagger 지원: ApiErrors(에러 코드 선언), PublicApi(인증 불필요 표시), ApiErrorCustomizer(에러 응답 자동 생성)
   security/   UserPrincipal, JwtProperties, CorsProperties, JwtTokenProvider, JwtPrincipalConverter, SecurityErrorWriter
 auth/         controller / service / repository / entity / dto — 로그인(JWT 발급), 리프레시 토큰 재발급·로그아웃
 user/         controller / service / repository / entity / dto — 회원가입, 내 정보
@@ -71,19 +72,31 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 
 ### 에러: `ErrorCode` 하나로 관리
 - `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
+- 코드 번호를 새로 만들기 전에 열려 있는 PR 브랜치의 `ErrorCode`도 확인해 번호가 겹치지 않게 한다 (예: 외부 자료 수집의 `S001·S002`). 현재 G001~G007, A001~A010, U001~U002, I001~I004, S001~S002.
+- **범용 예외로 새지 않게 한다**: 실패 경로는 `IllegalArgumentException`/`IllegalStateException`/메시지 없는 던지기 대신 `CustomException(ErrorCode)`로 던진다. 프레임워크 예외(`HttpMediaTypeNotSupportedException` 등)는 `GlobalExceptionHandler`에서 코드로 매핑한다. 새 ErrorCode를 만들면 `GlobalExceptionHandler`/서비스에서 실제로 쓰이는지, Swagger(`@ApiErrors`)에 나열됐는지 확인한다.
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
-- 리프레시 토큰 실패: 무효 `A008` / 만료 `A009` / 재사용 `A010`.
-- JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효 `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
-- 필터 단계 에러(401/403)는 `SecurityErrorWriter`가 CommonResponse로 응답한다.
+- 리프레시 토큰 실패: 무효 `A008` / 만료 `A009` / 재사용 `A010`. 액세스 토큰 만료는 `A004` 유지(프론트 재발급 트리거). 재발급 흐름은 README의 프론트 연동 섹션에 순서도로 정리했다.
+- JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효(변조·jti 없음·로그아웃된 토큰) `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
+- 필터 단계 에러(401/403)는 `SecurityErrorWriter`가 CommonResponse로 응답한다. `Authorization` 헤더가 없거나 `Bearer `로 시작하지 않으면(Basic 등) `A006`, 서명은 맞지만 `sub`가 사용자 ID가 아닌 토큰은 `A005`(`JwtPrincipalConverter`).
+- 입력 검증 실패는 `G004`(`data`에 `[{field, reason}]`), 바디 형식 오류·잘못된 enum 값은 `G003`, Content-Type이 JSON이 아니면 `G007`. 이메일은 가입·로그인 시 trim+소문자로 정규화한다(`UserService.normalizeEmail`; 기존 대문자 데이터가 있으면 DB 초기화). 이메일 동시 가입 경합도 `U001`로 응답한다(`UserService`가 유니크 제약 예외를 변환).
+
+### Swagger(API 문서) 작성 규칙
+**새 API를 만들면 반드시 아래를 같이 단다.** (`OpenApiDocsTest`가 모든 경로에 Tag/summary/description/에러 응답이 있는지 검사한다.)
+- 컨트롤러 클래스에 `@Tag(name, description)`, 메서드에 `@Operation(summary, description)` (한국어, 동작·주의점·상태 전이를 적는다).
+- 요청/응답 DTO(record)의 모든 필드에 `@Schema(description, example)`. enum은 타입에 `@Schema(description)`로 값 의미를 적고, 쿼리 파라미터는 `@Parameter(description)`. 가중치처럼 형식이 까다로운 요청은 예시를 넣는다.
+- **에러는 `@ApiErrors({ErrorCode...})`로 선언**한다. 메서드가 던지는 `CustomException` 코드(예: `I001`, `I002`, `I003`)를 나열하면 `ApiErrorCustomizer`가 HTTP 상태별 응답(설명에 code/message 목록 + CommonResponse 실패 예시)을 만든다. 공통 에러는 자동으로 붙으므로 적지 않는다: 인증 필요 API는 `401 A001·A003~A006`, 바디가 있으면 `G003·G007`, 바디/파라미터가 있으면 `G004`, 모든 API에 `G001`.
+- **인증이 필요 없는 API만 `@PublicApi`** 를 단다 (보안 요구 `bearerAuth`와 401 인증 에러를 뺀다). 나머지는 전역 `bearerAuth`가 기본이다. `@PublicApi`와 `SecurityConfig`의 permitAll은 반드시 함께 바꾼다 — `OpenApiDocsTest`가 문서의 공개 여부와 실제 동작이 일치하는지, `ApiAuthPolicyTest`가 열린 경로 범위를 검사한다.
+- 성공 응답 래퍼(`CommonResponse<T>`)는 반환 타입에서 자동으로 문서화된다. 서비스가 아니라 컨트롤러에서 래핑한다.
 
 ### 인증
 - `POST /api/auth/login` → JWT(access token) + 리프레시 토큰 발급. 클레임: sub=userId, email, nickname. 응답 `{accessToken, tokenType, refreshToken}`.
 - 리프레시 토큰: 랜덤 32바이트(base64url) 불투명 값. **DB에는 SHA-256 해시만** 저장(`refresh_tokens`: user_id FK, token_hash 유니크, expires_at, revoked_at). 유효 시간 `JWT_REFRESH_DAYS`(기본 14).
-- `POST /api/auth/refresh`(바디 `refreshToken`)는 **회전**: 사용된 토큰은 `revoked_at`을 채워 남기고 새 쌍을 발급한다. 폐기된 토큰이 다시 오면 탈취로 보고 그 사용자의 모든 토큰을 폐기하고 `A010` (이 폐기가 커밋되도록 `noRollbackFor = CustomException`). `POST /api/auth/logout`은 토큰 폐기, 멱등. 두 경로 모두 토큰 바디로 동작하므로 인증 없이 열려 있다.
-- 만료·폐기된 행 정리 스케줄러는 아직 없다 (TODO).
+- `POST /api/auth/refresh`(바디 `refreshToken`)는 **회전**: 사용된 토큰은 `revoked_at`을 채워 남기고 새 쌍을 발급한다. 폐기된 토큰이 다시 오면 탈취로 보고 그 사용자의 모든 토큰을 폐기하고 `A010` (이 폐기가 커밋되도록 `noRollbackFor = CustomException`). `POST /api/auth/logout`은 **액세스 토큰 필수**: 현재 액세스 토큰의 `jti`를 `revoked_access_tokens`(jti, user_id, expires_at — 토큰 만료 시각까지만 보관)에 넣어 즉시 무효화하고, 바디 `refreshToken`(현재 기기, 본인 소유일 때만)을 폐기한다. 멱등이며 전 기기 로그아웃 옵션은 없다.
+- **액세스 토큰에는 `jti`(UUID) 클레임이 있다.** `SecurityConfig.jwtDecoder`가 기본 검증(서명·만료)에 더해 `jti`가 없거나 폐기 목록에 있으면 거부한다 → `A005`. 개발 단계라 `jti` 없는 옛 토큰은 호환하지 않고 무효 처리한다(배포 후 재로그인 필요). 보호된 요청마다 PK 조회 1회가 추가된다(사용자 정보는 여전히 토큰 클레임에서 복원).
+- 정리: `AuthCleanupScheduler`가 매일 `cue.auth.cleanup.cron`(기본 `0 0 4 * * *`, 환경변수 `AUTH_CLEANUP_CRON`, `-`면 비활성 — 테스트는 비활성) 시각에 만료된 `refresh_tokens`와 `revoked_access_tokens` 행을 지운다. 폐기됐지만 아직 만료 전인 리프레시 행은 재사용 탐지(`A010`)에 필요해 남긴다.
 - CORS: `SecurityConfig.corsConfigurationSource` — `CORS_ALLOWED_ORIGINS`(쉼표 구분, 기본 `http://localhost:5173,http://localhost:3000`), 메서드 GET/POST/PUT/PATCH/DELETE/OPTIONS, 헤더 Authorization/Content-Type/Accept, credentials 미허용(토큰은 헤더·바디).
-- 컨트롤러에서 로그인 사용자는 `@AuthenticationPrincipal UserPrincipal principal` (`id`, `email`, `nickname`)로 받는다. **요청 바디/파라미터로 userId를 받지 않는다.** 요청마다 DB를 조회하지 않고 토큰 클레임에서 복원한다.
-- 인증 없이 열린 경로: `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `/actuator/health/**`, `/v3/api-docs/**`, `/swagger-ui/**`. 나머지는 인증 필요. 열린 경로를 추가하면 `SecurityConfig`를 수정한다.
+- 컨트롤러에서 로그인 사용자는 `@AuthenticationPrincipal UserPrincipal principal` (`id`, `email`, `nickname`)로 받는다. **요청 바디/파라미터로 userId를 받지 않는다.** 사용자 정보는 토큰 클레임에서 복원한다(폐기 여부 확인용 jti 조회 1회만 DB 사용).
+- 인증 없이 열린 경로: `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `/actuator/health/**`, `/v3/api-docs/**`, `/swagger-ui/**`. 나머지는 인증 필요. 열린 경로를 추가하면 `SecurityConfig`를 수정한다.
 - 자신의 리소스만 접근 가능해야 하는 API는 소유자 검사를 한다 (예: `IdeaService.findOwned` → `I002`).
 
 ### 코드 스타일
@@ -141,7 +154,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | POST | `/api/users` | ✕ | 회원가입 |
 | POST | `/api/auth/login` | ✕ | 로그인 (JWT + 리프레시 토큰 발급) |
 | POST | `/api/auth/refresh` | ✕ | 리프레시 토큰 회전 재발급 |
-| POST | `/api/auth/logout` | ✕ | 리프레시 토큰 폐기 |
+| POST | `/api/auth/logout` | ✓ | 로그아웃: 현재 액세스 토큰 즉시 무효화 + 리프레시 토큰 폐기 (현재 기기만) |
 | GET | `/api/users/me` | ✓ | 내 정보 |
 | POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD). 선택 `keywords`(최대 2개)가 있으면 AI 키워드 추출 생략 |
 | GET | `/api/ideas` | ✓ | 리더보드. `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
@@ -152,7 +165,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량·근거 요약·출처, 최신순) |
 
-Swagger: `/swagger-ui.html`, 헬스체크: `/actuator/health`.
+Swagger: `/swagger-ui.html` (Authorize 버튼에 accessToken 입력), OpenAPI JSON: `/v3/api-docs`, 헬스체크: `/actuator/health`.
 
 ## 팀원 온보딩 (로컬 환경 세팅)
 
@@ -189,6 +202,7 @@ cd CUE/backend
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간 |
 | `JWT_REFRESH_DAYS` | `14` | 리프레시 토큰 유효 시간(일) |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | CORS 허용 오리진(쉼표 구분). 운영에서는 실제 프론트 도메인으로 제한 |
+| `AUTH_CLEANUP_CRON` | `0 0 4 * * *` | 만료 토큰 정리 주기(cron). `-`이면 비활성 |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 자동 기동 여부. `bootRun`이 켜 준다 |
 | `GEMINI_API_KEY` | (없음) | Gemini API 키. **커밋 금지**, 팀 비밀 채널로 공유. 없으면 호출 없이 `SimpleIdeaAnalyzer` 폴백 |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
@@ -217,13 +231,14 @@ cd backend && ./gradlew bootRun    # 루트 docker-compose.yml의 DB를 자동 �
 cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (Docker 필요)
 ```
 - DB는 호스트 포트 **5433** (이 머신의 로컬 PostgreSQL이 5432를 사용 중이라 충돌 회피).
-- 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `JWT_REFRESH_DAYS`, `CORS_ALLOWED_ORIGINS`, `DOCKER_COMPOSE_ENABLED`, `GEMINI_*`와 선택 토큰(`GITHUB_TOKEN`, `HUGGING_FACE_TOKEN`, `STACK_EXCHANGE_KEY`)(위 표).
-- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/RefreshTokenCorsTest`(CORS preflight, 로그인→리프레시→재사용 거부→로그아웃, 만료·무효).
+- 환경변수: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`(운영 필수, 32바이트 이상), `JWT_ACCESS_MINUTES`, `JWT_REFRESH_DAYS`, `CORS_ALLOWED_ORIGINS`, `DOCKER_COMPOSE_ENABLED`, `AUTH_CLEANUP_CRON`, `GEMINI_*`와 선택 토큰(`GITHUB_TOKEN`, `HUGGING_FACE_TOKEN`, `STACK_EXCHANGE_KEY`)(위 표).
+- 테스트: `DomainTest`(순수 단위), `source/SourceClientTest`(MockRestServiceServer), `source/SourceCheckServiceTest`(해시 변경 감지·실패 격리), `idea/service/GeminiIdeaAnalyzerTest`(MockRestServiceServer로 Gemini 응답 파싱·폴백, 실제 호출 없음), `prompt/PromptTemplatesTest`(프롬프트·문서 일치), `integration/ApiAuthPolicyTest`(모든 보호 엔드포인트를 순회해 토큰 없음/형식 오류/만료/무효/변조 → A006/A003/A004/A005, 타인 아이디어 I002·없음 I001, 열린 경로 범위), `integration/OpenApiDocsTest`(`/v3/api-docs` 200, bearerAuth, 경로·Tag·에러 응답, 문서의 공개 여부 = 실제 permitAll), `integration/AuthIdeaFlowTest`(PostgreSQL 컨테이너, 인증·검증·에러코드·가중치·보류/활성·수정·평가 이력·확인 처리), `integration/RefreshTokenCorsTest`(CORS preflight, 로그인→리프레시→재사용 거부→로그아웃, 만료·무효).
 - CI: `.github/workflows/backend-ci.yml` — `backend/**` 변경 PR과 `main` 푸시에서 JDK 21로 `./gradlew test` 실행 (Testcontainers용 Docker는 ubuntu-latest에 있음). 실패하면 테스트 리포트를 아티팩트로 올린다.
 - `bootRun` 후 DB 컨테이너는 계속 떠 있다(`start_only`). 정리는 `docker compose down`.
 
 ## 작업 규칙 (backend)
 - 코드 변경 시 테스트를 함께 추가/수정하고 `cd backend && ./gradlew test`를 통과시킨 뒤 알린다.
+- 새 API/DTO/에러 코드는 위 "Swagger 작성 규칙"을 지키고, `ApiAuthPolicyTest.protectedEndpoints()`에 엔드포인트를 추가한다.
 - 동작이 바뀌면 루트 `README.md`의 Backend 섹션과 이 문서를 함께 갱신한다.
 - 스키마 변경은 확정 전까지 `V1__init.sql`을 수정하고 PR에 "DB 초기화 필요"를 적는다. 확정 후에는 새 버전 파일만 추가한다.
 
@@ -232,7 +247,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - Gemini 평가(재평가) 호출은 아직 없음(키워드·세부 종류 추출만 구현). `evaluations.trend_id`에 트렌드 연결(현재 null).
 - 외부 API 클라이언트: GitHub·Hugging Face·Stack Exchange는 구현됨. Hacker News·Semantic Scholar·Wikipedia Pageviews는 미구현(`SourceClient` 구현 빈 추가). 트렌드 수집(`TREND_PROVIDERS`)과 Gemini 평가 연동도 남음 (예외는 `G002 EXTERNAL_SERVER_ERROR` 사용).
 - **열린 결정**: 트렌드용 고정 API(`ApiProvider.TREND_PROVIDERS`)를 팀이 확정해야 한다. IT 세부 종류별 검색 API 조합은 `ItCategory.searchProviders`에 정의돼 있고, IT 외 분야를 추가할 때 `IdeaType`을 확장한다. 해시 대상 항목 수(현재 상위 5건)는 평가 정책과 함께 재검토.
-- 만료·폐기된 `refresh_tokens` 행 정리 스케줄러. 이메일 인증·약관 등 가입 부가 기능은 필요 시.
+- 이메일 인증·약관 등 가입 부가 기능은 필요 시.
 - 운영 전: `JWT_SECRET` 교체, `CORS_ALLOWED_ORIGINS`를 운영 프론트 도메인으로 제한, 비밀번호 정책 검토.
 
 ## 참고
