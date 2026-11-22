@@ -6,6 +6,7 @@
 | 영역 | 가이드 |
 | --- | --- |
 | Backend (`backend/`) | [backend/AGENTS.md](backend/AGENTS.md) — 구조, 컨벤션, 도메인 로직, 온보딩, TODO |
+| Frontend (`frontend/`) | [frontend/AGENTS.md](frontend/AGENTS.md) — React 구조, API 연결 및 입력 흐름 |
 
 작업하는 폴더의 가이드를 반드시 먼저 읽는다. 코드·구조·결정이 바뀌면 **같은 PR에서 해당 가이드와 `README.md`도 갱신**한다.
 
