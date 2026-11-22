@@ -1,0 +1,282 @@
+import { tw } from '../tailwindStyles'
+import { useEffect, useState } from 'react'
+import type { Evaluation, Idea, IdeaFields, ScoreType } from '../api/ideas'
+import {
+  Button,
+  fieldLabels,
+  Modal,
+  scoreDescriptions,
+  scoreLabels,
+  scoreTypes,
+  scoreText,
+} from './ui'
+import { getIdeas } from '../api/ideas'
+
+export function WeightsPicker({
+  close,
+  choose,
+  onError,
+}: {
+  close: () => void
+  choose: (idea: Idea) => void
+  onError: (error: unknown) => void
+}) {
+  const [ideas, setIdeas] = useState<Idea[]>([])
+  useEffect(() => {
+    let active = true
+    getIdeas('ACTIVE')
+      .then((result) => {
+        if (active) setIdeas(result.items || [])
+      })
+      .catch((error) => {
+        if (active) onError(error)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+  return (
+    <Modal title="평가 설정할 아이디어 선택" close={close}>
+      <h2>평가할 아이디어 선택</h2>
+      <p className={tw('subcopy')}>아이디어마다 평가 가중치를 설정할 수 있어요.</p>
+      <div className={tw('picker-list')}>
+        {ideas.map((idea) => (
+          <button key={idea.id} onClick={() => choose(idea)}>
+            {idea.solution || idea.problem || '내 아이디어'}　→
+          </button>
+        ))}
+        {ideas.length === 0 && <p className={tw('subcopy')}>평가할 아이디어가 없어요.</p>}
+      </div>
+    </Modal>
+  )
+}
+
+export function WeightsModal({
+  idea,
+  close,
+  save,
+  busy,
+}: {
+  idea: Idea
+  close: () => void
+  save: (weights: Record<ScoreType, number>) => void
+  busy: boolean
+}) {
+  const [weights, setWeights] = useState<Record<ScoreType, number>>(
+    () =>
+      Object.fromEntries(
+        scoreTypes.map((type) => [
+          type,
+          idea.scores?.find((score) => score.type === type)?.pendingWeightPercent ??
+            idea.scores?.find((score) => score.type === type)?.weightPercent ??
+            20,
+        ]),
+      ) as Record<ScoreType, number>,
+  )
+  const total = scoreTypes.reduce((sum, type) => sum + Number(weights[type] || 0), 0)
+  return (
+    <Modal title="평가 가중치 설정" close={close} className={tw('weights-sheet')}>
+      <h2>평가 가중치 설정</h2>
+      <p className={tw('subcopy')}>중요하게 보는 기준의 비중을 조절하세요.</p>
+      <div className={tw('weight-fields')}>
+        {scoreTypes.map((type) => (
+          <label className={tw('weight-card')} key={type}>
+            <span>
+              <b>{scoreLabels[type]}</b>
+              <small>{scoreDescriptions[type]}</small>
+            </span>
+            <output>{weights[type]}%</output>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={weights[type]}
+              onChange={(event) =>
+                setWeights((old) => ({ ...old, [type]: Number(event.target.value) }))
+              }
+              aria-label={`${scoreLabels[type]} 가중치`}
+            />
+          </label>
+        ))}
+      </div>
+      <p className={tw(`weight-total ${total === 100 ? '' : 'invalid'}`)}>
+        합계 {total}% / 100%{total !== 100 && ' · 합계가 100%여야 해요.'}
+      </p>
+      <p className={tw('subcopy')}>변경한 가중치는 다음 평가부터 적용됩니다.</p>
+      <div className={tw('sheet-actions')}>
+        <Button disabled={busy || total !== 100} onClick={() => save(weights)}>
+          {busy ? '저장 중…' : '가중치 저장하기'}
+        </Button>
+      </div>
+    </Modal>
+  )
+}
+export function EditModal({
+  idea,
+  close,
+  save,
+  busy,
+}: {
+  idea: Idea
+  close: () => void
+  save: (fields: IdeaFields) => void
+  busy: boolean
+}) {
+  const [fields, setFields] = useState<IdeaFields>({
+    target: idea.target || '',
+    problem: idea.problem || '',
+    solution: idea.solution || '',
+    expectation: idea.expectation || '',
+  })
+  return (
+    <Modal title="구조화 항목 수정" close={close} className={tw('edit-sheet')}>
+      <h2>구조화 항목 수정</h2>
+      <p className={tw('subcopy')}>내용을 수정한 뒤 저장하세요.</p>
+      <div className={tw('edit-fields')}>
+        {fieldLabels.map(({ key, label }) => (
+          <label key={key}>
+            {label}
+            <textarea
+              maxLength={5000}
+              value={fields[key]}
+              onChange={(event) => setFields((old) => ({ ...old, [key]: event.target.value }))}
+            />
+          </label>
+        ))}
+      </div>
+      <div className={tw('sheet-actions')}>
+        <Button
+          disabled={busy || ['QUEUED', 'RUNNING'].includes(idea.evaluationStatus)}
+          onClick={() => save(fields)}
+        >
+          {busy ? '저장 중…' : '변경 내용 저장'}
+        </Button>
+      </div>
+    </Modal>
+  )
+}
+export function DocumentModal({
+  reference,
+  evaluation,
+  close,
+}: {
+  reference: Evaluation['references'][number]
+  evaluation: Evaluation
+  close: () => void
+}) {
+  let safeUrl: URL | null = null
+  try {
+    const parsed = new URL(reference.url)
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') safeUrl = parsed
+  } catch {
+    /* 표시할 링크 없음 */
+  }
+  return (
+    <Modal title="근거 문서" close={close} className={tw('document-sheet')}>
+      <h2>근거 문서</h2>
+      <h3>{reference.title || reference.url}</h3>
+      <p className={tw('subcopy')}>
+        {reference.provider} · {new Date(evaluation.evaluatedAt).toLocaleString('ko-KR')} 확인
+      </p>
+      <div className={tw('document-section')}>
+        <strong>점수에 반영한 내용</strong>
+        <p>
+          {scoreLabels[evaluation.scoreType]} · {scoreText(evaluation.scoreAfter)}점 (
+          {evaluation.difference > 0 ? '+' : ''}
+          {scoreText(evaluation.difference)}점)
+        </p>
+        <p>{evaluation.evidenceSummary}</p>
+      </div>
+      {safeUrl && (
+        <a
+          className={tw('external-link')}
+          href={safeUrl.href}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          원문 열기 ↗
+        </a>
+      )}
+    </Modal>
+  )
+}
+export function ChangeModal({
+  ideas,
+  close,
+  open,
+}: {
+  ideas: Idea[]
+  close: () => void
+  open: (idea: Idea) => void
+}) {
+  const changes = ideas.filter((idea) => idea.hasNewChange)
+  return (
+    <Modal title="변화 알림" close={close} className={tw('change-sheet')}>
+      <h2>새로운 변화가 있어요</h2>
+      {changes.length ? (
+        changes.map((idea) => (
+          <div className={tw('change-item')} key={idea.id}>
+            <strong>
+              {idea.solution || idea.problem || '내 아이디어'} ·{' '}
+              {idea.lastDifference != null
+                ? `${idea.lastDifference > 0 ? '+' : ''}${scoreText(idea.lastDifference)}점`
+                : '새 평가'}
+            </strong>
+            <p>어떤 근거가 달라졌는지 확인해 보세요.</p>
+            <Button onClick={() => open(idea)}>변화 근거 확인하기</Button>
+          </div>
+        ))
+      ) : (
+        <p className={tw('subcopy')}>확인하지 않은 변화가 없어요.</p>
+      )}
+      <Button secondary onClick={close}>
+        닫기
+      </Button>
+    </Modal>
+  )
+}
+export function SettingsModal({
+  userName,
+  close,
+  logout,
+}: {
+  userName: string
+  close: () => void
+  logout: () => void
+}) {
+  const [confirm, setConfirm] = useState(false)
+  useEffect(() => {
+    setConfirm(false)
+  }, [])
+  return (
+    <Modal title="설정" close={close} className={tw('settings-sheet')}>
+      <h2>설정</h2>
+      <p className={tw('subcopy')}>{userName}님의 아이디어 포트폴리오</p>
+      <div className={tw('settings-info')}>
+        <strong>평가 주기</strong>
+        <span>백엔드에서 24시간마다 자동 확인합니다.</span>
+      </div>
+      {confirm ? (
+        <Button onClick={logout}>로그아웃하기</Button>
+      ) : (
+        <Button secondary onClick={() => setConfirm(true)}>
+          로그아웃
+        </Button>
+      )}
+    </Modal>
+  )
+}
+export function SummaryModal({ idea, close }: { idea: Idea; close: () => void }) {
+  return (
+    <Modal title="포트폴리오 카드 요약" close={close} className={tw('summary-sheet')}>
+      <h2>{idea.solution || idea.problem || '내 아이디어'}</h2>
+      <strong className={tw('summary-score')}>
+        {idea.lastEvaluatedAt ? `${scoreText(idea.totalScore)}점` : '평가 전'}
+      </strong>
+      <p className={tw('subcopy')}>{idea.problem || '아이디어의 내용을 확인해 보세요.'}</p>
+      <Button secondary onClick={close}>
+        닫기
+      </Button>
+    </Modal>
+  )
+}
