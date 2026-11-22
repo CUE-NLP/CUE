@@ -8,7 +8,7 @@ CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근�
 
 핵심 흐름
 1. 기록: 텍스트·음성 입력. **음성 인식(STT)은 프론트에서 처리**하고 서버는 텍스트만 받는다.
-2. 구조화: **프론트가** AI로 타깃·문제·해결·기대효과로 요약하고 사용자가 검증·수정한 뒤 백엔드에는 **저장만** 요청한다. (원문·입력 방식은 DB에 저장하지 않는다.) 서버는 등록 시 4개 항목이 모두 채워졌는지 보고 `ACTIVE`/`HOLD`를 정한다. `ACTIVE`일 때만 AI로 아이디어 종류·검색 키워드를 추출한다.
+2. 구조화: 프론트가 원문을 `POST /api/ideas/structure`로 보내면 **서버가** AI로 타깃·문제·해결·기대효과로 정리해 돌려주고(저장 안 함, 아래 "구조화 API와 AI 레인"), 사용자가 검증·수정한 뒤 `POST /api/ideas`로 **저장**한다. (원문·입력 방식은 DB에 저장하지 않는다.) 서버는 등록 시 4개 항목이 모두 채워졌는지 보고 `ACTIVE`/`HOLD`를 정한다. `ACTIVE`일 때만 AI로 아이디어 종류·검색 키워드를 추출한다.
 3. 평가: 5개 기준으로 점수화. 키워드 근거 자료로 4개(문제 중요성, 시장 수요, 시장 차별성, 기술적 실현 가능성), 글로벌 트렌드로 1개(트렌디함 `TREND`).
 4. 갱신(Idea Delta): 하루 1회(기본 03:00 Asia/Seoul) AI가 재평가 → **점수에 변화가 있을 때만** 항목별 변화량·근거 요약·출처 URL·평가 시각을 저장한다 (변화가 없으면 행도 날짜도 남기지 않는다). 다음 날 이전 점수에 변화량을 반영해 보여주고 변화량은 점수 옆에 작게 표시한다.
 
@@ -24,14 +24,15 @@ CUE는 아이디어를 기록·구조화하고, 외부 자료의 변화를 근�
 ```
 global/
   config/     SecurityConfig (JWT·CORS 설정, PasswordEncoder, JwtEncoder/Decoder 빈), OpenApiConfig (Swagger 제목·bearerAuth)
-  ai/         GeminiClient(평가용 Gemini 호출, cue.gemini.* 재사용), PromptLoader(prompts/*.txt의 {{name}} 치환)
+  ai/         GeminiClient(Gemini 호출: 인터랙티브/배치 레인·재시도·속도 제한), AiLane, GeminiRateLimiter, GeminiLaneProperties(cue.gemini.interactive.*), PromptLoader(prompts/*.txt의 {{name}} 치환)
+  cache/      TtlCache(TTL + 최대 개수 LRU 인메모리 캐시, Redis 안 씀)
   error/      ErrorCode(전체 에러 코드), CustomException, GlobalExceptionHandler
   response/   CommonResponse (모든 응답 래퍼), ListData (목록 응답 data: items+count)
   docs/       Swagger 지원: ApiErrors(에러 코드 선언), PublicApi(인증 불필요 표시), ApiErrorCustomizer(에러 응답 자동 생성)
   security/   UserPrincipal, JwtProperties, CorsProperties, JwtTokenProvider, JwtPrincipalConverter, SecurityErrorWriter
 auth/         controller / service / repository / entity / dto — 로그인(JWT 발급), 리프레시 토큰 재발급·로그아웃
 user/         controller / service / repository / entity / dto — 회원가입, 내 정보
-idea/         controller / service / repository / entity / dto — 아이디어 저장·조회·리더보드·가중치
+idea/         controller / service / repository / entity / dto — 아이디어 구조화(IdeaStructuringService)·저장·조회·리더보드·가중치, 키워드·종류 추출(GeminiIdeaAnalyzer, 구조화 결과 재사용용 AnalysisCache)
 score/        entity (Score, ScoreType — 5개 기준: 근거 4개 + TREND)
 evaluation/   controller 없음. (EvaluationQueueService=비동기 직렬 실행·상태 기록, AutoEvaluationListener=저장 직후 자동 큐 투입, EvaluationStateRecovery=부팅 시 상태 정리, config/EvaluationExecutorConfig=단일 스레드 실행기) entity (Evaluation, EvaluationReference, IdeaScoreHistory) / repository / service (EvaluationRecorder=저장·턴 시작, IdeaEvaluationPipeline=아이디어 1개 파이프라인(근거 4개 기준 + TREND 두 갈래), EvidenceEvaluator=키워드 근거 4개 기준 Gemini 호출·변환·클램프, TrendEvaluator=TREND 호출·변환·클램프, DailyEvaluationBatch, EvaluationScheduler) / config (EvaluationProperties) / dto (ScoreChange, ReferenceInput, IdeaSnapshot, EvaluationRunResult)
 source/       entity (Source, ApiProvider) / repository / client (SourceClient + GitHub·HuggingFace·StackExchange·HackerNews·SemanticScholar·WikipediaPageviews, SearchSettings) / fetch (WebContentFetcher, UrlGuard, JdkTransport, HtmlText) / service (SourceCheckService, SourceExcerptService(원문 발췌·AI 호출 없음), TextExcerpt, SourceTextFormat, ItemBatchSummarizer(글로벌 트렌드용), SourceHasher) / dto / config (SourceApiProperties, SourceClientConfig)
@@ -76,9 +77,9 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집, D 시연, E 평가. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
 - 외부 자료(S): `S001` source 없음 / `S002` 미지원 provider / `S003` 허용되지 않는 URL(SSRF 차단).
 - 시연(D): `D001` 시연 API 꺼짐(403) / `D002` 시연 실행 쿨다운(429).
-- 아이디어(I): `I005` 평가가 대기·진행 중인 아이디어는 수정 불가(409).
-- 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E004` 평가 대기열 가득(503) / `E005` 재시작으로 평가 중단(503, `FAILED` 상태의 `last_evaluation_error_code`로만 노출). AI 통신 실패 자체는 `G002`. (`E003`은 비동기 전환으로 없앴다: 이미 진행 중이면 에러 없이 현재 상태를 돌려준다.)
-- 코드 번호를 새로 만들기 전에 열려 있는 PR 브랜치의 `ErrorCode`도 확인해 번호가 겹치지 않게 한다 (예: 외부 자료 수집의 `S001·S002`). 현재 G001~G007, A001~A010, U001~U002, I001~I005, S001~S003, D001~D002, E001·E002·E004·E005.
+- 아이디어(I): `I005` 평가가 대기·진행 중인 아이디어는 수정 불가(409) / `I006` 구조화 요청이 너무 잦음(429).
+- 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E004` 평가 대기열 가득(503) / `E005` 재시작으로 평가 중단(503, `FAILED` 상태의 `last_evaluation_error_code`로만 노출) / `E006` AI가 바쁨(503, 인터랙티브 레인이 한도·429/503으로 호출하지 못함 — 구조화는 사용자가 직접 입력하게 안내). AI 통신 실패 자체는 `G002`. (`E003`은 비동기 전환으로 없앴다: 이미 진행 중이면 에러 없이 현재 상태를 돌려준다.)
+- 코드 번호를 새로 만들기 전에 열려 있는 PR 브랜치의 `ErrorCode`도 확인해 번호가 겹치지 않게 한다 (예: 외부 자료 수집의 `S001·S002`). 현재 G001~G007, A001~A010, U001~U002, I001~I006, S001~S003, D001~D002, E001·E002·E004·E005·E006.
 - **범용 예외로 새지 않게 한다**: 실패 경로는 `IllegalArgumentException`/`IllegalStateException`/메시지 없는 던지기 대신 `CustomException(ErrorCode)`로 던진다. 프레임워크 예외(`HttpMediaTypeNotSupportedException` 등)는 `GlobalExceptionHandler`에서 코드로 매핑한다. 새 ErrorCode를 만들면 `GlobalExceptionHandler`/서비스에서 실제로 쓰이는지, Swagger(`@ApiErrors`)에 나열됐는지 확인한다.
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
 - 리프레시 토큰 실패: 무효 `A008` / 만료 `A009` / 재사용 `A010`. 액세스 토큰 만료는 `A004` 유지(프론트 재발급 트리거). 재발급 흐름은 README의 프론트 연동 섹션에 순서도로 정리했다.
@@ -130,9 +131,19 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `POST /api/ideas`: 4개 항목이 모두 채워지면 `ACTIVE`, 하나라도 비면 `HOLD`. 클라이언트가 status를 보내지 않는다.
 - `ACTIVE`일 때만 `IdeaAnalyzer`로 IT 세부 종류·키워드를 추출하고 `sources`를 만든다. HOLD는 AI를 호출하지 않고 일일 평가에서도 제외한다.
 - `PATCH /api/ideas/{id}`: 보낸 항목만 수정(null 유지, 빈 문자열은 비움). 수정 뒤 `ACTIVE`면 종류·키워드를 다시 추출해 `sources`를 교체한다(평가 근거로 연결된 행은 유지, 해시는 초기화). HOLD → ACTIVE가 되면 같은 파이프라인을 탄다. **수정으로 내용·검색 키워드가 실제로 바뀌면 `needs_full_evaluation`이 켜지고 커밋 뒤 첫 평가가 자동 큐에 들어간다(아래 "비동기 평가 실행"). 평가가 대기·진행 중이면 수정은 `I005`.**
-- `IdeaAnalyzer`는 `GeminiIdeaAnalyzer`(`@Primary`)가 구현한다: RestClient로 `generateContent`(`x-goog-api-key` 헤더)를 호출하고 `responseMimeType=application/json` + `responseSchema`(`itCategory` enum 4개, keywords 1~2개; AI는 대분류 type을 분류하지 않는다)로 구조화 응답을 받아 `IdeaAnalysis`로 파싱한다. 알 수 없는 세부 종류는 `DEV_TOOLS_INFRA`, 키워드는 공백·중복 제거 후 2개까지(영어 검색어, 한글이 섞이면 경고 로그).
+- `IdeaAnalyzer`는 `GeminiIdeaAnalyzer`(`@Primary`)가 구현한다: `GeminiClient`의 **인터랙티브 레인**(`generateJson(INTERACTIVE, system, user, schema)`)으로 호출하고 `responseMimeType=application/json` + `responseSchema`(`itCategory` enum 4개, keywords 1~2개; AI는 대분류 type을 분류하지 않는다)로 구조화 응답을 받아 `IdeaAnalysis`로 파싱한다. 알 수 없는 세부 종류는 `DEV_TOOLS_INFRA`, 키워드는 공백·중복 제거 후 2개까지(영어 검색어, 한글이 섞이면 경고 로그).
 - **실패 방침: 폴백.** 호출 실패·타임아웃·파싱 실패·API 키 없음이면 `SimpleIdeaAnalyzer`(세부 종류 `DEV_TOOLS_INFRA`, 긴 단어 2개)로 대체한다. 근거: 키워드 추출은 등록의 부가 단계이고 AI 장애 때문에 사용자가 쓴 아이디어 저장이 실패하면 안 된다. 내부적으로는 `requestAnalysis()`가 `G002`(`EXTERNAL_SERVER_ERROR`)를 던지고 `analyze()`가 잡아 로그(warn)만 남긴다. 폴백 결과는 품질이 낮으므로 이후 수정(PATCH) 시 다시 추출된다.
-- 설정은 `cue.gemini.*`(`GEMINI_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_BASE_URL`, `GEMINI_TIMEOUT_SECONDS`). `enabled=false`면 `GeminiIdeaAnalyzer` 빈이 없어 `SimpleIdeaAnalyzer`만 쓴다. 통합 테스트는 `cue.gemini.enabled=false`.
+- 설정은 `cue.gemini.*`(`GEMINI_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_BASE_URL`, `GEMINI_TIMEOUT_SECONDS`, 인터랙티브 레인 `GEMINI_INTERACTIVE_*`). `enabled=false`면 `GeminiIdeaAnalyzer` 빈이 없어 `SimpleIdeaAnalyzer`만 쓴다. 통합 테스트는 `cue.gemini.enabled=false`.
+
+### 구조화 API와 AI 레인 (`idea`, `global/ai`)
+- **API**: `POST /api/ideas/structure` 본문 `{text}`(1~5000자, 공백만이면 `G004`). 응답 `{target, problem, solution, expectation, complete, missingFields, itCategory, keywords}`. **저장하지 않고 원문도 남기지 않는다**(미리보기). 저장은 사용자가 확인·수정한 뒤 기존 `POST /api/ideas`. 실패(`E001`·`E002`·`E006`·`G002`)면 프론트는 사용자가 4칸을 직접 채워 저장하게 안내한다.
+- **빈칸 판정은 서버 코드가 한다**: AI는 프롬프트로 "원문에 근거가 없으면 빈 문자열, 추측 금지"를 지시받고, 서버는 `trim` 후 비었거나 "없음·해당 없음·N/A·-" 같은 자리표시 값이면 빈칸으로 본다(`IdeaStructuringService.clean`). 하나라도 비면 `complete=false`, `missingFields`(TARGET/PROBLEM/SOLUTION/EXPECTATION)에 담고 종류·키워드는 버린다(그대로 저장하면 기존 규칙대로 HOLD). 항목은 저장 한도 5000자로 자른다.
+- **호출 1번으로 구조화 + 종류·키워드 후보**: 응답 스키마에 `itCategory`·`keywords`를 같이 받는다(분류 기준·키워드 규칙은 `GeminiIdeaAnalyzer.SYSTEM_PROMPT`의 해당 구간을 그대로 잘라 써서 규칙이 갈라지지 않는다). 4칸이 다 찼을 때만 결과를 `AnalysisCache`(사용자 ID + 4개 항목 해시 키, TTL)에 넣고, `IdeaService.extractAndRegisterSources`가 같은 사용자·같은 내용이면 **AI를 다시 부르지 않고 재사용**한다(사용자 키워드가 있으면 종류만 재사용). 한 글자라도 고치면 해시가 달라져 평소처럼 다시 추출한다. 클라이언트가 보낸 값이 아니라 서버가 만든 AI 결과만 쓰므로 신뢰 문제가 없고, 폴백(임시 분석기) 결과는 넣지 않는다.
+- **같은 원문 캐시·쿨다운**: 같은 사용자·같은 원문(trim)은 `cue.structuring.cache-ttl-minutes`(기본 10) 동안 결과를 재사용해 AI를 부르지 않고 쿨다운도 쓰지 않는다. 새 원문은 사용자별 `cue.structuring.cooldown-seconds`(기본 3) 안에 다시 보내면 `I006`(429). Gemini 불가 `E001`은 쿨다운을 소비하지 않는다. 캐시·쿨다운은 인스턴스 메모리다(재시작·다중 인스턴스에서 공유 안 됨).
+- **두 레인** (`AiLane`): 사용자가 기다리는 호출(구조화, 저장 때 종류·키워드 추출)은 `INTERACTIVE`, 그 밖의 평가·트렌드 호출은 `BATCH`(기존 `generateJson(prompt, schema)`). `GeminiClient`가 레인마다 **속도 제한기**(`GeminiRateLimiter`, 순번 예약)를 따로 둔다 — 인터랙티브 `cue.gemini.interactive.min-interval-ms`(기본 2000), 배치 `cue.gemini.min-interval-ms`(기본 6500). 배치는 한도가 풀릴 때까지 기다리지만 **인터랙티브는 기다려야 하는 시간이 `max-wait-ms`(기본 5000)를 넘으면 슬롯을 잡지 않고 `E006`으로 바로 실패**해 평가 배치 뒤에 줄 서지 않는다.
+- **모델 분리**: 인터랙티브는 `cue.gemini.interactive.model`(기본 `gemini-2.5-flash-lite`, 비우면 기본 모델), 배치는 `cue.gemini.model`. 모델별로 분당·일일 한도가 따로 잡히므로 새벽 배치가 낮의 구조화 한도를 먹지 않는다(실제 한도는 키 수령 후 확인).
+- **429/503 재시도**: 레인별 횟수(`cue.gemini.interactive.max-retries` 기본 1, 배치 `cue.gemini.max-retries` 기본 2)만큼 지수 백오프(1초·2초·…, `Retry-After`가 있으면 그 값, 배치 최대 60초)로 재시도한다. 인터랙티브는 필요한 대기가 `max-wait-ms`를 넘으면 재시도하지 않는다. 끝내 실패하면 인터랙티브는 `E006`, 배치는 `G002`다. 그 밖의 HTTP 오류는 재시도 없이 `G002`.
+- **열린 결정**: 구조화 프롬프트는 Java 상수라 `docs/ai-prompts.md`·`PromptTemplatesTest` 대상이 아니다. Gemini Batch API·사용자별 일일 호출 상한·큐 영속화는 하지 않았다.
 
 ### 검색 키워드 우선순위 (USER > AI)
 - 요청 `keywords`(선택, `POST /api/ideas`·`PATCH /api/ideas/{id}`): 최대 2개, 각 항목 trim 후 1~50자, 빈 문자열 불가, 중복은 제거, 언어 제한 없음. 위반은 `G004`(DTO `@Size`/`@NotBlank` 검증, PATCH에도 `@Valid`).

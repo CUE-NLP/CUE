@@ -82,6 +82,7 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
                 new Endpoint(HttpMethod.GET, "/api/users/me", null),
                 new Endpoint(HttpMethod.POST, "/api/auth/logout", "{\"refreshToken\":\"x\"}"),
                 new Endpoint(HttpMethod.POST, "/api/ideas", IDEA_BODY),
+                new Endpoint(HttpMethod.POST, "/api/ideas/structure", "{\"text\":\"example\"}"),
                 new Endpoint(HttpMethod.GET, "/api/ideas", null),
                 new Endpoint(HttpMethod.GET, "/api/ideas/{id}", null),
                 new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}", "{\"problem\":\"x\"}"),
