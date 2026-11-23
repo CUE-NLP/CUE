@@ -121,24 +121,52 @@ export function EditModal({
 }: {
   idea: Idea
   close: () => void
-  save: (fields: IdeaFields) => void
+  save: (fields: Partial<IdeaFields>) => void
   busy: boolean
 }) {
-  const [fields, setFields] = useState<IdeaFields>({
+  const [original] = useState<IdeaFields>(() => ({
     target: idea.target || '',
     problem: idea.problem || '',
     solution: idea.solution || '',
     expectation: idea.expectation || '',
-  })
+  }))
+  const [fields, setFields] = useState<IdeaFields>(original)
+  const evaluating = ['QUEUED', 'RUNNING'].includes(idea.evaluationStatus)
+  // 수정 API는 보낸 항목만 바꾸므로 바뀐 항목만 보낸다
+  const changed: Partial<IdeaFields> = Object.fromEntries(
+    fieldLabels
+      .filter(({ key }) => fields[key] !== original[key])
+      .map(({ key }) => [key, fields[key]]),
+  )
+  const hasChange = Object.keys(changed).length > 0
+  // 하나라도 비어 있으면 백엔드가 보류(HOLD)로 바꾸고, 모두 채워진 채 내용이 바뀌면 저장 직후 평가를 다시 시작한다
+  const hasEmpty = fieldLabels.some(({ key }) => !fields[key].trim())
+  const notice = evaluating
+    ? {
+        text: '평가 중에는 수정할 수 없어요. 평가가 끝난 뒤 다시 시도해 주세요.',
+        tone: 'bg-[#f5f2ff] text-[#5b4bb7]',
+      }
+    : hasEmpty
+      ? {
+          text: '비어 있는 항목이 있으면 보류 상태가 되고 평가가 멈춰요.',
+          tone: 'bg-[#fff6e8] text-[#b0620c]',
+        }
+      : hasChange
+        ? {
+            text: '저장하면 바뀐 내용으로 평가가 다시 시작돼요.',
+            tone: 'bg-[#f5f2ff] text-[#5b4bb7]',
+          }
+        : null
   return (
     <Modal title="구조화 항목 수정" close={close} className={tw('edit-sheet')}>
       <h2>구조화 항목 수정</h2>
       <p className={tw('subcopy')}>내용을 수정한 뒤 저장하세요.</p>
       <div className={tw('edit-fields')}>
         {fieldLabels.map(({ key, label }) => (
-          <label key={key}>
+          <label key={key} className="text-[15px]! text-[#090d3d]">
             {label}
             <textarea
+              className="border-[#c9b8ff]! focus:border-[#6938ff]!"
               maxLength={5000}
               value={fields[key]}
               onChange={(event) => setFields((old) => ({ ...old, [key]: event.target.value }))}
@@ -146,12 +174,20 @@ export function EditModal({
           </label>
         ))}
       </div>
-      <div className={tw('sheet-actions')}>
-        <Button
-          disabled={busy || ['QUEUED', 'RUNNING'].includes(idea.evaluationStatus)}
-          onClick={() => save(fields)}
+      {notice && (
+        <div
+          className={`mt-3 rounded-xl px-3 py-2.5 text-[12px] leading-relaxed ${notice.tone}`}
+          role="status"
         >
-          {busy ? '저장 중…' : '변경 내용 저장'}
+          {notice.text}
+        </div>
+      )}
+      <div className={`${tw('sheet-actions')} grid grid-cols-2 gap-2`}>
+        <Button secondary onClick={close}>
+          취소
+        </Button>
+        <Button disabled={busy || evaluating || !hasChange} onClick={() => save(changed)}>
+          {busy ? '저장 중…' : '저장'}
         </Button>
       </div>
     </Modal>

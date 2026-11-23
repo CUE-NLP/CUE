@@ -237,7 +237,13 @@ export default function DetailPage({
           </div>
         )}
         <div className={tw('detail-actions')}>
-          <button onClick={edit}>✎ 구조화 수정</button>
+          <button
+            onClick={edit}
+            disabled={progress}
+            title={progress ? '평가 중에는 수정할 수 없어요' : undefined}
+          >
+            ✎ 구조화 수정
+          </button>
           <button onClick={settings}>☷ 평가 설정</button>
           <button onClick={summary}>▤ 카드 요약</button>
         </div>
