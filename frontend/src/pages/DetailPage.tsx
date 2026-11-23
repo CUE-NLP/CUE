@@ -1,5 +1,5 @@
 import { tw } from '../tailwindStyles'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   getEvaluations,
   getIdeaHistory,
@@ -65,7 +65,18 @@ export default function DetailPage({
   const [tab, setTab] = useState<Tab>('score'),
     [history, setHistory] = useState<IdeaHistory[]>([]),
     [evaluations, setEvaluations] = useState<Evaluation[]>([]),
-    [loading, setLoading] = useState(false)
+    [loading, setLoading] = useState(false),
+    // 잠깐 강조할 대상 ("round-시점" 또는 "sources-평가시각"). 2초 뒤 해제
+    [highlight, setHighlight] = useState<string | null>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!highlight) return
+    bodyRef.current
+      ?.querySelector(`[data-highlight="${highlight}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const timer = window.setTimeout(() => setHighlight(null), 2000)
+    return () => clearTimeout(timer)
+  }, [highlight, tab])
   useEffect(() => {
     let active = true
     setLoading(true)
@@ -110,6 +121,32 @@ export default function DetailPage({
   const allReferences = sortedEvaluations.flatMap((item) =>
     item.references.map((reference, index) => ({ reference, item, key: `${item.id}-${index}` })),
   )
+  // 이력 탭: 이력 점과 같은 평가 시각의 평가 항목을 한 회차로 묶는다 (백엔드가 같은 시각으로 저장)
+  const historyRounds = history.map((point, index) => ({
+    key: `${index}`,
+    evaluatedAt: point.evaluatedAt,
+    point: point as IdeaHistory | undefined,
+    items: sortedEvaluations.filter((item) => item.evaluatedAt === point.evaluatedAt),
+    first: index === 0 || isZero(point.totalScore - point.totalDifference),
+  }))
+  // 같은 시각의 이력 점이 없는 평가 (정상이라면 없음): 날짜와 지표 줄만 보여준다
+  const orphanRounds = [
+    ...new Set(
+      sortedEvaluations
+        .map((item) => item.evaluatedAt)
+        .filter((at) => !history.some((point) => point.evaluatedAt === at)),
+    ),
+  ].map((at) => ({
+    key: `e-${at}`,
+    evaluatedAt: at,
+    point: undefined as IdeaHistory | undefined,
+    items: sortedEvaluations.filter((item) => item.evaluatedAt === at),
+    first: false,
+  }))
+  const roundCards = [...historyRounds, ...orphanRounds].sort((a, b) =>
+    b.evaluatedAt.localeCompare(a.evaluatedAt),
+  )
+  const chartPoints = historyRounds.slice(-7) // 그래프는 최근 7개 시점만
   const latestReferences = latestRound.flatMap((item) =>
     item.references.map((reference, index) => ({ reference, item, key: `${item.id}-${index}` })),
   )
@@ -224,7 +261,7 @@ export default function DetailPage({
           </button>
         ))}
       </div>
-      <div className={tw('detail-body')}>
+      <div className={tw('detail-body')} ref={bodyRef}>
         {loading ? (
           <p className={tw('subcopy')}>불러오는 중…</p>
         ) : tab === 'score' ? (
@@ -323,7 +360,10 @@ export default function DetailPage({
             <p className={tw('subcopy')}>문서를 누르면 판단 근거와 점수 반영을 확인해요.</p>
             {allReferences.map(({ reference, item, key }) => (
               <button
-                className={`${tw('source-card')} grid-cols-1`}
+                className={`${tw('source-card')} grid-cols-1 transition-shadow ${
+                  highlight === `sources-${item.evaluatedAt}` ? 'ring-2 ring-[#6938ff]' : ''
+                }`}
+                data-highlight={`sources-${item.evaluatedAt}`}
                 key={key}
                 onClick={() => document(reference, item)}
               >
@@ -362,36 +402,183 @@ export default function DetailPage({
           <>
             <h2>점수 추이</h2>
             <p className={tw('subcopy')}>시점을 눌러 변동 이유를 확인하세요.</p>
-            <div className={tw('history-chart')} aria-label="점수 변화">
-              <div className={tw('history-bars')}>
-                {history.map((point, i) => (
-                  <div
-                    className={tw('history-bar')}
-                    key={`${point.evaluatedAt}-${i}`}
-                    title={`${dateText(point.evaluatedAt)} · ${scoreText(point.totalScore)}점`}
-                  >
-                    <span>{scoreText(point.totalScore)}</span>
-                    <i style={{ height: `${Math.max(5, Math.min(100, point.totalScore))}%` }} />
-                    <small>{dateText(point.evaluatedAt)}</small>
+            {chartPoints.length > 0 ? (
+              <div className={tw('history-chart')}>
+                <HistoryChart
+                  ideaId={idea.id}
+                  points={chartPoints}
+                  selected={highlight}
+                  select={(key) => setHighlight(`round-${key}`)}
+                />
+              </div>
+            ) : (
+              <div className={tw('empty-state')}>
+                아직 점수 이력이 없어요. 평가가 끝나면 그래프가 그려져요.
+              </div>
+            )}
+            {history.length === 1 && (
+              <div className="mb-3 text-center text-[12px] text-[#647096]">
+                다음 평가부터 점수 변화가 표시돼요.
+              </div>
+            )}
+            {roundCards.map((round) => (
+              <article
+                className={`${tw('history-entry')} scroll-mt-4 transition-shadow ${
+                  highlight === `round-${round.key}` ? 'ring-2 ring-[#6938ff]' : ''
+                }`}
+                data-highlight={`round-${round.key}`}
+                key={round.key}
+              >
+                <small className="text-[11px] text-[#647096]">{dateText(round.evaluatedAt)}</small>
+                {round.point &&
+                  (round.first ? (
+                    <strong className="mt-1 block text-[17px] text-[#090d3d]">
+                      첫 평가 · {scoreText(round.point.totalScore)}점
+                    </strong>
+                  ) : (
+                    <strong className="mt-1 block text-[17px] text-[#090d3d]">
+                      {scoreText(round.point.totalScore - round.point.totalDifference)} →{' '}
+                      {scoreText(round.point.totalScore)}점{' '}
+                      <b className={deltaClass(round.point.totalDifference)}>
+                        ({deltaText(round.point.totalDifference)})
+                      </b>
+                    </strong>
+                  ))}
+                {round.items.length === 0 && (
+                  <div className="mt-2 text-[12px] text-[#647096]">
+                    가중치 변경으로 총점이 바뀌었어요.
+                  </div>
+                )}
+                {round.items.map((item) => (
+                  <div key={item.id}>
+                    <div className="mt-3 text-[12px] font-bold text-[#6938ff]">
+                      {changeText(item)}
+                    </div>
+                    <p>{item.evidenceSummary}</p>
                   </div>
                 ))}
-              </div>
-            </div>
-            {history.length === 0 && (
-              <div className={tw('empty-state')}>점수 이력이 아직 없어요.</div>
-            )}
-            {evaluations.map((item) => (
-              <article className={tw('history-entry')} key={item.id}>
-                <strong>
-                  {dateText(item.evaluatedAt)} · {scoreLabels[item.scoreType]}{' '}
-                  <span>{deltaText(item.difference)}점</span>
-                </strong>
-                <p>{item.evidenceSummary}</p>
+                {round.items.some((item) => item.references.length > 0) && (
+                  <button
+                    className="mt-3 border-0 bg-transparent p-0 text-[12px] font-bold text-[#6938ff]"
+                    onClick={() => {
+                      setTab('sources')
+                      setHighlight(`sources-${round.evaluatedAt}`)
+                    }}
+                  >
+                    해당 시점의 근거 문서 보기 →
+                  </button>
+                )}
               </article>
             ))}
           </>
         )}
       </div>
     </section>
+  )
+}
+
+// 이력 탭 꺾은선 그래프 (SVG). 점마다 위에 총점, 아래에 날짜, 선 아래 연보라 그라데이션, 마지막 점 강조
+function HistoryChart({
+  ideaId,
+  points,
+  selected,
+  select,
+}: {
+  ideaId: number
+  points: { key: string; point?: IdeaHistory; evaluatedAt: string }[]
+  selected: string | null
+  select: (key: string) => void
+}) {
+  const width = 300,
+    height = 160,
+    padX = 26,
+    top = 28,
+    bottom = 26
+  const plotBottom = height - bottom
+  const scores = points.map(({ point }) => point?.totalScore ?? 0)
+  // 세로축: 최저점-10 ~ 최고점+10 (0~100 안에서)
+  const yMin = Math.max(0, Math.min(...scores) - 10)
+  const yMax = Math.min(100, Math.max(...scores) + 10)
+  const x = (index: number) =>
+    points.length === 1 ? width / 2 : padX + (index * (width - padX * 2)) / (points.length - 1)
+  const y = (score: number) => top + (1 - (score - yMin) / (yMax - yMin || 1)) * (plotBottom - top)
+  const line = scores.map((score, i) => `${i ? 'L' : 'M'}${x(i)} ${y(score)}`).join(' ')
+  const area = `${line} L${x(scores.length - 1)} ${plotBottom} L${x(0)} ${plotBottom} Z`
+  const gradientId = `cue-history-${ideaId}`
+  const columnWidth =
+    points.length === 1 ? 60 : Math.min(44, (width - padX * 2) / (points.length - 1))
+  return (
+    <svg
+      className="block h-full w-full"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label="총점 추이 그래프"
+    >
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#6938ff" stopOpacity="0.25" />
+          <stop offset="100%" stopColor="#6938ff" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <line x1={padX / 2} x2={width - padX / 2} y1={plotBottom} y2={plotBottom} stroke="#e8ebf4" />
+      {points.length > 1 && (
+        <>
+          <path d={area} fill={`url(#${gradientId})`} />
+          <path d={line} fill="none" stroke="#6938ff" strokeWidth="2.5" strokeLinejoin="round" />
+        </>
+      )}
+      {points.map(({ key, evaluatedAt }, i) => {
+        const last = i === points.length - 1
+        const active = selected === `round-${key}`
+        const label = `${dateText(evaluatedAt)} ${scoreText(scores[i])}점`
+        return (
+          <g
+            key={key}
+            role="button"
+            tabIndex={0}
+            aria-label={`${label}, 이 시점 카드 보기`}
+            className="cursor-pointer outline-none"
+            onClick={() => select(key)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                select(key)
+              }
+            }}
+          >
+            {/* 점과 날짜 사이 빈 곳을 눌러도 선택되도록 세로 줄 전체를 누르는 영역으로 */}
+            <rect
+              x={x(i) - columnWidth / 2}
+              y={0}
+              width={columnWidth}
+              height={height}
+              fill="transparent"
+            />
+            {last && <circle cx={x(i)} cy={y(scores[i])} r="10" fill="#6938ff" opacity="0.15" />}
+            <circle
+              cx={x(i)}
+              cy={y(scores[i])}
+              r={last || active ? 6 : 4}
+              fill={last || active ? '#6938ff' : '#fff'}
+              stroke={last || active ? '#fff' : '#6938ff'}
+              strokeWidth="2"
+            />
+            <text
+              x={x(i)}
+              y={y(scores[i]) - 11}
+              textAnchor="middle"
+              fontSize="11"
+              fontWeight={last || active ? 700 : 400}
+              fill={last || active ? '#6938ff' : '#647096'}
+            >
+              {scoreText(scores[i])}
+            </text>
+            <text x={x(i)} y={height - 8} textAnchor="middle" fontSize="10" fill="#647096">
+              {dateText(evaluatedAt)}
+            </text>
+          </g>
+        )
+      })}
+    </svg>
   )
 }
