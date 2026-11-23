@@ -155,7 +155,7 @@ cd backend && ./gradlew bootRun
 | `AUTH_CLEANUP_CRON` | `0 0 4 * * *` | 만료된 리프레시·폐기 액세스 토큰 정리 주기(cron), `-`이면 비활성 |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
 | `GEMINI_API_KEY` | (없음) | Gemini API 키(아이디어 종류·키워드 추출). 커밋 금지. 없거나 호출 실패 시 임시 분석기로 대체되어 등록은 계속 동작 |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | 사용 모델. 무료 티어에서 분당 15회·일일 500회라 평가 배치에 맞는다(일반 Flash 계열은 분당 5회·일일 20회) |
 | `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성(테스트 등) |
 | `GEMINI_BASE_URL` / `GEMINI_TIMEOUT_SECONDS` | `https://generativelanguage.googleapis.com` / `10` | Gemini 엔드포인트 / 호출 타임아웃(초) |
 | `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |

@@ -328,7 +328,7 @@ cd CUE/backend
 | `EVALUATION_AUTO_ON_SAVE` | `true` | ACTIVE 저장·내용 수정 시 첫 평가 자동 큐 투입 (테스트는 `false`) |
 | `EVALUATION_QUEUE_CAPACITY` / `EVALUATION_SHUTDOWN_WAIT_SECONDS` | `50` / `30` | 평가 대기열 상한(`E004`) / 종료 시 진행 중 평가 대기(초) |
 | `GEMINI_API_KEY` | (없음) | Gemini API 키. **커밋 금지**, 팀 비밀 채널로 공유. 없으면 호출 없이 `SimpleIdeaAnalyzer` 폴백 |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | 사용 모델 |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | 사용 모델. 무료 티어 한도(AI Studio 확인, 2026-11-23): 3.5·3.1 Flash-Lite는 분당 15회·일일 500회·분당 250K 토큰, 일반 Flash 계열(2.5·3·3.6·3.8 Flash)은 분당 5회·일일 20회라 평가 배치(트렌드 7회 + 아이디어당 최악 14회)에 부족하다. 한도는 모델마다 다르니 모델을 바꾸면 `GEMINI_MIN_INTERVAL_MS`와 하루 호출량 계산을 다시 확인한다 |
 | `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성 |
 | `GEMINI_BASE_URL` / `GEMINI_TIMEOUT_SECONDS` | `https://generativelanguage.googleapis.com` / `10` | 엔드포인트, 연결·읽기 타임아웃(초) |
 
