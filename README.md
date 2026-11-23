@@ -70,7 +70,7 @@ CUE
 - **리프레시 토큰** (로그인 응답에 `refreshToken` 필드가 **추가**됐습니다. 기존 `accessToken`, `tokenType`은 그대로입니다):
   - 액세스 토큰이 만료(`A004`)되면 `POST /api/auth/refresh` 바디 `{"refreshToken": "..."}` 로 새 `accessToken`과 **새 `refreshToken`**을 받습니다. 리프레시 토큰은 **1회용(회전)**이라 응답의 새 값으로 반드시 교체해 저장하세요.
   - 이미 쓴 리프레시 토큰을 다시 보내면 `A010`이며 보안을 위해 그 사용자의 모든 리프레시 토큰이 폐기됩니다 → 재로그인. `A008`(무효)·`A009`(만료, 기본 14일)도 재로그인 처리하면 됩니다.
-  - 로그아웃은 `POST /api/auth/logout` — **액세스 토큰 헤더 필수** + 바디 `{"refreshToken": "..."}`. 서버가 **현재 액세스 토큰을 즉시 무효화**(이후 같은 토큰은 `A005`)하고 바디의 리프레시 토큰을 폐기합니다. **현재 기기만** 로그아웃되며 다른 기기의 로그인은 유지됩니다. 리프레시 토큰이 없거나 이미 폐기됐어도 성공(멱등)입니다. 액세스 토큰이 이미 만료(`A004`)됐다면 먼저 재발급한 뒤 로그아웃하세요. 성공 후 클라이언트에서 두 토큰을 지우세요.
+  - 로그아웃은 `POST /api/auth/logout` — **액세스 토큰 헤더 필수** + 바디 `{"refreshToken": "..."}`. 서버는 바디의 리프레시 토큰을 폐기합니다. **액세스 토큰은 서버가 폐기하지 않아 만료될 때까지 유효**하니, 클라이언트가 지우는 것이 전제입니다. **현재 기기만** 로그아웃되며 다른 기기의 로그인은 유지됩니다. 리프레시 토큰이 없거나 이미 폐기됐어도 성공(멱등)입니다. 액세스 토큰이 이미 만료(`A004`)됐다면 먼저 재발급한 뒤 로그아웃하세요. 성공 후 클라이언트에서 두 토큰을 지우세요.
   - 여러 탭이 동시에 재발급하면 한쪽이 `A010`을 받을 수 있으니 재발급 요청은 한 번에 하나만 보내세요(요청 큐/락).
 - **토큰 재발급 흐름** (axios/fetch 인터셉터 기준):
 
@@ -152,7 +152,7 @@ cd backend && ./gradlew bootRun
 | `JWT_ACCESS_MINUTES` | `60` | 액세스 토큰 유효 시간(분) |
 | `JWT_REFRESH_DAYS` | `14` | 리프레시 토큰 유효 시간(일) |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | CORS 허용 오리진(쉼표 구분). 운영에서는 실제 프론트 도메인으로 제한 |
-| `AUTH_CLEANUP_CRON` | `0 0 4 * * *` | 만료된 리프레시·폐기 액세스 토큰 정리 주기(cron), `-`이면 비활성 |
+| `AUTH_CLEANUP_CRON` | `0 0 4 * * *` | 만료된 리프레시 토큰 정리 주기(cron), `-`이면 비활성 |
 | `DOCKER_COMPOSE_ENABLED` | `false` | DB 컨테이너 자동 기동 여부 (`bootRun`은 자동으로 켬) |
 | `GEMINI_API_KEY` | (없음) | Gemini API 키(아이디어 종류·키워드 추출). 커밋 금지. 없거나 호출 실패 시 임시 분석기로 대체되어 등록은 계속 동작 |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | 사용 모델. 무료 티어에서 분당 15회·일일 500회라 평가 배치에 맞는다(일반 Flash 계열은 분당 5회·일일 20회) |
@@ -196,7 +196,7 @@ cd backend && ./gradlew test
 | POST | `/api/users` | ✕ | 회원가입 |
 | POST | `/api/auth/login` | ✕ | 로그인, 액세스 토큰 + 리프레시 토큰 발급 |
 | POST | `/api/auth/refresh` | ✕ | 리프레시 토큰으로 재발급 (회전: 사용한 토큰은 폐기, 바디 `refreshToken`) |
-| POST | `/api/auth/logout` | ✓ | 로그아웃 — 현재 액세스 토큰 즉시 무효화 + 바디 `refreshToken` 폐기 (현재 기기만, 멱등) |
+| POST | `/api/auth/logout` | ✓ | 로그아웃 — 바디 `refreshToken` 폐기 (현재 기기만, 멱등). 액세스 토큰은 만료까지 유효 |
 | GET | `/api/users/me` | ✓ | 내 정보 |
 | POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
 | GET | `/api/ideas` | ✓ | 리더보드(목록 응답 `data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
@@ -282,7 +282,7 @@ PATCH /api/ideas/1/weights
 | | `A002` | 403 | 접근 권한 없음 |
 | | `A003` | 401 | JWT 형식 오류 |
 | | `A004` | 401 | 액세스 토큰 만료 → 재발급 |
-| | `A005` | 401 | 유효하지 않은 JWT (서명 불일치·변조·잘못된 sub·jti 없음·**로그아웃된 토큰**) |
+| | `A005` | 401 | 유효하지 않은 JWT (서명 불일치·변조·잘못된 sub) |
 | | `A006` | 401 | 토큰 없음 (Authorization 헤더 없음/Bearer 아님) |
 | | `A007` | 401 | 로그인 실패 (이메일·비밀번호 구분 안 함) |
 | | `A008` | 401 | 리프레시 토큰 무효 → 재로그인 |
@@ -321,7 +321,6 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | --- | --- |
 | `users` | 사용자 |
 | `refresh_tokens` | 리프레시 토큰 SHA-256 해시 · 만료 시각 · 폐기 시각 (사용자 FK) |
-| `revoked_access_tokens` | 로그아웃으로 폐기된 액세스 토큰의 `jti` · 토큰 만료 시각 (만료 후 정리 작업이 삭제) |
 | `ideas` | 구조화된 아이디어 · 대분류 `type`(IT)·세부 종류 `it_category` · 상태(`ACTIVE`/`HOLD`) · 검색 키워드(`keywords`, 줄바꿈 구분)와 출처(`keyword_origin`) · 총점 · 최근 변화량 · 확인 시각 · 전체 평가 필요 플래그(`needs_full_evaluation`) · TREND를 마지막으로 평가한 트렌드(`last_trend_id`) · 평가 실행 상태(`evaluation_status`·시작/종료 시각·`last_evaluation_error_code`) |
 | `scores` | 아이디어별 5개 기준 점수 · 가중치 · 변경 예약 가중치(`pending_weight`) |
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜). TREND 평가만 `trend_id`로 그날 트렌드에 연결 |

@@ -40,7 +40,7 @@ trend/        entity (Trend, TrendSource, TrendItem) / repository / service (Glo
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
 
 ## DB (Flyway, `src/main/resources/db/migration`)
-- 마이그레이션은 **`V1__init.sql` 하나뿐**이다 (users, ideas, scores, refresh_tokens, revoked_access_tokens, trends, trend_sources, trend_items, evaluations, evaluation_references, idea_score_histories, sources, source_items).
+- 마이그레이션은 **`V1__init.sql` 하나뿐**이다 (users, ideas, scores, refresh_tokens, trends, trend_sources, trend_items, evaluations, evaluation_references, idea_score_histories, sources, source_items).
 - **스키마가 확정되기 전(개발 중)에는 `V1__init.sql`을 직접 수정한다.** Flyway 이력 관리(`V2__...` 추가)는 스키마가 확정되는 마지막 단계에 시작한다. 그래서 V1이 바뀌면 이미 V1을 적용한 로컬 DB는 체크섬 불일치로 기동이 실패하니, **`docker compose down -v` 후 다시 실행**해 DB를 새로 만든다 (PR 설명에 적는다).
 - `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 V1도 같은 PR에서 고친다.
 
@@ -83,7 +83,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - **범용 예외로 새지 않게 한다**: 실패 경로는 `IllegalArgumentException`/`IllegalStateException`/메시지 없는 던지기 대신 `CustomException(ErrorCode)`로 던진다. 프레임워크 예외(`HttpMediaTypeNotSupportedException` 등)는 `GlobalExceptionHandler`에서 코드로 매핑한다. 새 ErrorCode를 만들면 `GlobalExceptionHandler`/서비스에서 실제로 쓰이는지, Swagger(`@ApiErrors`)에 나열됐는지 확인한다.
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
 - 리프레시 토큰 실패: 무효 `A008` / 만료 `A009` / 재사용 `A010`. 액세스 토큰 만료는 `A004` 유지(프론트 재발급 트리거). 재발급 흐름은 README의 프론트 연동 섹션에 순서도로 정리했다.
-- JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효(변조·jti 없음·로그아웃된 토큰) `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
+- JWT 실패는 원인별로 구분: 형식 오류 `A003` / 만료 `A004` / 무효(변조·서명 불일치·잘못된 sub) `A005` / 토큰 없음 `A006`. 로그인 실패는 이메일 노출 방지를 위해 `A007` 하나.
 - 필터 단계 에러(401/403)는 `SecurityErrorWriter`가 CommonResponse로 응답한다. `Authorization` 헤더가 없거나 `Bearer `로 시작하지 않으면(Basic 등) `A006`, 서명은 맞지만 `sub`가 사용자 ID가 아닌 토큰은 `A005`(`JwtPrincipalConverter`).
 - 입력 검증 실패는 `G004`(`data`에 `[{field, reason}]`), 바디 형식 오류·잘못된 enum 값은 `G003`, Content-Type이 JSON이 아니면 `G007`. 이메일은 가입·로그인 시 trim+소문자로 정규화한다(`UserService.normalizeEmail`; 기존 대문자 데이터가 있으면 DB 초기화). 이메일 동시 가입 경합도 `U001`로 응답한다(`UserService`가 유니크 제약 예외를 변환).
 
@@ -98,11 +98,11 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 ### 인증
 - `POST /api/auth/login` → JWT(access token) + 리프레시 토큰 발급. 클레임: sub=userId, email, nickname. 응답 `{accessToken, tokenType, refreshToken}`.
 - 리프레시 토큰: 랜덤 32바이트(base64url) 불투명 값. **DB에는 SHA-256 해시만** 저장(`refresh_tokens`: user_id FK, token_hash 유니크, expires_at, revoked_at). 유효 시간 `JWT_REFRESH_DAYS`(기본 14).
-- `POST /api/auth/refresh`(바디 `refreshToken`)는 **회전**: 사용된 토큰은 `revoked_at`을 채워 남기고 새 쌍을 발급한다. 폐기된 토큰이 다시 오면 탈취로 보고 그 사용자의 모든 토큰을 폐기하고 `A010` (이 폐기가 커밋되도록 `noRollbackFor = CustomException`). `POST /api/auth/logout`은 **액세스 토큰 필수**: 현재 액세스 토큰의 `jti`를 `revoked_access_tokens`(jti, user_id, expires_at — 토큰 만료 시각까지만 보관)에 넣어 즉시 무효화하고, 바디 `refreshToken`(현재 기기, 본인 소유일 때만)을 폐기한다. 멱등이며 전 기기 로그아웃 옵션은 없다.
-- **액세스 토큰에는 `jti`(UUID) 클레임이 있다.** `SecurityConfig.jwtDecoder`가 기본 검증(서명·만료)에 더해 `jti`가 없거나 폐기 목록에 있으면 거부한다 → `A005`. 개발 단계라 `jti` 없는 옛 토큰은 호환하지 않고 무효 처리한다(배포 후 재로그인 필요). 보호된 요청마다 PK 조회 1회가 추가된다(사용자 정보는 여전히 토큰 클레임에서 복원).
-- 정리: `AuthCleanupScheduler`가 매일 `cue.auth.cleanup.cron`(기본 `0 0 4 * * *`, 환경변수 `AUTH_CLEANUP_CRON`, `-`면 비활성 — 테스트는 비활성) 시각에 만료된 `refresh_tokens`와 `revoked_access_tokens` 행을 지운다. 폐기됐지만 아직 만료 전인 리프레시 행은 재사용 탐지(`A010`)에 필요해 남긴다.
+- `POST /api/auth/refresh`(바디 `refreshToken`)는 **회전**: 사용된 토큰은 `revoked_at`을 채워 남기고 새 쌍을 발급한다. 폐기된 토큰이 다시 오면 탈취로 보고 그 사용자의 모든 토큰을 폐기하고 `A010` (이 폐기가 커밋되도록 `noRollbackFor = CustomException`). `POST /api/auth/logout`은 **액세스 토큰 필수**(헤더)지만 서버는 액세스 토큰을 폐기하지 않고, 바디 `refreshToken`(현재 기기, 본인 소유일 때만)만 폐기한다. 액세스 토큰은 만료까지 유효하므로 클라이언트가 두 토큰을 지운다. 멱등이며 전 기기 로그아웃 옵션은 없다.
+- **액세스 토큰은 stateless JWT다.** `SecurityConfig.jwtDecoder`는 서명·만료만 검증하고 보호된 요청마다 DB를 조회하지 않는다(사용자 정보는 토큰 클레임에서 복원). 로그아웃해도 액세스 토큰은 만료(`JWT_ACCESS_MINUTES`)까지 유효하다 — 즉시 차단이 필요해지면 `jti` 폐기 목록(과거 `revoked_access_tokens`)을 다시 도입한다. 리프레시 토큰은 서버가 관리하므로(회전·재사용 탐지·폐기) 로그아웃 후 새 액세스 토큰은 받을 수 없다.
+- 정리: `AuthCleanupScheduler`가 매일 `cue.auth.cleanup.cron`(기본 `0 0 4 * * *`, 환경변수 `AUTH_CLEANUP_CRON`, `-`면 비활성 — 테스트는 비활성) 시각에 만료된 `refresh_tokens` 행을 지운다. 폐기됐지만 아직 만료 전인 리프레시 행은 재사용 탐지(`A010`)에 필요해 남긴다.
 - CORS: `SecurityConfig.corsConfigurationSource` — `CORS_ALLOWED_ORIGINS`(쉼표 구분, 기본 `http://localhost:5173,http://localhost:3000`), 메서드 GET/POST/PUT/PATCH/DELETE/OPTIONS, 헤더 Authorization/Content-Type/Accept, credentials 미허용(토큰은 헤더·바디).
-- 컨트롤러에서 로그인 사용자는 `@AuthenticationPrincipal UserPrincipal principal` (`id`, `email`, `nickname`)로 받는다. **요청 바디/파라미터로 userId를 받지 않는다.** 사용자 정보는 토큰 클레임에서 복원한다(폐기 여부 확인용 jti 조회 1회만 DB 사용).
+- 컨트롤러에서 로그인 사용자는 `@AuthenticationPrincipal UserPrincipal principal` (`id`, `email`, `nickname`)로 받는다. **요청 바디/파라미터로 userId를 받지 않는다.** 사용자 정보는 토큰 클레임에서 복원한다(요청마다 DB 조회 없음).
 - 인증 없이 열린 경로: `POST /api/users`, `POST /api/auth/login`, `POST /api/auth/refresh`, `/actuator/health/**`, `/v3/api-docs/**`, `/swagger-ui/**`. 나머지는 인증 필요. 열린 경로를 추가하면 `SecurityConfig`를 수정한다.
 - 자신의 리소스만 접근 가능해야 하는 API는 소유자 검사를 한다 (예: `IdeaService.findOwned` → `I002`).
 
@@ -258,7 +258,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | POST | `/api/users` | ✕ | 회원가입 |
 | POST | `/api/auth/login` | ✕ | 로그인 (JWT + 리프레시 토큰 발급) |
 | POST | `/api/auth/refresh` | ✕ | 리프레시 토큰 회전 재발급 |
-| POST | `/api/auth/logout` | ✓ | 로그아웃: 현재 액세스 토큰 즉시 무효화 + 리프레시 토큰 폐기 (현재 기기만) |
+| POST | `/api/auth/logout` | ✓ | 로그아웃: 리프레시 토큰 폐기 (현재 기기만). 액세스 토큰은 만료까지 유효 |
 | GET | `/api/users/me` | ✓ | 내 정보 |
 | POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD). 선택 `keywords`(최대 2개)가 있으면 AI 키워드 추출 생략 |
 | GET | `/api/ideas` | ✓ | 리더보드(`data.items`). `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
