@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import type { Evaluation, Idea, IdeaFields, ScoreType } from '../api/ideas'
 import {
   Button,
+  dateText,
+  deltaText,
   fieldLabels,
   Modal,
   scoreDescriptions,
@@ -171,32 +173,67 @@ export function DocumentModal({
   } catch {
     /* 표시할 링크 없음 */
   }
+  // 평가 직전 점수가 0이면 그 지표의 첫 평가 (상세 화면과 같은 규칙)
+  const label = scoreLabels[evaluation.scoreType]
+  const before = evaluation.scoreAfter - evaluation.difference
+  const firstEvaluation = Math.abs(before) < 0.005
+  // 종합 점수 기여 = 항목 변화량 × 당시 가중치 / 100
+  const contribution = (evaluation.difference * evaluation.weightPercent) / 100
+  const tone =
+    Math.abs(evaluation.difference) < 0.005
+      ? 'text-[#647096]'
+      : tw(evaluation.difference > 0 ? 'positive' : 'negative')
   return (
     <Modal title="근거 문서" close={close} className={tw('document-sheet')}>
-      <h2>근거 문서</h2>
-      <h3>{reference.title || reference.url}</h3>
-      <p className={tw('subcopy')}>
-        {reference.provider} · {new Date(evaluation.evaluatedAt).toLocaleString('ko-KR')} 확인
-      </p>
-      <div className={tw('document-section')}>
-        <strong>점수에 반영한 내용</strong>
-        <p>
-          {scoreLabels[evaluation.scoreType]} · {scoreText(evaluation.scoreAfter)}점 (
-          {evaluation.difference > 0 ? '+' : ''}
-          {scoreText(evaluation.difference)}점)
-        </p>
-        <p>{evaluation.evidenceSummary}</p>
+      <div className="text-[12px] font-bold text-[#6938ff]">근거 문서</div>
+      <h3 className="break-words">{reference.title || reference.url}</h3>
+      <div className="text-[12px] text-[#647096]">
+        {[reference.provider, `${dateText(evaluation.evaluatedAt)} 확인`]
+          .filter(Boolean)
+          .join(' · ')}
       </div>
       {safeUrl && (
         <a
-          className={tw('external-link')}
+          className="mt-2 inline-block text-[13px] font-bold text-[#6938ff] hover:underline"
           href={safeUrl.href}
           target="_blank"
           rel="noopener noreferrer"
         >
-          원문 열기 ↗
+          원문 보기 ↗
         </a>
       )}
+      <div className={tw('document-section')}>
+        <strong>판단 근거</strong>
+        <p>{evaluation.evidenceSummary}</p>
+      </div>
+      <div className="rounded-[14px] bg-[#f5f2ff] p-[15px] text-[13px] leading-relaxed">
+        <strong className="block">점수에 반영된 내용</strong>
+        <div className="mt-2 text-[17px] font-bold text-[#090d3d]">
+          {firstEvaluation
+            ? `${label} ${scoreText(evaluation.scoreAfter)}점`
+            : `${label} ${scoreText(before)} → ${scoreText(evaluation.scoreAfter)}`}
+        </div>
+        {firstEvaluation ? (
+          <div className="mt-1 text-[#647096]">
+            첫 평가에서 {scoreText(evaluation.scoreAfter)}점으로 평가됐어요.
+          </div>
+        ) : (
+          <>
+            <div className={`mt-1 font-bold ${tone}`}>
+              항목 {deltaText(evaluation.difference)}점 · 종합 {deltaText(contribution)}점
+            </div>
+            <div className="mt-1 text-[12px] text-[#647096]">
+              {deltaText(evaluation.difference)}점 × 당시 가중치 {evaluation.weightPercent}% ={' '}
+              {deltaText(contribution)}점
+            </div>
+          </>
+        )}
+      </div>
+      <div className={tw('sheet-actions')}>
+        <Button secondary onClick={close}>
+          닫기
+        </Button>
+      </div>
     </Modal>
   )
 }
