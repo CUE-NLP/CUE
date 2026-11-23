@@ -97,9 +97,19 @@ export default function DetailPage({
     ((previousTotal != null && isZero(previousTotal)) || (!loading && history.length <= 1))
   const showChange = evaluated(idea) && !firstEvaluation && idea.lastDifference != null
   // 가장 최근 평가 회차 = evaluations[0]과 평가 시각이 같은 항목들 (종합 점수 기여가 큰 순서)
-  const latestRound = evaluations
-    .filter((item) => item.evaluatedAt === evaluations[0]?.evaluatedAt)
-    .sort((a, b) => Math.abs(contribution(b)) - Math.abs(contribution(a)))
+  // 최신 회차 순, 같은 회차 안에서는 종합 점수 기여가 큰 순서
+  const sortedEvaluations = [...evaluations].sort(
+    (a, b) =>
+      b.evaluatedAt.localeCompare(a.evaluatedAt) ||
+      Math.abs(contribution(b)) - Math.abs(contribution(a)),
+  )
+  const latestRound = sortedEvaluations.filter(
+    (item) => item.evaluatedAt === sortedEvaluations[0]?.evaluatedAt,
+  )
+  // 근거 자료 탭: 모든 평가의 근거 문서를 한 장씩 카드로
+  const allReferences = sortedEvaluations.flatMap((item) =>
+    item.references.map((reference, index) => ({ reference, item, key: `${item.id}-${index}` })),
+  )
   const latestReferences = latestRound.flatMap((item) =>
     item.references.map((reference, index) => ({ reference, item, key: `${item.id}-${index}` })),
   )
@@ -311,26 +321,41 @@ export default function DetailPage({
           <>
             <h2>평가에 반영된 문서</h2>
             <p className={tw('subcopy')}>문서를 누르면 판단 근거와 점수 반영을 확인해요.</p>
-            {evaluations.flatMap((item) =>
-              item.references.map((ref, index) => (
-                <button
-                  className={tw('source-card')}
-                  key={`${item.id}-${index}`}
-                  onClick={() => document(ref, item)}
-                >
-                  <small>
-                    {dateText(item.evaluatedAt)} 확인 · {ref.provider}
-                  </small>
-                  <strong>{ref.title || ref.url}　→</strong>
-                  <span>
-                    {scoreLabels[item.scoreType]} {deltaText(item.difference)}점
-                  </span>
-                  <p>{item.evidenceSummary}</p>
-                </button>
-              )),
-            )}
-            {evaluations.every((item) => item.references.length === 0) && (
-              <div className={tw('empty-state')}>연결된 근거 문서가 없습니다.</div>
+            {allReferences.map(({ reference, item, key }) => (
+              <button
+                className={`${tw('source-card')} grid-cols-1`}
+                key={key}
+                onClick={() => document(reference, item)}
+              >
+                <small>
+                  {dateText(item.evaluatedAt)} 확인
+                  {reference.provider && ` · ${reference.provider}`}
+                </small>
+                <strong className="line-clamp-2 break-words">
+                  {reference.title || reference.url}
+                </strong>
+                <span>
+                  {isFirstEvaluation(item) ? (
+                    `${scoreLabels[item.scoreType]} 첫 평가 ${scoreText(item.scoreAfter)}점`
+                  ) : (
+                    <>
+                      {changeText(item)}{' '}
+                      <b className={deltaClass(contribution(item))}>
+                        · 종합 {deltaText(contribution(item))}점
+                      </b>
+                    </>
+                  )}
+                </span>
+                <p className="truncate">{item.evidenceSummary}</p>
+                <span className="font-bold">문서와 변경 근거 보기 →</span>
+              </button>
+            ))}
+            {allReferences.length === 0 && (
+              <div className={tw('empty-state')}>
+                {evaluated(idea)
+                  ? '연결된 근거 문서가 없어요.'
+                  : '평가가 끝나면 근거 문서가 여기에 보여요.'}
+              </div>
             )}
           </>
         ) : (
