@@ -225,7 +225,10 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
         String token = signUpAndLogin("ok-" + System.nanoTime() + "@cue.com");
         Long ideaId = e.ownsIdea() ? createIdea(token) : 1L;
         String code = mapper.readTree(call(e, ideaId, token).andReturn().getResponse().getContentAsString()).get("code").asString();
-        assertEquals("200", code, e + " 는 본인 토큰으로 성공해야 한다");
+        // 구조화는 이 테스트 환경에서 비활성화된 Gemini가 필요하다.
+        String expectedCode = e.path().equals("/api/ideas/structure")
+                ? ErrorCode.AI_NOT_CONFIGURED.getCode() : "200";
+        assertEquals(expectedCode, code, e + " 는 인증 검사를 통과해야 한다");
     }
 
     @ParameterizedTest(name = "{0}")
