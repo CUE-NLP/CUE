@@ -354,6 +354,6 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 
 ### React 프론트엔드 실행
 
-`frontend/`에 React + TypeScript + Vite 앱이 있습니다. DB와 백엔드를 켠 뒤 `cd frontend && npm install && npm run dev`로 http://localhost:5173 에서 접속합니다. 구현 범위는 회원가입, 로그인, 키보드·음성 받아쓰기, 네 항목 확인 후 아이디어 저장, 평가 요청과 평가 중 화면, 리더보드(순위·변화 지표·스파크라인), 평가 상세(평가 결과·근거 문서·이력 그래프), 구조화 수정·가중치 예약·변화 알림, 로그아웃입니다. 팀 설정은 `EVALUATION_AUTO_ON_SAVE=false`라 저장만으로는 평가되지 않고, 저장 결과 화면의 "평가 요청하기"나 새벽 3시 배치로 평가됩니다. 폴더별 규칙은 [frontend/AGENTS.md](frontend/AGENTS.md)를 참고하세요.
+`frontend/`에 React + TypeScript + Vite 앱이 있습니다. DB와 백엔드를 켠 뒤 `cd frontend && npm install && npm run dev`로 http://localhost:5173 에서 접속합니다. 구현 범위는 회원가입, 로그인, 키보드·음성 받아쓰기, 원문 자동 구조화(`POST /api/ideas/structure`)와 네 항목 확인 후 아이디어 저장, 평가 요청과 평가 중 화면, 리더보드(순위·변화 지표·스파크라인), 평가 상세(평가 결과·근거 문서·이력 그래프), 구조화 수정·가중치 예약·변화 알림, 로그아웃입니다. 팀 설정은 `EVALUATION_AUTO_ON_SAVE=false`라 저장만으로는 평가되지 않고, 저장 결과 화면의 "평가 요청하기"나 새벽 3시 배치로 평가됩니다. 폴더별 규칙은 [frontend/AGENTS.md](frontend/AGENTS.md)를 참고하세요.
 
 평가 결과 화면은 `lastEvaluatedAt`이 없는 0점 상태를 미평가로 표시하며, `POST /api/ideas/{id}/evaluate` 요청과 상태 조회를 지원합니다.
