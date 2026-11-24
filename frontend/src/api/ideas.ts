@@ -41,6 +41,15 @@ export type Evaluation = {
   evaluatedAt: string
   references: { url: string; title: string; provider: string }[]
 }
+// 원문을 네 항목으로 나눈 미리보기 (서버는 저장하지 않는다). 원문에 근거가 없는 항목은 빈 문자열로 온다
+export type StructureResult = IdeaFields & {
+  complete: boolean
+  missingFields: ('TARGET' | 'PROBLEM' | 'SOLUTION' | 'EXPECTATION')[]
+  itCategory: string | null
+  keywords: string[]
+}
+export const structureIdea = (text: string) =>
+  request<StructureResult>('/api/ideas/structure', 'POST', { text })
 export const createIdea = (fields: IdeaFields) =>
   request<Idea>('/api/ideas', 'POST', { type: 'IT', ...fields })
 export const getIdea = (id: number) => request<Idea>(`/api/ideas/${id}`)

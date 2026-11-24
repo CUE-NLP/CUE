@@ -16,13 +16,21 @@ export default function ReviewPage({
   save: () => void
   busy: boolean
 }) {
+  // 원문에 근거가 없어 AI가 비워 둔 칸(또는 사용자가 지운 칸)을 알려 준다
+  const empty = fieldLabels.filter(({ key }) => !fields[key].trim()).map(({ label }) => label)
   return (
     <section className={tw('review-screen')}>
       <Brand back={back} />
       <h2>내가 적은 아이디어</h2>
-      <blockquote>{raw}</blockquote>
+      {/* 네 칸이 길어져도 원문 상자가 높이 0으로 줄어들지 않게 한다 (길면 상자 안에서 스크롤) */}
+      <blockquote className="shrink-0">{raw}</blockquote>
       <h1>이렇게 이해했어요</h1>
       <p className={tw('subcopy')}>의도와 다르면 수정해 주세요.</p>
+      {empty.length > 0 && (
+        <p className="m-0 rounded-xl bg-[#fff6e5] px-3.5 py-2.5 text-[13px] leading-normal text-[#8a5a00]">
+          비어 있는 항목: {empty.join(', ')}. 채워야 평가를 받을 수 있어요.
+        </p>
+      )}
       <div className={tw('field-list')}>
         {fieldLabels.map(({ key, label, hint }, index) => (
           <label className={tw('field-card')} key={key}>
