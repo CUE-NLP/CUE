@@ -54,12 +54,14 @@ export default function InputPage({
   setRaw,
   back,
   review,
+  busy,
   onError,
 }: {
   raw: string
   setRaw: (next: string | ((old: string) => string)) => void
   back: () => void
   review: () => void
+  busy: boolean
   onError: (error: unknown) => void
 }) {
   const [mode, setMode] = useState<Mode>('keyboard'),
@@ -133,10 +135,14 @@ export default function InputPage({
   return (
     <section className={tw('input-screen')}>
       <Brand
-        back={() => {
-          stop()
-          back()
-        }}
+        back={
+          busy
+            ? undefined
+            : () => {
+                stop()
+                back()
+              }
+        }
       />
       <h1 className="font-bold">
         {mode === 'voice' ? '어떤 생각이 떠올랐나요?' : '떠오른 생각을 적어보세요'}
@@ -148,6 +154,7 @@ export default function InputPage({
             className={tw(mode === 'keyboard' ? 'selected' : '')}
             aria-label="키보드 입력"
             aria-pressed={mode === 'keyboard'}
+            disabled={busy}
             onClick={() => {
               stop()
               setMode('keyboard')
@@ -159,6 +166,7 @@ export default function InputPage({
             className={tw(mode === 'voice' ? 'selected' : '')}
             aria-label="음성 입력"
             aria-pressed={mode === 'voice'}
+            disabled={busy}
             onClick={() => setMode('voice')}
           >
             <MicIcon size={18} />
@@ -169,6 +177,7 @@ export default function InputPage({
         <textarea
           className={tw('idea-input')}
           aria-label="아이디어 내용"
+          disabled={busy}
           maxLength={5000}
           placeholder="혼자 외국어 회화를 연습할 때 대화 상대를 구하기 어려워요. AI 캐릭터와 실시간으로 대화하면서 부담 없이 연습할 수 있으면 좋겠어요."
           value={raw}
@@ -205,6 +214,7 @@ export default function InputPage({
           <button
             className={tw('mic-button')}
             aria-label={recording ? '녹음 중지' : '녹음 시작'}
+            disabled={busy}
             onClick={recording ? stop : start}
           >
             {recording ? '■' : <MicIcon size={32} />}
@@ -221,14 +231,16 @@ export default function InputPage({
       <div className={tw('bottom-actions')}>
         <Button
           // 구조화 버튼은 입력이 비어 있으면 누를 수 없다 (녹음 시작·녹음 마치기 버튼은 그대로 눌린다)
-          disabled={!recording && !(mode === 'voice' && !raw) && !raw.trim()}
+          disabled={busy || (!recording && !(mode === 'voice' && !raw) && !raw.trim())}
           onClick={mode === 'voice' && !raw && !recording ? start : next}
         >
-          {mode === 'voice' && !raw && !recording
-            ? '녹음 시작'
-            : recording
-              ? '녹음 마치고 확인'
-              : '구조화 결과 확인하기 →'}
+          {busy
+            ? '아이디어 정리 중…'
+            : mode === 'voice' && !raw && !recording
+              ? '녹음 시작'
+              : recording
+                ? '녹음 마치고 확인'
+                : '구조화 결과 확인하기 →'}
         </Button>
       </div>
     </section>

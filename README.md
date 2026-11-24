@@ -16,7 +16,7 @@ React 화면은 `frontend/src/pages/`, 재사용 UI·모달은 `frontend/src/com
 ## 핵심 흐름
 
 1. **기록**: 텍스트·음성으로 자유롭게 입력 (음성은 프론트에서 STT 후 전달)
-2. **구조화**: 원문을 `POST /api/ideas/structure`로 보내면 서버가 AI로 타깃·문제·해결·기대효과 4개 항목으로 정리(저장 안 함) → **사용자가 검증·수정한 뒤에만 서버에 저장**. 4개가 모두 채워지면 평가 대상(`ACTIVE`), 하나라도 비면 `보류(HOLD)`로 저장됩니다.
+2. **구조화**: 원문을 `POST /api/ideas/structure`로 보내 추천 제목과 타깃·문제·해결·기대효과를 받습니다. 사용자가 확인·수정한 뒤 저장하며, 네 항목의 완성도로 평가 대상(`ACTIVE`)과 보류(`HOLD`)를 구분합니다.
 3. **평가**: 5개 기준으로 점수화합니다.
    - **키워드 근거 자료**로 판단하는 4개: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성
    - **글로벌 트렌드**로 판단하는 1개: **트렌디함(`TREND`)** — 아이디어와 무관하게 하루 1회 모은 Hacker News · GitHub · Hugging Face 급상승 자료를 아이디어에 대입해 판단
@@ -61,7 +61,7 @@ CUE
 
 ## 프론트가 맡는 역할
 - 아이디어 입력(텍스트·음성): **음성 인식(STT)은 프론트에서 처리**하고, 서버에는 텍스트만 보냅니다.
-- 원문을 `POST /api/ideas/structure`로 보내 AI 구조화(타깃 · 문제 · 해결 · 기대효과) 결과를 받고, 사용자 확인·수정 후 저장 요청 (구조화 API는 저장하지 않습니다. 항목이 비어 있으면 `complete=false`이고 그대로 저장하면 `보류`입니다. 실패(`E006` 등)하면 사용자가 직접 입력하게 안내)
+- 구조화 확인 화면에서 추천 제목과 네 항목을 수정할 수 있습니다. 구조화 API는 미리보기만 반환하며, 실패하면 직접 입력할 수 있습니다. 리더보드와 상세 화면은 저장한 제목을 보여 주며, 제목이 없으면 해결 방법이나 문제에서 짧은 표시용 제목을 만듭니다.
 - 리더보드(점수 · 순위 · 변화량), Idea Delta, 항목별 가중치 조절 화면 (**슬라이더 5개**: 4개 근거 기준 + 트렌디함)
 
 ## 백엔드 연동 참고
@@ -208,11 +208,11 @@ cd backend && ./gradlew test
 | POST | `/api/auth/refresh` | ✕ | 리프레시 토큰으로 재발급 (회전: 사용한 토큰은 폐기, 바디 `refreshToken`) |
 | POST | `/api/auth/logout` | ✓ | 로그아웃 — 바디 `refreshToken` 폐기 (현재 기기만, 멱등). 액세스 토큰은 만료까지 유효 |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas/structure` | ✓ | 원문(`text`, 최대 5000자)을 AI로 **구조화만** 한다(저장·원문 보관 없음). 응답 `data`: `target`·`problem`·`solution`·`expectation`(근거 없으면 빈 문자열), `complete`, `missingFields`, `itCategory`·`keywords`(complete일 때만, 참고용). 고치지 않고 저장하면 서버가 이 종류·키워드를 재사용해 AI를 덜 호출. 쿨다운 `I006`, AI 바쁨 `E006`, Gemini 불가 `E001`, 응답 해석 불가 `E002` |
-| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
-| GET | `/api/ideas` | ✓ | 리더보드(목록 응답 `data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
-| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태 · 항목별 점수 · 가중치 · 최근 변화량 · `hasNewChange`) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출. `keywords`: 생략=유지(출처가 AI면 재추출), `[]`=사용자 키워드 삭제 후 AI 재추출, 1~2개=교체. **평가가 대기(`QUEUED`)·진행(`RUNNING`) 중이면 `409 I005`로 거절** (`IDLE`·`FAILED`면 가능) |
+| POST | `/api/ideas/structure` | ✓ | 원문(`text`, 최대 5000자)의 미리보기. `title`(최대 60자), `target`·`problem`·`solution`·`expectation`, `complete`, `missingFields`, `itCategory`·`keywords`를 반환. 네 항목을 그대로 저장하면 서버가 종류·키워드를 재사용. 쿨다운 `I006`, AI 바쁨 `E006`, Gemini 불가 `E001`, 응답 해석 불가 `E002` |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어와 선택 필드 `title`(최대 60자) 저장. 네 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
+| GET | `/api/ideas` | ✓ | 저장된 `title`을 포함한 리더보드 목록(`data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
+| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (저장된 `title` · 상태 · 구조화 항목 · 점수 · 가중치 · 최근 변화량) |
+| PATCH | `/api/ideas/{id}` | ✓ | `{"title":"새 제목"}`으로 제목만 수정하면 AI 호출·소스 재등록·재평가가 발생하지 않음. 네 항목·검색 키워드 변경은 기존 평가 규칙 적용. `keywords`: 생략=유지, `[]`=AI 재추출, 1~2개=교체. 평가 대기·진행 중이면 `409 I005` |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순, 목록 응답 `data.items`) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순, 목록 응답 `data.items`) |
@@ -329,6 +329,8 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 ## 데이터베이스
 
 스키마는 Flyway(`backend/src/main/resources/db/migration`)로 관리합니다. **스키마가 확정되기 전까지는 `V1__init.sql` 하나를 수정해서 쓰고**, 확정 후에 새 버전 파일을 추가합니다. V1이 바뀐 PR을 받으면 `docker compose down -v` 후 다시 실행해 DB를 새로 만들어 주세요.
+
+아이디어 제목 추가는 `ideas.title`(선택, 최대 60자)을 `V1__init.sql`에 반영합니다. 이미 V1을 적용한 로컬 DB는 기존 데이터를 보존할 필요가 있는지 확인한 뒤 초기화합니다.
 
 | 테이블 | 설명 |
 | --- | --- |

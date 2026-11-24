@@ -54,7 +54,9 @@ public class IdeaService {
         var user = users.findById(userId).orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND));
         List<String> keywords = normalizeKeywords(req.keywords());
         IdeaType type = req.type() != null ? req.type() : IdeaType.IT;
-        Idea idea = ideas.save(new Idea(user, type, req.problem(), req.target(), req.solution(), req.expectation()));
+        Idea idea = new Idea(user, type, req.problem(), req.target(), req.solution(), req.expectation());
+        idea.rename(req.title());
+        ideas.save(idea);
         if (!keywords.isEmpty()) {
             idea.applyKeywords(keywords, KeywordOrigin.USER);
         }
@@ -66,28 +68,31 @@ public class IdeaService {
     }
 
     /**
-     * 아이디어를 수정한다. 모두 채워진 상태(ACTIVE)면 종류·키워드를 다시 추출한다. 재평가는 평가 단계에서 처리한다.
+     * 아이디어를 수정한다. 제목만 바꾸면 분류·자료 수집과 평가 상태는 유지한다.
      * 평가가 대기(QUEUED)·진행(RUNNING) 중이면 {@code I005}로 거절한다. 행을 잠근 채 상태를 확인하고 수정하므로, 평가를 시작하는 쪽의
      * 상태 전이(조건부 UPDATE)는 이 트랜잭션이 끝날 때까지 기다린다: 평가가 먼저 시작됐으면 수정이 거절되고, 수정이 먼저면 평가는 수정된 내용으로 시작한다.
      */
     @Transactional
     public IdeaResponse update(Long userId, Long ideaId, UpdateIdeaRequest req) {
         Idea idea = findOwnedForUpdate(userId, ideaId); // I001 → I002 → I005 순서로 검사
+        idea.rename(req.title());
         List<String> keywordsBefore = idea.keywordList();
         boolean contentChanged = idea.edit(req.problem(), req.target(), req.solution(), req.expectation());
         if (req.keywords() != null) {
             // 1개 이상이면 교체(USER), 빈 배열이면 사용자 키워드를 지우고 아래에서 AI로 다시 추출한다 (HOLD면 저장만).
             idea.applyKeywords(normalizeKeywords(req.keywords()), KeywordOrigin.USER);
-            if (!keywordsBefore.equals(idea.keywordList())) {
-                idea.markContentChanged(); // 검색 키워드가 바뀌면 근거 자료가 달라지므로 첫 평가부터 다시
-                contentChanged = true;
-            }
         }
-        if (idea.isActive()) {
+        boolean keywordsChanged = !keywordsBefore.equals(idea.keywordList());
+        boolean resetKeywords = req.keywords() != null && req.keywords().isEmpty();
+        if (idea.isActive() && (contentChanged || keywordsChanged || resetKeywords)) {
             extractAndRegisterSources(idea);
-            if (contentChanged) { // HOLD → ACTIVE 포함. 내용이 그대로면 평가를 다시 시작하지 않는다
-                events.publishEvent(new IdeaEvaluationRequested(idea.getId()));
-            }
+            keywordsChanged = keywordsChanged || !keywordsBefore.equals(idea.keywordList());
+        }
+        if (keywordsChanged) {
+            idea.markContentChanged();
+        }
+        if (idea.isActive() && (contentChanged || keywordsChanged)) {
+            events.publishEvent(new IdeaEvaluationRequested(idea.getId()));
         }
         return toResponse(idea);
     }
@@ -217,7 +222,7 @@ public class IdeaService {
                         evaluations.findFirstByScoreIdOrderByCreatedAtDesc(s.getId())
                                 .map(e -> e.getDifference()).orElse(null)))
                 .toList();
-        return new IdeaResponse(idea.getId(), idea.getType(), idea.getItCategory(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
+        return new IdeaResponse(idea.getId(), idea.getTitle(), idea.getType(), idea.getItCategory(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
                 idea.getSolution(), idea.getExpectation(), idea.getTotalScore(), idea.getLastDifference(),
                 idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores,
                 idea.keywordList(), idea.getKeywordOrigin(), idea.getEvaluationStatus(), idea.getLastEvaluationErrorCode());

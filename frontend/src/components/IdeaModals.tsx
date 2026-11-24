@@ -1,6 +1,13 @@
 import { tw } from '../tailwindStyles'
 import { useEffect, useState } from 'react'
-import type { Evaluation, Idea, IdeaFields, ScoreType } from '../api/ideas'
+import {
+  getIdeas,
+  IDEA_TITLE_MAX_LENGTH,
+  type Evaluation,
+  type Idea,
+  type IdeaFields,
+  type ScoreType,
+} from '../api/ideas'
 import {
   Button,
   dateText,
@@ -13,7 +20,6 @@ import {
   scoreTypes,
   scoreText,
 } from './ui'
-import { getIdeas } from '../api/ideas'
 
 export function WeightsPicker({
   close,
@@ -45,7 +51,7 @@ export function WeightsPicker({
       <div className={tw('picker-list')}>
         {ideas.map((idea) => (
           <button key={idea.id} onClick={() => choose(idea)}>
-            {idea.solution || idea.problem || '내 아이디어'}　→
+            {ideaTitle(idea)}　→
           </button>
         ))}
         {ideas.length === 0 && <p className={tw('subcopy')}>평가할 아이디어가 없어요.</p>}
@@ -126,6 +132,7 @@ export function EditModal({
   busy: boolean
 }) {
   const [original] = useState<IdeaFields>(() => ({
+    title: idea.title || '',
     target: idea.target || '',
     problem: idea.problem || '',
     solution: idea.solution || '',
@@ -139,6 +146,9 @@ export function EditModal({
       .filter(({ key }) => fields[key] !== original[key])
       .map(({ key }) => [key, fields[key]]),
   )
+  const hasContentChange = Object.keys(changed).length > 0
+  const titleChanged = fields.title.trim() !== original.title.trim()
+  if (titleChanged) changed.title = fields.title.trim()
   const hasChange = Object.keys(changed).length > 0
   // 하나라도 비어 있으면 백엔드가 보류(HOLD)로 바꾸고, 모두 채워진 채 내용이 바뀌면 다음 평가에서 처음부터 다시 평가한다
   const hasEmpty = fieldLabels.some(({ key }) => !fields[key].trim())
@@ -147,22 +157,37 @@ export function EditModal({
         text: '평가 중에는 수정할 수 없어요. 평가가 끝난 뒤 다시 시도해 주세요.',
         tone: 'bg-[#f5f2ff] text-[#5b4bb7]',
       }
-    : hasEmpty
+    : titleChanged && !fields.title.trim()
       ? {
-          text: '비어 있는 항목이 있으면 보류 상태가 되고 평가가 멈춰요.',
+          text: '제목을 입력해 주세요.',
           tone: 'bg-[#fff6e8] text-[#b0620c]',
         }
-      : hasChange
+      : hasContentChange && hasEmpty
         ? {
-            text: '저장한 내용은 다음 평가 때 점수에 반영돼요.',
-            tone: 'bg-[#f5f2ff] text-[#5b4bb7]',
+            text: '비어 있는 항목이 있으면 보류 상태가 되고 평가가 멈춰요.',
+            tone: 'bg-[#fff6e8] text-[#b0620c]',
           }
-        : null
+        : hasContentChange
+          ? {
+              text: '저장한 내용은 다음 평가 때 점수에 반영돼요.',
+              tone: 'bg-[#f5f2ff] text-[#5b4bb7]',
+            }
+          : null
   return (
     <Modal title="구조화 항목 수정" close={close} className={tw('edit-sheet')}>
       <h2>구조화 항목 수정</h2>
       <p className={tw('subcopy')}>내용을 수정한 뒤 저장하세요.</p>
       <div className={tw('edit-fields')}>
+        <label className="text-[15px]! text-[#090d3d]">
+          아이디어 제목
+          <input
+            className="w-full rounded-xl border border-[#c9b8ff] px-3 py-2"
+            maxLength={IDEA_TITLE_MAX_LENGTH}
+            placeholder="짧은 제목을 입력해 주세요"
+            value={fields.title}
+            onChange={(event) => setFields((old) => ({ ...old, title: event.target.value }))}
+          />
+        </label>
         {fieldLabels.map(({ key, label }) => (
           <label key={key} className="text-[15px]! text-[#090d3d]">
             {label}
@@ -187,7 +212,10 @@ export function EditModal({
         <Button secondary onClick={close}>
           취소
         </Button>
-        <Button disabled={busy || evaluating || !hasChange} onClick={() => save(changed)}>
+        <Button
+          disabled={busy || evaluating || !hasChange || changed.title === ''}
+          onClick={() => save(changed)}
+        >
           {busy ? '저장 중…' : '저장'}
         </Button>
       </div>
@@ -363,7 +391,7 @@ export function SettingsModal({
 export function SummaryModal({ idea, close }: { idea: Idea; close: () => void }) {
   return (
     <Modal title="포트폴리오 카드 요약" close={close} className={tw('summary-sheet')}>
-      <h2>{idea.solution || idea.problem || '내 아이디어'}</h2>
+      <h2>{ideaTitle(idea)}</h2>
       <strong className={tw('summary-score')}>
         {idea.lastEvaluatedAt ? `${scoreText(idea.totalScore)}점` : '평가 전'}
       </strong>

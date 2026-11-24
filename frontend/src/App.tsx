@@ -8,6 +8,7 @@ import {
   getIdea,
   getIdeas,
   markIdeaChecked,
+  structureIdea,
   updateIdea,
   updateWeights,
   type Evaluation,
@@ -53,13 +54,20 @@ type Overlay =
   | 'settings'
   | 'summary'
   | null
-const emptyFields: IdeaFields = { target: '', problem: '', solution: '', expectation: '' }
+const emptyFields: IdeaFields = {
+  title: '',
+  target: '',
+  problem: '',
+  solution: '',
+  expectation: '',
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>(authStore.get() ? 'home' : 'welcome')
   const [user, setUser] = useState<User | null>(null),
     [selected, setSelected] = useState<Idea | null>(null)
   const [raw, setRaw] = useState(''),
+    [reviewedText, setReviewedText] = useState(''),
     [fields, setFields] = useState<IdeaFields>({ ...emptyFields })
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
@@ -116,12 +124,36 @@ export default function App() {
   }
   function startIdea() {
     setRaw('')
+    setReviewedText('')
     setFields({ ...emptyFields })
     navigate('input')
   }
-  function beginReview() {
-    setFields((old) => ({ ...old, problem: old.problem || raw.trim() }))
-    navigate('review')
+  async function beginReview() {
+    const text = raw.trim()
+    if (!text || busy) return
+    if (text === reviewedText) {
+      navigate('review')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const { title, target, problem, solution, expectation } = await structureIdea(text)
+      setFields({ title: title ?? '', target, problem, solution, expectation })
+      setReviewedText(text)
+      navigate('review')
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) {
+        fail(cause)
+        return
+      }
+      setFields({ ...emptyFields, problem: text.slice(0, 5000) })
+      setReviewedText(text)
+      navigate('review')
+      setError('자동으로 정리하지 못했어요. 제목과 내용을 직접 입력할 수 있어요.')
+    } finally {
+      setBusy(false)
+    }
   }
   async function saveIdea() {
     setBusy(true)
@@ -166,8 +198,8 @@ export default function App() {
     setError('')
     try {
       const saved = await updateIdea(selected.id, next)
-      // 내용이 바뀐 ACTIVE 아이디어는 저장 직후 백엔드가 평가를 대기열에 넣지만 응답은 그 전 상태라 한 번 더 받는다
-      setSelected(await getIdea(saved.id).catch(() => saved))
+      const titleOnly = next.title !== undefined && Object.keys(next).length === 1
+      setSelected(titleOnly ? saved : await getIdea(saved.id).catch(() => saved))
       setOverlay(null)
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === 'I005') {
@@ -257,13 +289,14 @@ export default function App() {
             raw={raw}
             setRaw={setRaw}
             back={() => navigate('home')}
-            review={beginReview}
+            review={() => void beginReview()}
+            busy={busy}
             onError={fail}
           />
         )}
         {page === 'review' && (
           <ReviewPage
-            raw={raw}
+            raw={reviewedText}
             fields={fields}
             setFields={setFields}
             back={() => navigate('input')}

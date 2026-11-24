@@ -128,15 +128,15 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 평가 저장은 `EvaluationRecorder.recordChanges(ideaId, changes)` 하나로 한다: 항목별 `Evaluation`(+출처) 저장 → 총점 재계산 → `Idea.lastDifference/lastEvaluatedAt` 갱신 → `IdeaScoreHistory` 스냅샷. 0~100 제한 때문에 실제로 안 바뀐 항목은 건너뛴다. `HOLD` 아이디어는 `I004`.
 
 ### 보류(HOLD)와 등록·수정 흐름
-- `POST /api/ideas`: 4개 항목이 모두 채워지면 `ACTIVE`, 하나라도 비면 `HOLD`. 클라이언트가 status를 보내지 않는다.
+- `POST /api/ideas`: 표시용 `title`은 선택이며 최대 60자다. 네 구조화 항목이 모두 채워지면 `ACTIVE`, 하나라도 비면 `HOLD`. 클라이언트가 status를 보내지 않는다. 제목은 `ideas.title`에 저장하며 해결 문장(`solution`)은 별도로 유지한다.
 - `ACTIVE`일 때만 `IdeaAnalyzer`로 IT 세부 종류·키워드를 추출하고 `sources`를 만든다. HOLD는 AI를 호출하지 않고 일일 평가에서도 제외한다.
-- `PATCH /api/ideas/{id}`: 보낸 항목만 수정(null 유지, 빈 문자열은 비움). 수정 뒤 `ACTIVE`면 종류·키워드를 다시 추출해 `sources`를 교체한다(평가 근거로 연결된 행은 유지, 해시는 초기화). HOLD → ACTIVE가 되면 같은 파이프라인을 탄다. **수정으로 내용·검색 키워드가 실제로 바뀌면 `needs_full_evaluation`이 켜지고 커밋 뒤 첫 평가가 자동 큐에 들어간다(아래 "비동기 평가 실행"). 평가가 대기·진행 중이면 수정은 `I005`.**
+- `PATCH /api/ideas/{id}`: 보낸 항목만 수정한다. 제목이 생략 또는 null이면 유지하고, 공백뿐이거나 60자를 넘으면 `G004`다. **제목만 수정하면 분류·키워드 추출, 소스 교체, 평가 요청을 모두 건너뛴다.** 구조화 항목은 빈 문자열로 비울 수 있다. 내용·검색 키워드가 바뀐 `ACTIVE` 아이디어는 소스를 교체하고 전체 평가 대상으로 표시한다. 자동 평가 설정이 켜져 있으면 커밋 뒤 큐에 들어간다. 평가가 대기·진행 중이면 수정은 `I005`.
 - `IdeaAnalyzer`는 `GeminiIdeaAnalyzer`(`@Primary`)가 구현한다: `GeminiClient`의 **인터랙티브 레인**(`generateJson(INTERACTIVE, system, user, schema)`)으로 호출하고 `responseMimeType=application/json` + `responseSchema`(`itCategory` enum 4개, keywords 1~2개; AI는 대분류 type을 분류하지 않는다)로 구조화 응답을 받아 `IdeaAnalysis`로 파싱한다. 알 수 없는 세부 종류는 `DEV_TOOLS_INFRA`, 키워드는 공백·중복 제거 후 2개까지(영어 검색어, 한글이 섞이면 경고 로그).
 - **실패 방침: 폴백.** 호출 실패·타임아웃·파싱 실패·API 키 없음이면 `SimpleIdeaAnalyzer`(세부 종류 `DEV_TOOLS_INFRA`, 긴 단어 2개)로 대체한다. 근거: 키워드 추출은 등록의 부가 단계이고 AI 장애 때문에 사용자가 쓴 아이디어 저장이 실패하면 안 된다. 내부적으로는 `requestAnalysis()`가 `G002`(`EXTERNAL_SERVER_ERROR`)를 던지고 `analyze()`가 잡아 로그(warn)만 남긴다. 폴백 결과는 품질이 낮으므로 이후 수정(PATCH) 시 다시 추출된다.
 - 설정은 `cue.gemini.*`(`GEMINI_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_BASE_URL`, `GEMINI_TIMEOUT_SECONDS`, 인터랙티브 레인 `GEMINI_INTERACTIVE_*`). `enabled=false`면 `GeminiIdeaAnalyzer` 빈이 없어 `SimpleIdeaAnalyzer`만 쓴다. 통합 테스트는 `cue.gemini.enabled=false`.
 
 ### 구조화 API와 AI 레인 (`idea`, `global/ai`)
-- **API**: `POST /api/ideas/structure` 본문 `{text}`(1~5000자, 공백만이면 `G004`). 응답 `{target, problem, solution, expectation, complete, missingFields, itCategory, keywords}`. **저장하지 않고 원문도 남기지 않는다**(미리보기). 저장은 사용자가 확인·수정한 뒤 기존 `POST /api/ideas`. 실패(`E001`·`E002`·`E006`·`G002`)면 프론트는 사용자가 4칸을 직접 채워 저장하게 안내한다.
+- **API**: `POST /api/ideas/structure` 본문 `{text}`(1~5000자, 공백만이면 `G004`). 응답 `{title, target, problem, solution, expectation, complete, missingFields, itCategory, keywords}`. 한 번의 호출로 제목도 제안하며 서버에서 한 줄 60자로 제한한다. 제목은 `complete` 판정과 분류 캐시 키에서 제외한다. **저장하지 않고 원문도 남기지 않는다**(미리보기). 확인·수정 뒤 기존 `POST /api/ideas`로 저장한다. 구조화에 실패하면 직접 작성할 수 있다.
 - **빈칸 판정은 서버 코드가 한다**: AI는 프롬프트로 "원문에 근거가 없으면 빈 문자열, 추측 금지"를 지시받고, 서버는 `trim` 후 비었거나 "없음·해당 없음·N/A·-" 같은 자리표시 값이면 빈칸으로 본다(`IdeaStructuringService.clean`). 하나라도 비면 `complete=false`, `missingFields`(TARGET/PROBLEM/SOLUTION/EXPECTATION)에 담고 종류·키워드는 버린다(그대로 저장하면 기존 규칙대로 HOLD). 항목은 저장 한도 5000자로 자른다.
 - **호출 1번으로 구조화 + 종류·키워드 후보**: 응답 스키마에 `itCategory`·`keywords`를 같이 받는다(분류 기준·키워드 규칙은 `GeminiIdeaAnalyzer.SYSTEM_PROMPT`의 해당 구간을 그대로 잘라 써서 규칙이 갈라지지 않는다). 4칸이 다 찼을 때만 결과를 `AnalysisCache`(사용자 ID + 4개 항목 해시 키, TTL)에 넣고, `IdeaService.extractAndRegisterSources`가 같은 사용자·같은 내용이면 **AI를 다시 부르지 않고 재사용**한다(사용자 키워드가 있으면 종류만 재사용). 한 글자라도 고치면 해시가 달라져 평소처럼 다시 추출한다. 클라이언트가 보낸 값이 아니라 서버가 만든 AI 결과만 쓰므로 신뢰 문제가 없고, 폴백(임시 분석기) 결과는 넣지 않는다.
 - **같은 원문 캐시·쿨다운**: 같은 사용자·같은 원문(trim)은 `cue.structuring.cache-ttl-minutes`(기본 10) 동안 결과를 재사용해 AI를 부르지 않고 쿨다운도 쓰지 않는다. 새 원문은 사용자별 `cue.structuring.cooldown-seconds`(기본 3) 안에 다시 보내면 `I006`(429). Gemini 불가 `E001`은 쿨다운을 소비하지 않는다. 캐시·쿨다운은 인스턴스 메모리다(재시작·다중 인스턴스에서 공유 안 됨).
@@ -149,7 +149,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 요청 `keywords`(선택, `POST /api/ideas`·`PATCH /api/ideas/{id}`): 최대 2개, 각 항목 trim 후 1~50자, 빈 문자열 불가, 중복은 제거, 언어 제한 없음. 위반은 `G004`(DTO `@Size`/`@NotBlank` 검증, PATCH에도 `@Valid`).
 - 등록: ACTIVE이고 키워드가 없거나 `[]`이면 `IdeaAnalyzer.analyze`로 종류·키워드(출처 `AI`) 추출. 사용자 키워드가 있으면(출처 `USER`) 키워드 추출은 건너뛰고 `IdeaAnalyzer.analyzeCategory`로 **세부 종류만** 분류한다(검색 provider 조합이 세부 종류에 의존). Gemini는 type만 받는 경량 스키마/프롬프트(`TYPE_ONLY_NOTICE`)를 쓰고 실패하면 `DEV_TOOLS_INFRA` 폴백.
 - 수정: `keywords` 생략(null)이면 유지. 단 출처가 `AI`(또는 없음)면 ACTIVE에서 기존대로 재추출, `USER`면 내용이 바뀌어도 유지. `[]`는 사용자 키워드를 지우고 AI 재추출, 1~2개는 교체(출처 `USER`). HOLD는 키워드를 저장만 하고 sources·AI 호출 없이, ACTIVE가 될 때 위 규칙을 적용한다.
-- `sources`는 종류별 provider × 키워드(최대 2개)로 새로 만든다. 응답 `IdeaResponse`에 `type`(IT)·`itCategory`·`keywords`(없으면 `[]`)·`keywordOrigin`. 수정(PATCH) 시 ACTIVE면 세부 종류도 다시 분류한다.
+- `sources`는 종류별 provider × 키워드(최대 2개)로 만든다. 응답 `IdeaResponse`에 표시용 `title`·`type`(IT)·`itCategory`·`keywords`(없으면 `[]`)·`keywordOrigin`을 담는다. ACTIVE 상태에서 평가에 쓰는 내용이나 키워드가 바뀌거나 키워드 재추출을 요청했을 때 소스를 다시 등록한다.
 - AI 키워드 프롬프트 규칙: 영어 검색어 1~2개, 각 1~3단어, 아이디어 전체를 대표(한 항목에 치우치지 않음), 너무 일반적이지 않게. 한글이 섞여 오면 경고 로그만 남기고 그대로 쓴다.
 ### 일일 재평가 (`evaluation`)
 - **진입점**: 스케줄러 `EvaluationScheduler`(`@Scheduled`, 기본 `0 0 3 * * *` Asia/Seoul) → `DailyEvaluationBatch.runAll()` → ACTIVE 아이디어 id마다 `EvaluationQueueService.executeBatch(id)` → `IdeaEvaluationPipeline.evaluate(id)`. 수동 `POST /api/ideas/{id}/evaluate`와 저장 직후 자동 평가는 `EvaluationQueueService.submit`으로 큐에 넣어 같은 평가 실행을 탄다. HOLD는 대상에서 제외(수동은 `I004`).
@@ -269,10 +269,11 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | POST | `/api/auth/refresh` | ✕ | 리프레시 토큰 회전 재발급 |
 | POST | `/api/auth/logout` | ✓ | 로그아웃: 리프레시 토큰 폐기 (현재 기기만). 액세스 토큰은 만료까지 유효 |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 (모두 채워지면 ACTIVE + 키워드 추출, 비면 HOLD). 선택 `keywords`(최대 2개)가 있으면 AI 키워드 추출 생략 |
-| GET | `/api/ideas` | ✓ | 리더보드(`data.items`). `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
-| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태·점수·가중치·최근 변화량·hasNewChange) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (ACTIVE면 출처가 AI일 때 키워드 재추출). `keywords`: 생략=유지, `[]`=삭제 후 AI, 1~2개=교체. 평가가 대기·진행 중이면 `I005`(409) |
+| POST | `/api/ideas/structure` | ✓ | 원문에서 제목과 네 항목을 제안하는 미리보기 |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어와 선택 `title` 저장. 네 항목이 모두 채워지면 ACTIVE, 비면 HOLD. 선택 `keywords`(최대 2개)가 있으면 AI 키워드 추출 생략 |
+| GET | `/api/ideas` | ✓ | 제목을 포함한 리더보드 목록(`data.items`). `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
+| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (제목·상태·점수·가중치·최근 변화량·hasNewChange) |
+| PATCH | `/api/ideas/{id}` | ✓ | 제목만 수정하면 분류·소스 재등록·평가를 건너뜀. `keywords`: 생략=유지, `[]`=삭제 후 AI, 1~2개=교체. 평가가 대기·진행 중이면 `I005`(409) |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 가중치 변경 예약 (5개 기준 모두, 합 100) |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 (새 변화 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순, `data.items`) |

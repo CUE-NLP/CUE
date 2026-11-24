@@ -29,7 +29,7 @@ import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.ObjectMapper;
 
 class IdeaStructuringServiceTest {
-    private static final String FULL = "{\"target\":\"개발자\",\"problem\":\"아이디어가 잊힌다\",\"solution\":\"구조화해 저장한다\","
+    private static final String FULL = "{\"title\":\"아이디어 기록 도구\",\"target\":\"개발자\",\"problem\":\"아이디어가 잊힌다\",\"solution\":\"구조화해 저장한다\","
             + "\"expectation\":\"우선순위를 정한다\",\"itCategory\":\"DEV_TOOLS_INFRA\",\"keywords\":[\"idea scoring\",\"startup validation\",\"x\"]}";
 
     private static class FakeClock extends Clock {
@@ -66,6 +66,7 @@ class IdeaStructuringServiceTest {
         StructureIdeaResponse r = service.structure(1L, "  원문  ");
 
         assertThat(r.complete()).isTrue();
+        assertThat(r.title()).isEqualTo("아이디어 기록 도구");
         assertThat(r.missingFields()).isEmpty();
         assertThat(r.target()).isEqualTo("개발자");
         assertThat(r.itCategory()).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
@@ -115,6 +116,18 @@ class IdeaStructuringServiceTest {
         respond("{\"target\":\"" + "가".repeat(6000) + "\",\"problem\":\"p\",\"solution\":\"s\",\"expectation\":\"e\","
                 + "\"itCategory\":\"AI_ML\",\"keywords\":[\"a b\"]}");
         assertThat(service.structure(1L, "원문").target()).hasSize(5000);
+    }
+
+    @Test
+    void 제목을_제안하지_못하면_해결_항목을_한줄_60자로_제한한다() {
+        respond("{\"title\":\"없음\",\"solution\":\"질문 정리\\n도구 " + "가".repeat(70) + "\"}");
+
+        StructureIdeaResponse result = service.structure(1L, "원문");
+
+        assertThat(result.title()).startsWith("질문 정리 도구 ").hasSize(60);
+        assertThat(result.solution()).contains("\n").hasSizeGreaterThan(60);
+        assertThat(result.missingFields()).containsExactly("TARGET", "PROBLEM", "EXPECTATION");
+        verify(gemini).generateJson(eq(AiLane.INTERACTIVE), anyString(), anyString(), anyMap());
     }
 
     @Test
@@ -184,6 +197,7 @@ class IdeaStructuringServiceTest {
         service.structure(1L, "원문");
 
         Idea same = new Idea(null, IdeaType.IT, "아이디어가 잊힌다", "개발자", "구조화해 저장한다", "우선순위를 정한다");
+        same.rename("사용자가 고친 제목");
         IdeaAnalysis hit = analysisCache.find(1L, same);
         assertThat(hit).isNotNull();
         assertThat(hit.itCategory()).isEqualTo(ItCategory.DEV_TOOLS_INFRA);

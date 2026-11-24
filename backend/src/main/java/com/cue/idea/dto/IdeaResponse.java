@@ -20,6 +20,8 @@ import java.util.List;
 @Schema(description = "아이디어 상세/리더보드 항목")
 public record IdeaResponse(
         @Schema(description = "아이디어 ID", example = "1") Long id,
+        @Schema(description = "표시용 제목 (저장된 제목이 없으면 null)", example = "아이디어 경쟁력 추적기", nullable = true)
+        String title,
         @Schema(description = "대분류. 현재 항상 IT", example = "IT") IdeaType type,
         @Schema(description = "IT 세부 종류. 항상 AI가 판단하며 외부 자료 검색 API 조합을 정한다. ACTIVE 등록·수정 시 다시 판단하며, 판단 전(HOLD)에는 기본값 DEV_TOOLS_INFRA. "
                 + "AI_ML=AI·머신러닝, DEV_TOOLS_INFRA=개발자 도구·인프라, WEB_APP_SERVICE=웹·앱 서비스, DATA_ANALYTICS=데이터·분석",

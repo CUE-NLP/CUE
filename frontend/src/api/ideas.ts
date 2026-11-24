@@ -14,6 +14,7 @@ export type Score = {
 }
 export type Idea = {
   id: number
+  title: string | null
   status: 'ACTIVE' | 'HOLD'
   problem: string | null
   target: string | null
@@ -29,7 +30,14 @@ export type Idea = {
   keywords: string[]
   createdAt: string
 }
-export type IdeaFields = { target: string; problem: string; solution: string; expectation: string }
+export const IDEA_TITLE_MAX_LENGTH = 60
+export type IdeaFields = {
+  title: string
+  target: string
+  problem: string
+  solution: string
+  expectation: string
+}
 export type IdeaHistory = { evaluatedAt: string; totalScore: number; totalDifference: number }
 export type Evaluation = {
   id: number
@@ -41,8 +49,10 @@ export type Evaluation = {
   evaluatedAt: string
   references: { url: string; title: string; provider: string }[]
 }
-export const createIdea = (fields: IdeaFields) =>
-  request<Idea>('/api/ideas', 'POST', { type: 'IT', ...fields })
+export const structureIdea = (text: string) =>
+  request<IdeaFields>('/api/ideas/structure', 'POST', { text })
+export const createIdea = ({ title, ...fields }: IdeaFields) =>
+  request<Idea>('/api/ideas', 'POST', { type: 'IT', ...fields, title: title.trim() || undefined })
 export const getIdea = (id: number) => request<Idea>(`/api/ideas/${id}`)
 export const getIdeas = (status: 'ACTIVE' | 'HOLD', sort: 'TOTAL' | 'RECENT_RISE' = 'TOTAL') =>
   request<{ items: Idea[]; count: number }>(`/api/ideas?status=${status}&sort=${sort}`)

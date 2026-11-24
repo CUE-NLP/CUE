@@ -1,8 +1,10 @@
 package com.cue.idea.dto;
 
+import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 
@@ -17,6 +19,8 @@ public record CreateIdeaRequest(
         @Schema(description = "아이디어 대분류. 항상 IT이므로 생략해도 된다 (IT 세부 종류 itCategory는 AI가 판단해 응답에 담긴다)",
                 example = "IT", defaultValue = "IT")
         IdeaType type,
+        @Schema(description = "표시용 제목 (선택, 최대 60자)", example = "아이디어 경쟁력 추적기", nullable = true)
+        @Size(max = Idea.TITLE_MAX_LENGTH) @Pattern(regexp = "(?U)[^\\r\\n]*\\S[^\\r\\n]*") String title,
         @Schema(description = "문제: 해결하려는 문제 (최대 5000자, 비우면 HOLD)", example = "개인이 떠올린 아이디어가 시장 변화에 맞게 재평가되지 않고 잊힌다.")
         @Size(max = 5000) String problem,
         @Schema(description = "타깃: 대상 사용자 (최대 5000자, 비우면 HOLD)", example = "사이드 프로젝트를 구상하는 개발자와 예비 창업자")

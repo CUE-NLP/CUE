@@ -73,6 +73,35 @@ class AuthIdeaFlowTest {
     }
 
     @Test
+    void 제목만_수정하면_목록에_반영되고_해결_문장과_소스를_유지한다() throws Exception {
+        String token = signUpAndLogin("title@cue.com");
+        long id = createIdea(token, "{\"title\":\"질문 도구\",\"problem\":\"p\",\"target\":\"t\","
+                + "\"solution\":\"질문이 있는 개발자를 위해 흩어진 답변을 한 화면으로 모은다.\",\"expectation\":\"e\"}");
+        var sourceIds = sourceRepository.findByIdeaId(id).stream().map(com.cue.source.entity.Source::getId).sorted().toList();
+        org.mockito.Mockito.clearInvocations(analyzerSpy);
+
+        patchIdea(token, id, "{\"title\":\"  개발 질문 노트  \"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("개발 질문 노트"))
+                .andExpect(jsonPath("$.data.solution").value("질문이 있는 개발자를 위해 흩어진 답변을 한 화면으로 모은다."));
+        mvc.perform(get("/api/ideas").header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].title").value("개발 질문 노트"));
+        mvc.perform(get("/api/ideas/" + id).header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("개발 질문 노트"));
+
+        for (String invalid : new String[] {"  ", "가".repeat(61)}) {
+            patchIdea(token, id, "{\"title\":\"" + invalid + "\"}")
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("G004"));
+        }
+        org.mockito.Mockito.verifyNoInteractions(analyzerSpy);
+        org.junit.jupiter.api.Assertions.assertFalse(sourceIds.isEmpty());
+        org.junit.jupiter.api.Assertions.assertEquals(sourceIds,
+                sourceRepository.findByIdeaId(id).stream().map(com.cue.source.entity.Source::getId).sorted().toList());
+    }
+
+    @Test
     void 다른_사용자의_아이디어는_조회할_수_없다() throws Exception {
         String owner = signUpAndLogin("owner@cue.com");
         String other = signUpAndLogin("other@cue.com");

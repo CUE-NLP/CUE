@@ -22,6 +22,7 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Idea {
+    public static final int TITLE_MAX_LENGTH = 60;
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -43,6 +44,9 @@ public class Idea {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private IdeaStatus status;
+
+    @Column(length = TITLE_MAX_LENGTH)
+    private String title;
 
     @Column(columnDefinition = "TEXT")
     private String problem;
@@ -133,6 +137,13 @@ public class Idea {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** 제목은 표시용이므로 평가 상태를 변경하지 않는다. */
+    public void rename(String title) {
+        if (title != null) {
+            this.title = title.strip();
+        }
     }
 
     /**

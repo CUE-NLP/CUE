@@ -7,6 +7,9 @@ import java.util.List;
 @Schema(description = "구조화 결과. 저장은 하지 않는다. 사용자가 확인·수정한 뒤 `POST /api/ideas`로 저장한다. "
         + "원문에 근거가 없는 항목은 AI가 채우지 않고 빈 문자열로 돌려주며, 하나라도 비면 `complete=false`다(저장하면 HOLD).")
 public record StructureIdeaResponse(
+        @Schema(description = "원문을 바탕으로 제안한 제목 (최대 60자, 만들 수 없으면 빈 문자열)",
+                example = "아이디어 경쟁력 추적기")
+        String title,
         @Schema(description = "타깃: 누구를 위한 아이디어인가 (근거가 없으면 빈 문자열)", example = "혼자 창업을 준비하는 개발자")
         String target,
         @Schema(description = "문제: 타깃이 겪는 문제 (근거가 없으면 빈 문자열)", example = "사이드 프로젝트 아이디어가 정리되지 않고 잊힌다.")
