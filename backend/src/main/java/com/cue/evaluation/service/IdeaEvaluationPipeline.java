@@ -38,8 +38,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <p>하루 평가는 서로 독립인 두 갈래다.
  * <ul>
- *   <li><b>A. 키워드 근거 자료 → 기존 4개 기준</b>: 아이디어 종류별 source를 키워드로 조회해 해시로 변경을 감지하고, 변경된 source마다
- *       상위 N개 원문을 읽어 정리한 발췌({@link SourceExcerptService}, AI 호출 없음)를 한 번의 평가 호출에 넣어 전체 평가 요청이면 초기 평가, 아니면 재평가 ({@link EvidenceEvaluator})</li>
+ *   <li><b>A. 키워드 근거 자료 → 기존 4개 기준</b>: 전체 평가는 조회에 성공한 모든 source를, 일반 재평가는 변경된 source만 쓴다.
+ *       대상 source의 상위 N개 원문 발췌({@link SourceExcerptService}, AI 호출 없음)를 모아 한 번 평가한다 ({@link EvidenceEvaluator}).</li>
  *   <li><b>B. 글로벌 트렌드 → TREND</b>: 그날의 글로벌 트렌드({@link GlobalTrendService#today()}, 아이디어와 무관)를 아이디어 4항목에 대입해
  *       첫 평가(0~100) 또는 재평가(±10) ({@link TrendEvaluator}). 이 아이디어가 이미 그 트렌드로 평가됐으면 호출하지 않는다</li>
  * </ul>
@@ -85,8 +85,8 @@ public class IdeaEvaluationPipeline {
 
         TrendSnapshot trend = globalTrend.today(); // 그날 첫 호출에서만 수집·요약, 만들지 못하면 null (B 건너뜀)
         Map<Long, PreviousHash> previous = previousHashes(ideaId);
-        List<SourceCheckResult> changed = sourceCheckService.checkAll(ideaId).stream()
-                .filter(SourceCheckResult::changed).toList();
+        List<SourceCheckResult> checked = sourceCheckService.checkAll(ideaId);
+        List<SourceCheckResult> changed = checked.stream().filter(SourceCheckResult::changed).toList();
 
         boolean runA = !changed.isEmpty() || snapshot.needsFullEvaluation();
         boolean runB = trend != null && !trend.id().equals(snapshot.lastTrendId()) && trendDue(snapshot, trend);
@@ -101,7 +101,10 @@ public class IdeaEvaluationPipeline {
 
         if (runA) {
             try {
-                changes.addAll(evaluateEvidence(snapshot, changed));
+                List<SourceCheckResult> evidence = snapshot.needsFullEvaluation()
+                        ? checked.stream().filter(result -> result.status() != SourceCheckResult.Status.FAILED).toList()
+                        : changed;
+                changes.addAll(evaluateEvidence(snapshot, evidence));
                 fullDone = snapshot.needsFullEvaluation();
             } catch (RuntimeException e) {
                 restoreHashes(changed, previous); // 다음 실행에서 같은 변경을 다시 감지한다
@@ -138,9 +141,9 @@ public class IdeaEvaluationPipeline {
         return EvaluationRunResult.evaluated(updated);
     }
 
-    /** A: 변경된 source의 원문 발췌를 만들어(AI 호출 없음) 기존 4개 기준을 한 번의 호출로 평가한다. */
-    private List<ScoreChange> evaluateEvidence(IdeaSnapshot snapshot, List<SourceCheckResult> changed) {
-        List<SourceCheckResult> enriched = changed.stream().map(sourceExcerptService::excerpt).toList();
+    /** A: 대상 source의 원문 발췌를 만들어(AI 호출 없음) 기존 4개 기준을 한 번의 호출로 평가한다. */
+    private List<ScoreChange> evaluateEvidence(IdeaSnapshot snapshot, List<SourceCheckResult> evidence) {
+        List<SourceCheckResult> enriched = evidence.stream().map(sourceExcerptService::excerpt).toList();
         return snapshot.needsFullEvaluation()
                 ? analyzer.initialEvaluate(snapshot, enriched)
                 : analyzer.reEvaluate(snapshot, enriched);

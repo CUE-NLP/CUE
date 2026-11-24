@@ -1,0 +1,100 @@
+package com.cue.evaluation;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.cue.evaluation.dto.EvaluationRunResult;
+import com.cue.evaluation.service.EvaluationRecorder;
+import com.cue.evaluation.service.EvidenceEvaluator;
+import com.cue.evaluation.service.IdeaEvaluationPipeline;
+import com.cue.evaluation.service.TrendEvaluator;
+import com.cue.global.ai.GeminiClient;
+import com.cue.global.ai.PromptLoader;
+import com.cue.idea.entity.Idea;
+import com.cue.idea.entity.IdeaType;
+import com.cue.idea.repository.IdeaRepository;
+import com.cue.source.client.SourceClient;
+import com.cue.source.config.SourceApiProperties;
+import com.cue.source.dto.SourceItem;
+import com.cue.source.entity.ApiProvider;
+import com.cue.source.entity.Source;
+import com.cue.source.repository.SourceRepository;
+import com.cue.source.service.SourceCheckService;
+import com.cue.source.service.SourceExcerptService;
+import com.cue.source.service.SourceHasher;
+import com.cue.trend.service.GlobalTrendService;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.json.JsonMapper;
+
+class FullEvaluationEvidenceTest {
+    @Test
+    void 전체_평가는_기존_해시와_같은_자료도_쓰고_일반_재평가는_변경된_자료만_쓴다() {
+        long ideaId = 1L;
+        var idea = new Idea(null, IdeaType.IT, "문제", "타깃", "해결책", "기대 효과");
+        var ideas = mock(IdeaRepository.class);
+        when(ideas.findById(ideaId)).thenReturn(Optional.of(idea));
+
+        var first = new SourceItem("GitHub 자료", "https://example.test/github", "설명");
+        var second = new SourceItem("Stack Exchange 자료", "https://example.test/stack", "설명");
+        var githubSource = new Source(idea, ApiProvider.GITHUB, "keyword");
+        var stackSource = new Source(idea, ApiProvider.STACK_EXCHANGE, "keyword");
+        githubSource.updateHash(SourceHasher.hash(List.of(first)));
+        stackSource.updateHash(SourceHasher.hash(List.of(second)));
+        var sources = mock(SourceRepository.class);
+        when(sources.findByIdeaId(ideaId)).thenReturn(List.of(githubSource, stackSource));
+
+        var github = mock(SourceClient.class);
+        when(github.provider()).thenReturn(ApiProvider.GITHUB);
+        when(github.search("keyword")).thenReturn(List.of(first));
+        var stack = mock(SourceClient.class);
+        when(stack.provider()).thenReturn(ApiProvider.STACK_EXCHANGE);
+        when(stack.search("keyword")).thenReturn(List.of(second));
+        var sourceProps = mock(SourceApiProperties.class);
+        when(sourceProps.topN()).thenReturn(5);
+        when(sourceProps.excerptChars()).thenReturn(800);
+
+        var tx = mock(TransactionTemplate.class);
+        when(tx.execute(any())).thenAnswer(call -> ((TransactionCallback<?>) call.getArgument(0)).doInTransaction(null));
+        var gemini = mock(GeminiClient.class);
+        when(gemini.available()).thenReturn(true);
+        var prompts = new ArrayList<String>();
+        var mapper = JsonMapper.builder().build();
+        when(gemini.generateJson(anyString(), anyMap())).thenAnswer(call -> {
+            String prompt = call.getArgument(0);
+            prompts.add(prompt);
+            return mapper.readTree(prompt.contains("[자료 목록]") ? "{\"scores\":[]}" : "{\"changes\":[]}");
+        });
+        var clients = List.of(github, stack);
+        var pipeline = new IdeaEvaluationPipeline(ideas, sources, new SourceCheckService(sources, clients),
+                mock(EvaluationRecorder.class), new EvidenceEvaluator(gemini, new PromptLoader()),
+                mock(TrendEvaluator.class), mock(GlobalTrendService.class), new SourceExcerptService(clients, sourceProps),
+                gemini, tx, null, null);
+
+        pipeline.evaluate(ideaId);
+        assertEquals(1, prompts.size());
+        assertTrue(prompts.getFirst().contains(first.url()));
+        assertTrue(prompts.getFirst().contains(second.url()));
+
+        idea.completeFullEvaluation();
+        assertEquals(EvaluationRunResult.Status.NO_CHANGE, pipeline.evaluate(ideaId).status());
+        assertEquals(1, prompts.size());
+
+        var replacement = new SourceItem("새 GitHub 자료", "https://example.test/new", "새 설명");
+        when(github.search("keyword")).thenReturn(List.of(replacement));
+        pipeline.evaluate(ideaId);
+        assertEquals(2, prompts.size());
+        assertTrue(prompts.getLast().contains(replacement.url()));
+        assertFalse(prompts.getLast().contains(second.url()));
+    }
+}

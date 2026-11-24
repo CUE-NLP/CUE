@@ -29,7 +29,7 @@ public class SourceCheckService {
         clientList.forEach(c -> clients.put(c.provider(), c));
     }
 
-    /** source 하나를 조회한다. 변경이면 결과의 items는 이번 조회의 상위 목록 전체다. 외부 오류·미지원 provider는 예외로 던진다 (해시·시각은 그대로). */
+    /** source 하나를 조회한다. 성공하면 변경 여부와 함께 이번 조회의 상위 목록을 돌려준다. 외부 오류·미지원 provider는 예외로 던진다 (해시·시각은 그대로). */
     public SourceCheckResult check(Long sourceId) {
         Source source = sourceRepository.findById(sourceId)
                 .orElseThrow(() -> new CustomException(ErrorCode.SOURCE_NOT_FOUND));
@@ -69,14 +69,12 @@ public class SourceCheckService {
             throw new CustomException(ErrorCode.SOURCE_PROVIDER_NOT_SUPPORTED);
         }
         List<SourceItem> items = client.search(source.getKeyword());
-        // 변경 = 상위 항목의 해시가 달라짐. 변경이면 상위 목록 전체를 돌려주고 호출하는 쪽이 다시 읽는다.
-        // 첫 조회(이전 해시 없음)도 해시를 기록하면서 항목을 함께 돌려준다: 첫 평가가 이 항목을 근거로 써야 하기 때문이다.
-        // (예전에는 첫 조회를 "변경 없음"으로 처리해 항목을 버려서, 첫 평가에 외부 자료가 하나도 들어가지 않았다.)
+        // 첫 조회와 해시가 바뀐 조회를 CHANGED로 구분한다. 전체 평가를 위해 해시가 같은 경우에도 항목을 돌려준다.
         boolean first = source.getContentHash() == null;
         boolean changed = source.updateHash(SourceHasher.hash(items));
         sourceRepository.save(source);
         return changed || first
                 ? SourceCheckResult.changed(source.getId(), source.getProvider(), source.getKeyword(), items, source.getCheckedAt())
-                : SourceCheckResult.unchanged(source.getId(), source.getProvider(), source.getKeyword(), source.getCheckedAt());
+                : SourceCheckResult.unchanged(source.getId(), source.getProvider(), source.getKeyword(), items, source.getCheckedAt());
     }
 }
