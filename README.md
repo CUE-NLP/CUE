@@ -326,7 +326,7 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 
 ## 데이터베이스
 
-스키마는 Flyway(`backend/src/main/resources/db/migration`)로 관리합니다. **스키마가 확정되기 전까지는 `V1__init.sql` 하나를 수정해서 쓰고**, 확정 후에 새 버전 파일을 추가합니다. V1이 바뀐 PR을 받으면 `docker compose down -v` 후 다시 실행해 DB를 새로 만들어 주세요.
+스키마는 Flyway(`backend/src/main/resources/db/migration`)로 관리합니다. **스키마는 2026-11-24에 확정했고 `V1__init.sql`은 수정하지 않습니다.** 변경은 `V2__*.sql`부터 새 파일로 추가하며 기존 데이터를 지키며 자동 적용됩니다. 확정 이전 구조로 만든 로컬 DB만 `docker compose down -v` 후 다시 실행해 한 번 새로 만들어 주세요.
 
 | 테이블 | 설명 |
 | --- | --- |
