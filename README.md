@@ -6,7 +6,7 @@ Frontend는 Tailwind CSS v4(`@tailwindcss/vite`)로 스타일링한다. 기존 �
 
 ## 프론트엔드 화면 구성
 
-React 화면은 `frontend/src/pages/`, 재사용 UI·모달은 `frontend/src/components/`, 서버 요청은 `frontend/src/api/`에 분리되어 있다. 시작·인증·키보드/음성 입력·구조화 확인·리더보드·저장 결과·평가 상세(점수·근거·이력)와 가중치 설정·구조화 수정·근거 문서·변화 알림·포트폴리오 카드 화면을 제공한다. 리더보드 정렬, 평가 이력, 아이디어 수정, 가중치 예약, 새 변화 확인은 백엔드 API와 연결된다. 평가 결과를 피그마의 예시 점수로 채우지 않는다.
+React 화면은 `frontend/src/pages/`, 재사용 UI·모달은 `frontend/src/components/`, 서버 요청은 `frontend/src/api/`에 분리되어 있다. 시작·인증·키보드/음성 입력·구조화 확인·리더보드·저장 결과·평가 상세(점수·근거·이력)와 가중치 설정·구조화 수정·근거 문서·변화 알림·포트폴리오 카드 화면을 제공한다. 원문 자동 구조화, 리더보드 정렬, 평가 이력, 아이디어 수정, 가중치 예약, 새 변화 확인은 백엔드 API와 연결된다. 평가 결과를 피그마의 예시 점수로 채우지 않는다.
 
 > 잠들어 있던 아이디어, 그 가능성의 무게를 재다
 
@@ -91,7 +91,7 @@ API 호출 (Authorization: Bearer {accessToken})
   - 인증이 필요 없는 API는 회원가입(`POST /api/users`)·로그인·재발급 세 개뿐이고, 나머지 `/api/**`(로그아웃 포함)는 모두 액세스 토큰이 필요합니다. 본인 소유가 아닌 아이디어는 `403 I002`, 없는 아이디어는 `404 I001`입니다. 이메일은 소문자로 정규화되므로 대소문자 구분 없이 가입·로그인합니다.
 - **에러 처리**: `code` 값으로 분기합니다. 토큰 만료는 `A004`입니다. 전체 목록은 [에러 코드](#에러-코드)를 참고하세요.
 - **5개 기준(`TREND` 추가) — 프론트 영향**: `scores`가 아이디어마다 **5행**(`PROBLEM_IMPORTANCE`·`MARKET_DEMAND`·`MARKET_DIFFERENTIATION`·`TECH_FEASIBILITY`·`TREND`)으로 내려오고 가중치 기본값은 각 20%입니다. 가중치 슬라이더를 4개 → 5개로 늘리고, `PATCH /api/ideas/{id}/weights` 요청에 `TREND`를 **반드시 포함**해야 합니다(5개 모두 필요, 합 100). 예전 4개짜리 요청은 `I003`으로 거절됩니다. `/evaluations`의 `scoreType`에도 `TREND`가 나옵니다.
-- **평가는 비동기입니다 (프론트 흐름)**: 아이디어를 저장(`POST /api/ideas`, ACTIVE)하거나 내용을 수정(`PATCH`)하면 서버가 커밋 뒤 **첫 평가를 자동으로 큐에 넣습니다**(`EVALUATION_AUTO_ON_SAVE`). 프론트는 "가능성을 분석하고 있어요" 로딩 화면에서 `GET /api/ideas/{id}`를 **몇 초 간격으로 폴링**하고, `evaluationStatus`가 `IDLE`이면 점수를 보여주고 `FAILED`면 `lastEvaluationErrorCode`로 안내합니다. **평가가 끝날 때까지(`QUEUED`/`RUNNING`) 그 아이디어는 수정할 수 없습니다**(`PATCH`가 `I005`). 저장 직후 자동 평가가 시작되면 로딩 화면 동안 수정 버튼을 비활성화하고, `I005`가 오면 "평가가 끝난 뒤 다시 시도해 주세요"로 안내하세요. 가중치 예약(`/weights`)과 확인 처리(`/check`)는 평가 중에도 됩니다. 수동으로 다시 돌리려면 `POST /api/ideas/{id}/evaluate`(즉시 `202`)를 호출하고 같은 방식으로 폴링합니다.
+- **평가는 비동기입니다 (프론트 흐름)**: “확인하고 평가하기”로 아이디어를 저장한 뒤 서버가 `ACTIVE`를 반환하면 프론트는 `POST /api/ideas/{id}/evaluate`로 바로 평가를 요청합니다(`202`). `HOLD`면 저장만 합니다. 프론트는 평가 대기·진행 중 `GET /api/ideas/{id}`로 상태를 조회하고, 실패 시 `lastEvaluationErrorCode`로 안내합니다. 평가 중에는 수정할 수 없으며(`I005`), 가중치 예약(`/weights`)과 확인 처리(`/check`)는 가능합니다. 서버 자동 평가를 켠 경우(`EVALUATION_AUTO_ON_SAVE=true`)에도 제목만 수정하면 평가 요청이 발생하지 않습니다.
   - `evaluationStatus`: `IDLE`(대기·완료) → `QUEUED`(대기열) → `RUNNING`(평가 중) → `IDLE`(완료, 점수·`hasNewChange` 갱신) 또는 `FAILED`(`lastEvaluationErrorCode`에 `G002` 등). `FAILED`는 다시 요청하면 재시도됩니다. 보류(HOLD) 아이디어와 평가 전 상태는 `IDLE`입니다.
   - 서버는 평가를 한 번에 하나씩만 돌리므로 대기열이 길면 `QUEUED`가 오래 갈 수 있고(수 분), 대기열이 가득 차면 요청이 `E004`로 거절됩니다. 서버 재시작으로 중단된 평가는 `FAILED`(`E005`)가 됩니다.
 - **시연용 버튼 흐름**: 서버를 `DEMO_API_ENABLED=true`로 띄운 뒤 화면의 "지금 조회·평가" 버튼이 `POST /api/demo/evaluations/run`(변화를 눈으로 보여주려면 `{"force": true}`)을 호출 → `202`를 받으면 `queued`의 아이디어마다 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링 → `evaluationStatus`가 `IDLE`이면 점수·`hasNewChange` 갱신 표시, `FAILED`면 에러 코드 안내. `D001`이면 버튼을 숨기고, `D002`는 잠시 뒤 다시 누르도록 안내합니다. **주의**: `force`는 호출 수가 많아(아이디어마다 최대 수십 회) Gemini 무료 한도를 빨리 소진합니다. 큐에 들어간 아이디어는 평가가 끝날 때까지 수정할 수 없습니다(`I005`).
@@ -356,6 +356,6 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 
 ### React 프론트엔드 실행
 
-`frontend/`에 React + TypeScript + Vite 앱이 있습니다. DB와 백엔드를 켠 뒤 `cd frontend && npm install && npm run dev`로 http://localhost:5173 에서 접속합니다. 구현 범위는 회원가입, 로그인, 키보드·음성 받아쓰기, 네 항목 확인 후 아이디어 저장, 평가 요청과 평가 중 화면, 리더보드(순위·변화 지표·스파크라인), 평가 상세(평가 결과·근거 문서·이력 그래프), 구조화 수정·가중치 예약·변화 알림, 로그아웃입니다. 팀 설정은 `EVALUATION_AUTO_ON_SAVE=false`라 저장만으로는 평가되지 않고, 저장 결과 화면의 "평가 요청하기"나 새벽 3시 배치로 평가됩니다. 폴더별 규칙은 [frontend/AGENTS.md](frontend/AGENTS.md)를 참고하세요.
+`frontend/`에 React + TypeScript + Vite 앱이 있습니다. DB와 백엔드를 켠 뒤 `cd frontend && npm install && npm run dev`로 http://localhost:5173 에서 접속합니다. 구현 범위는 회원가입, 로그인, 키보드·음성 받아쓰기, 원문 자동 구조화(`POST /api/ideas/structure`)와 추천 제목·네 항목 확인 후 아이디어 저장, 평가 요청과 평가 중 화면, 리더보드(순위·변화 지표·스파크라인), 평가 상세(평가 결과·근거 문서·이력 그래프), 제목·구조화 항목 수정·가중치 예약·변화 알림, 로그아웃입니다. 팀 설정은 `EVALUATION_AUTO_ON_SAVE=false`라 서버는 저장만으로 평가하지 않습니다. 대신 프론트가 "확인하고 평가하기"로 네 칸이 다 찬 아이디어를 저장하면 바로 평가를 요청하고, 빈 칸이 있으면 보류로 저장합니다. 수정한 내용은 새벽 3시 배치 등 다음 평가에 반영됩니다. 폴더별 규칙은 [frontend/AGENTS.md](frontend/AGENTS.md)를 참고하세요.
 
 평가 결과 화면은 `lastEvaluatedAt`이 없는 0점 상태를 미평가로 표시하며, `POST /api/ideas/{id}/evaluate` 요청과 상태 조회를 지원합니다.

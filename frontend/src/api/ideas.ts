@@ -49,8 +49,16 @@ export type Evaluation = {
   evaluatedAt: string
   references: { url: string; title: string; provider: string }[]
 }
+// 제목과 네 항목의 미리보기 (서버는 저장하지 않는다). 원문에 근거가 없는 항목은 빈 문자열로 온다
+export type StructureResult = Omit<IdeaFields, 'title'> & {
+  title?: string | null
+  complete: boolean
+  missingFields: ('TARGET' | 'PROBLEM' | 'SOLUTION' | 'EXPECTATION')[]
+  itCategory: string | null
+  keywords: string[]
+}
 export const structureIdea = (text: string) =>
-  request<IdeaFields>('/api/ideas/structure', 'POST', { text })
+  request<StructureResult>('/api/ideas/structure', 'POST', { text })
 export const createIdea = ({ title, ...fields }: IdeaFields) =>
   request<Idea>('/api/ideas', 'POST', { type: 'IT', ...fields, title: title.trim() || undefined })
 export const getIdea = (id: number) => request<Idea>(`/api/ideas/${id}`)
