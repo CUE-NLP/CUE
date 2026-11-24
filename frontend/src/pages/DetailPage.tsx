@@ -202,7 +202,7 @@ export default function DetailPage({
       <Brand back={back} />
       <div className={tw('detail-heading')}>
         <div className={tw('detail-title')}>
-          <h1 className="min-w-0 truncate" title={ideaTitle(idea)}>
+          <h1 className="min-w-0 truncate font-bold" title={ideaTitle(idea)}>
             {ideaTitle(idea)}
           </h1>
           <Status idea={idea} />
