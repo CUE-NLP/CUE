@@ -98,7 +98,7 @@ class GlobalTrendServiceTest {
 
     private GlobalTrendService service(int reuseDays) {
         SourceApiProperties props = new SourceApiProperties(Duration.ofSeconds(3), Duration.ofSeconds(5), 5, 30,
-                8000, 1048576, 3, reuseDays, 4000, 16000, 2, 30, "ua", "https://wikimedia.org", null, null, null, null, null, null);
+                8000, 1048576, 3, reuseDays, 4000, 16000, 2, 30, "ua", "https://wikimedia.org", 800, null, null, null, null, null, null);
         return new GlobalTrendService(ApiProvider.TREND_PROVIDERS.stream().map(this::client).toList(), gemini,
                 new PromptLoader(), new ItemBatchSummarizer(gemini, new PromptLoader(), props), trends, itemRepo, sourceRepo, new TransactionTemplate(mock(PlatformTransactionManager.class)),
                 props, new TrendProperties(7, 2));

@@ -39,13 +39,6 @@ public class Source {
     @Column(name = "checked_at")
     private LocalDateTime checkedAt;
 
-    /** 이 source의 상위 항목 요약들을 바탕으로 만든 소스 단위 최종 요약. 변경이 감지되면 덮어쓴다. */
-    @Column(columnDefinition = "TEXT")
-    private String summary;
-
-    @Column(name = "summarized_at")
-    private LocalDateTime summarizedAt;
-
     public Source(Idea idea, ApiProvider provider, String keyword) {
         this.idea = idea;
         this.provider = provider;
@@ -64,11 +57,5 @@ public class Source {
     public void restore(String contentHash, LocalDateTime checkedAt) {
         this.contentHash = contentHash;
         this.checkedAt = checkedAt;
-    }
-
-    /** 소스 단위 최종 요약을 덮어쓴다 (null이면 요약 없음). */
-    public void updateSummary(String summary) {
-        this.summary = summary;
-        this.summarizedAt = summary == null ? null : LocalDateTime.now();
     }
 }
