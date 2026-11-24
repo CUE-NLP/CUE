@@ -69,10 +69,13 @@ public class SourceCheckService {
             throw new CustomException(ErrorCode.SOURCE_PROVIDER_NOT_SUPPORTED);
         }
         List<SourceItem> items = client.search(source.getKeyword());
-        // 변경 = 상위 항목의 해시가 달라짐 (첫 조회는 기준만 기록). 변경이면 상위 목록 전체를 돌려주고 호출하는 쪽이 다시 읽는다.
+        // 변경 = 상위 항목의 해시가 달라짐. 변경이면 상위 목록 전체를 돌려주고 호출하는 쪽이 다시 읽는다.
+        // 첫 조회(이전 해시 없음)도 해시를 기록하면서 항목을 함께 돌려준다: 첫 평가가 이 항목을 근거로 써야 하기 때문이다.
+        // (예전에는 첫 조회를 "변경 없음"으로 처리해 항목을 버려서, 첫 평가에 외부 자료가 하나도 들어가지 않았다.)
+        boolean first = source.getContentHash() == null;
         boolean changed = source.updateHash(SourceHasher.hash(items));
         sourceRepository.save(source);
-        return changed
+        return changed || first
                 ? SourceCheckResult.changed(source.getId(), source.getProvider(), source.getKeyword(), items, source.getCheckedAt())
                 : SourceCheckResult.unchanged(source.getId(), source.getProvider(), source.getKeyword(), source.getCheckedAt());
     }

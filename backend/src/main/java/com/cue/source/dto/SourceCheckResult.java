@@ -6,8 +6,8 @@ import java.util.List;
 
 /**
  * source 하나를 조회한 결과.
- * - CHANGED: 이전 해시와 달라짐. {@code items}에 이번 조회 결과가 담긴다.
- * - UNCHANGED: 변화 없음 (처음 조회해 해시만 기록한 경우 포함). {@code items}는 비어 있다.
+ * - CHANGED: 이전 해시와 달라졌거나 <b>처음 조회</b>(해시 기록). {@code items}에 이번 조회 결과가 담긴다. 처음 조회의 항목이 첫 평가의 근거가 된다.
+ * - UNCHANGED: 해시가 같아 변화 없음. {@code items}는 비어 있다.
  * - FAILED: 외부 API 오류. 해시·조회 시각은 갱신하지 않는다.
  */
 public record SourceCheckResult(
