@@ -1,0 +1,147 @@
+package com.cue.integration;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.cue.evaluation.service.IdeaEvaluationPipeline;
+import com.cue.global.ai.GeminiClient;
+import com.cue.source.client.SourceClient;
+import com.cue.source.dto.SourceItem;
+import com.cue.source.entity.ApiProvider;
+import com.cue.source.repository.SourceRepository;
+import com.cue.source.service.SourceCheckService;
+import com.cue.source.service.SourceExcerptService;
+import com.cue.trend.service.GlobalTrendService;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import tools.jackson.databind.ObjectMapper;
+
+/**
+ * 첫 평가에 외부 자료가 들어가는지 검증하는 회귀 테스트. 다른 통합 테스트는 {@code SourceCheckService}를 목으로 바꿔서
+ * "첫 조회를 변경 없음으로 처리해 항목을 버리는" 버그(첫 평가의 근거 문서가 0개)를 잡지 못했다. 여기서는 <b>실제 SourceCheckService</b>를 쓰고
+ * 외부 API(SourceClient)와 Gemini만 가짜로 바꾼다. (Docker 필요)
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+@Testcontainers
+@TestPropertySource(properties = {"spring.docker.compose.enabled=false", "cue.gemini.enabled=false",
+        "cue.evaluation.enabled=false", "cue.evaluation.delay-ms=0", "cue.evaluation.auto-on-save=false"})
+class FirstEvaluationEvidenceTest {
+
+    @Container
+    @ServiceConnection
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17");
+
+    /** 모든 provider가 항목 1개를 돌려주는 가짜 외부 API로 실제 SourceCheckService를 만든다. */
+    @TestConfiguration
+    static class FakeSources {
+        @Bean
+        @Primary
+        SourceCheckService fakeSourceCheckService(SourceRepository sources) {
+            List<SourceClient> clients = new ArrayList<>();
+            for (ApiProvider provider : ApiProvider.values()) {
+                clients.add(new SourceClient() {
+                    public ApiProvider provider() { return provider; }
+                    public List<SourceItem> search(String keyword) {
+                        return List.of(new SourceItem("자료 " + provider, "https://fake.test/" + provider, "설명 " + provider));
+                    }
+                });
+            }
+            return new SourceCheckService(sources, clients);
+        }
+    }
+
+    @Autowired MockMvc mvc;
+    @Autowired ObjectMapper mapper;
+    @Autowired JdbcTemplate jdbc;
+    @Autowired IdeaEvaluationPipeline pipeline;
+    @MockitoBean GeminiClient gemini;
+    @MockitoBean GlobalTrendService globalTrend;
+    @MockitoBean SourceExcerptService sourceExcerpt;
+
+    private final List<String> prompts = new ArrayList<>();
+
+    @BeforeEach
+    void setUp() {
+        jdbc.execute("TRUNCATE users, trends RESTART IDENTITY CASCADE");
+        prompts.clear();
+        when(gemini.available()).thenReturn(true);
+        when(globalTrend.today()).thenReturn(null); // TREND 갈래는 건너뛴다
+        when(sourceExcerpt.excerpt(any())).thenAnswer(inv -> inv.getArgument(0));
+        // 초기 평가: 프롬프트에 들어온 첫 자료 URL을 근거로 인용한다 (입력에 없던 URL은 서버가 버린다)
+        when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
+            String prompt = inv.getArgument(0);
+            prompts.add(prompt);
+            Matcher m = Pattern.compile("https://fake\\.test/\\w+").matcher(prompt);
+            String cited = m.find() ? m.group() : "";
+            return mapper.readTree("{\"scores\":["
+                    + "{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":70,\"evidenceSummary\":\"문제가 크다\",\"referenceUrls\":[\"" + cited + "\"]},"
+                    + "{\"type\":\"MARKET_DEMAND\",\"score\":60,\"evidenceSummary\":\"수요가 있다\"},"
+                    + "{\"type\":\"MARKET_DIFFERENTIATION\",\"score\":40,\"evidenceSummary\":\"경쟁이 많다\"},"
+                    + "{\"type\":\"TECH_FEASIBILITY\",\"score\":80,\"evidenceSummary\":\"구현 가능\"}]}");
+        });
+    }
+
+    private long createIdea() throws Exception {
+        mvc.perform(post("/api/users").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"nickname\":\"kj\",\"email\":\"first@cue.com\",\"password\":\"password123\"}"));
+        String login = mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"first@cue.com\",\"password\":\"password123\"}"))
+                .andReturn().getResponse().getContentAsString();
+        String token = "Bearer " + mapper.readTree(login).get("data").get("accessToken").asString();
+        String res = mvc.perform(post("/api/ideas").header("Authorization", token).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\",\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        return mapper.readTree(res).get("data").get("id").asLong();
+    }
+
+    @Test
+    void 첫_평가_프롬프트에_외부_자료가_들어가고_근거_문서가_평가에_연결된다() throws Exception {
+        long id = createIdea();
+        assertTrue(jdbc.queryForObject("select count(*) from sources where idea_id = ?", Integer.class, id) > 0);
+
+        pipeline.evaluate(id);
+
+        String evaluationPrompt = prompts.stream().filter(p -> p.contains("[자료 목록]")).findFirst().orElseThrow();
+        assertFalse(evaluationPrompt.contains("(변경된 자료 없음)"), "첫 평가에 외부 자료가 하나도 들어가지 않았다");
+        assertTrue(evaluationPrompt.contains("https://fake.test/"), "조회한 자료의 URL이 프롬프트에 없다");
+
+        int references = jdbc.queryForObject("select count(*) from evaluation_references r join evaluations e on e.id = r.evaluation_id "
+                + "join scores s on s.id = e.score_id where s.idea_id = ?", Integer.class, id);
+        assertTrue(references > 0, "근거 문서가 평가에 연결되지 않았다 (근거 문서 0개)");
+
+        // 해시도 기록돼 두 번째 조회부터는 변경 없음이다
+        assertEquals(0, jdbc.queryForObject("select count(*) from sources where idea_id = ? and content_hash is null", Integer.class, id));
+        prompts.clear();
+        assertEquals("NO_CHANGE", pipeline.evaluate(id).status().name());
+        assertTrue(prompts.isEmpty());
+    }
+}
