@@ -50,8 +50,8 @@ public class ItemBatchSummarizer {
     }
 
     /**
-     * @param promptName 프롬프트 이름 ({@code item-summary-batch} 또는 {@code trend-item-summary-batch})
-     * @param vars       {@code items} 외에 프롬프트가 쓰는 값 (예: keyword)
+     * @param promptName 프롬프트 이름 ({@code trend-item-summary-batch})
+     * @param vars       {@code items} 외에 프롬프트가 쓰는 값 (없으면 빈 맵)
      * @return url → 항목 요약 (검증을 통과한 것만, 입력 순서)
      */
     public Map<String, String> summarize(String promptName, Map<String, String> vars, List<Entry> entries) {

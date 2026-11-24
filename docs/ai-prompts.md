@@ -22,7 +22,7 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 앞 4개는 **아이디어 키워드로 모은 근거 자료**(`initial-evaluation`/`re-evaluation`)로, `TREND`는 **아이디어와 무관한 글로벌 트렌드**(`trend-evaluation`)로 평가한다. 두 갈래는 프롬프트도 입력도 따로다.
 
 ```
-[A 근거 4개 기준]  키워드 × 종류별 provider → 조회 → 원문 → item-summary-batch(source당 1회) → trend-summary(소스 단위) → initial/re-evaluation
+[A 근거 4개 기준]  키워드 × 종류별 provider → 조회 → 원문 읽기 → 정리한 발췌(AI 호출 없음, `TextExcerpt`) → initial/re-evaluation (아이디어당 1회)
 [B TREND]          (키워드 없음, 하루 1회) HN·GitHub·HF 급상승 → 원문 → trend-item-summary-batch(provider당 1회) → global-trend-summary(provider별→최종) → trend-evaluation(아이디어마다)
 ```
 
@@ -36,45 +36,18 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 
 ## 프롬프트별 명세
 
-### trend-summary.txt
-목적: **키워드 근거 자료**의 소스 단위 요약. 한 source(provider × 아이디어 키워드)의 항목 요약들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 3~5문장으로 요약해 `sources.summary`에 저장한다. (글로벌 트렌드는 키워드가 없어 `global-trend-summary.txt`를 쓴다.)
-
-| 플레이스홀더 | 설명 |
-| --- | --- |
-| `{{keywords}}` | 검색 키워드(쉼표 구분) |
-| `{{items}}` | 자료 목록. 항목마다 `provider`, `title`, `url`, 스니펫 한두 줄 |
-
-출력 스키마와 예시:
-```json
-{"summary":"최근 로컬 LLM 추론 최적화 관련 저장소와 논의가 늘고 있다. Hugging Face에서는 소형 모델 공개가 이어지고 있다.","highlights":[{"title":"example/llm-runtime","url":"https://github.com/example/llm-runtime","provider":"GITHUB"}]}
-```
-- `highlights`는 최대 5개, 입력 `items`에 있는 항목만.
-
-### item-summary-batch.txt
-목적: **키워드 근거 자료**의 source 하나의 상위 항목 N개를 **한 번의 호출로** 요약한다(항목마다 호출하던 단건 프롬프트를 대체). 항목마다 번호·제목·URL·날짜·지표·원문 일부를 넣는다. 원문은 항목당 `cue.source.batch-content-chars`(4000자), 한 호출 합계 `batch-total-chars`(16000자)로 자른다. 결과는 `source_items`에 저장된다.
-
-| 플레이스홀더 | 설명 |
-| --- | --- |
-| `{{keyword}}` | 이 source의 검색 키워드 |
-| `{{items}}` | 항목 목록: `[번호] 제목: … / URL: … / 날짜·지표: … / 원문: …` 블록을 항목마다 (원문은 신뢰하지 않는 데이터) |
-
-출력 스키마와 예시:
-```json
-{"items":[{"url":"https://github.com/example/agent-kit","summary":"에이전트 워크플로를 코드로 정의해 실행하는 오픈소스 프레임워크다. 문서화된 예제가 많지만 대규모 운영 사례는 README에 없다."}]}
-```
-- 서버 검증(`ItemBatchSummarizer`): `url`이 입력에 있던 것만, 같은 url 중복은 첫 번째만, 빈 요약은 버림, 요약 500자 제한. 빠진 항목은 건너뛰고 원래 조회한 짧은 요약을 쓴다. `responseSchema`로 형식을 강제한다.
-
 ### trend-item-summary-batch.txt
-목적: **글로벌 트렌드**(키워드 없음)의 provider 하나의 상위 항목 N개를 한 번의 호출로 요약한다. `item-summary-batch.txt`와 같은 규칙에서 `{{keyword}}`만 뺐다. 결과는 `trend_items`에 저장된다.
+목적: **글로벌 트렌드**(키워드 없음)의 provider 하나의 상위 항목 N개를 한 번의 호출로 요약한다. 항목마다 번호·제목·URL·날짜·지표·원문 일부를 넣고, 원문은 항목당 `cue.source.batch-content-chars`(4000자), 한 호출 합계 `batch-total-chars`(16000자)로 자른다. 결과는 `trend_items`에 저장된다. (키워드 근거 자료는 호출 수를 줄이려 항목 요약 프롬프트를 쓰지 않고 원문 발췌를 평가 프롬프트에 직접 넣는다.)
 
 | 플레이스홀더 | 설명 |
 | --- | --- |
-| `{{items}}` | 항목 목록 (위와 같은 형식) |
+| `{{items}}` | 항목 목록: `[번호] 제목: … / URL: … / 날짜·지표: … / 원문: …` 블록을 항목마다 (원문은 신뢰하지 않는 데이터) |
 
 출력 스키마와 예시:
 ```json
 {"items":[{"url":"https://news.ycombinator.com/item?id=1","summary":"브라우저에서 돌아가는 소형 음성 인식 모델의 오픈소스 구현이다. 서버 없이 기기 안에서 추론하려는 흐름을 보여준다."}]}
 ```
+- 서버 검증(`ItemBatchSummarizer`): `url`이 입력에 있던 것만, 같은 url 중복은 첫 번째만, 빈 요약은 버림, 요약 500자 제한. 빠진 항목은 건너뛰고 원래 조회한 짧은 요약을 쓴다. `responseSchema`로 형식을 강제한다.
 
 ### global-trend-summary.txt
 목적: **글로벌 트렌드**를 3~5문장으로 요약한다. **두 단계에 같은 프롬프트를 쓴다**: ① provider별 요약 — 한 provider의 항목 요약들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 입력으로 → `trend_sources`에 저장, ② 최종 트렌드 요약 — provider별 요약들을 입력으로 → `trends.summary`에 저장되고 TREND 평가 프롬프트의 `{{trendSummary}}`로 쓰인다.
@@ -98,7 +71,7 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 | `{{problem}}` | 아이디어 문제 |
 | `{{solution}}` | 아이디어 해결 |
 | `{{expectation}}` | 아이디어 기대효과 |
-| `{{items}}` | 아이디어 관련 수집 자료 목록 (provider, title, url, 스니펫) |
+| `{{items}}` | 아이디어 관련 수집 자료 목록. 줄마다 `[PROVIDER] 제목 \| URL \| 날짜 \| 지표 \| 발췌`(발췌 = API 설명 + 정리한 원문 앞부분, 항목당 `cue.source.excerpt-chars`, 최대 30줄) |
 
 출력 스키마와 예시:
 ```json

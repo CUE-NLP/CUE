@@ -133,7 +133,8 @@ public class EvidenceEvaluator {
         vars.put("target", nullToEmpty(idea.target()));
         vars.put("solution", nullToEmpty(idea.solution()));
         vars.put("expectation", nullToEmpty(idea.expectation()));
-        String items = changed.isEmpty() ? "(변경된 자료 없음)" : SourceTextFormat.formatSources(changed);
+        String items = changed.isEmpty() ? "(변경된 자료 없음)"
+                : SourceTextFormat.formatSources(changed, SourceTextFormat.EVIDENCE_MAX_ITEMS, SourceTextFormat.EVIDENCE_MAX_SUMMARY_CHARS);
         vars.put("currentScores", scores.toString().strip());
         vars.put("changedItems", items); // re-evaluation
         vars.put("items", items);        // initial-evaluation

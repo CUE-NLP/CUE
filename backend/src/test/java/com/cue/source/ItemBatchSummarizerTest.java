@@ -25,7 +25,7 @@ class ItemBatchSummarizerTest {
 
     private ItemBatchSummarizer summarizer(int perItem, int total) {
         return new ItemBatchSummarizer(gemini, new PromptLoader(), new SourceApiProperties(Duration.ofSeconds(3),
-                Duration.ofSeconds(5), 5, 30, 8000, 1048576, 3, 7, perItem, total, 2, 30, "ua", "https://wikimedia.org", null, null, null, null, null, null));
+                Duration.ofSeconds(5), 5, 30, 8000, 1048576, 3, 7, perItem, total, 2, 30, "ua", "https://wikimedia.org", 800, null, null, null, null, null, null));
     }
 
     private static Entry entry(int n, String content) {
@@ -39,7 +39,7 @@ class ItemBatchSummarizerTest {
     @Test
     void 한_번의_호출로_항목_전부를_요약하고_URL_기준으로_돌려준다() {
         respond("{\"items\":[{\"url\":\"https://u/1\",\"summary\":\"요약1\"},{\"url\":\"https://u/2\",\"summary\":\"요약2\"}]}");
-        Map<String, String> out = summarizer(4000, 16000).summarize("item-summary-batch", Map.of("keyword", "ai"),
+        Map<String, String> out = summarizer(4000, 16000).summarize("trend-item-summary-batch", Map.of(),
                 List.of(entry(1, "원문1"), entry(2, "원문2")));
         assertEquals(Map.of("https://u/1", "요약1", "https://u/2", "요약2"), out);
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
@@ -47,7 +47,6 @@ class ItemBatchSummarizerTest {
         String p = prompt.getValue();
         assertTrue(p.contains("[1]\n제목: repo1\nURL: https://u/1\n날짜·지표: 2026-06-01 / stars=1\n원문:\n원문1"));
         assertTrue(p.contains("[2]\n제목: repo2"));
-        assertTrue(p.contains("[키워드]\nai"));
         assertFalse(p.contains("{{"));
     }
 
@@ -55,7 +54,7 @@ class ItemBatchSummarizerTest {
     void 입력에_없던_URL_중복_빈_요약은_버리고_빠진_항목은_결과에_없다() {
         respond("{\"items\":[{\"url\":\"https://u/1\",\"summary\":\"첫 요약\"},{\"url\":\"https://u/1\",\"summary\":\"중복\"},"
                 + "{\"url\":\"https://made-up/9\",\"summary\":\"환각\"},{\"url\":\"https://u/2\",\"summary\":\"  \"}]}");
-        Map<String, String> out = summarizer(4000, 16000).summarize("item-summary-batch", Map.of("keyword", "k"),
+        Map<String, String> out = summarizer(4000, 16000).summarize("trend-item-summary-batch", Map.of(),
                 List.of(entry(1, "a"), entry(2, "b"), entry(3, "c")));
         assertEquals(Map.of("https://u/1", "첫 요약"), out);
     }
@@ -86,10 +85,10 @@ class ItemBatchSummarizerTest {
 
     @Test
     void 항목이_없으면_호출하지_않고_Gemini_실패는_예외로_던진다() {
-        assertTrue(summarizer(4000, 16000).summarize("item-summary-batch", Map.of("keyword", "k"), List.of()).isEmpty());
+        assertTrue(summarizer(4000, 16000).summarize("trend-item-summary-batch", Map.of(), List.of()).isEmpty());
         verifyNoInteractions(gemini);
         doThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR)).when(gemini).generateJson(anyString(), anyMap());
         assertThrows(CustomException.class, () -> summarizer(4000, 16000)
-                .summarize("item-summary-batch", Map.of("keyword", "k"), List.of(entry(1, "a"))));
+                .summarize("trend-item-summary-batch", Map.of(), List.of(entry(1, "a"))));
     }
 }

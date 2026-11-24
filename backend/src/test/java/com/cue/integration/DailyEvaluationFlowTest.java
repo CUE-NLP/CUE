@@ -57,7 +57,7 @@ class DailyEvaluationFlowTest {
     @Autowired DailyEvaluationBatch batch;
     @MockitoBean GeminiClient gemini;
     @MockitoBean SourceCheckService sourceCheck;
-    @MockitoBean com.cue.source.service.SourceSummaryService sourceSummary;
+    @MockitoBean com.cue.source.service.SourceExcerptService sourceExcerpt;
     @MockitoBean GlobalTrendService globalTrend;
 
     private static final String FULL = "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\","
@@ -85,13 +85,12 @@ class DailyEvaluationFlowTest {
     @BeforeEach
     void reset() {
         jdbc.execute("TRUNCATE users, trends RESTART IDENTITY CASCADE");
-        org.mockito.Mockito.reset(gemini, sourceCheck, sourceSummary, globalTrend);
+        org.mockito.Mockito.reset(gemini, sourceCheck, sourceExcerpt, globalTrend);
         trendReply = TREND_REPLY;
         when(globalTrend.today()).thenReturn(newTrend("에이전트 도구가 뜬다"));
         when(gemini.available()).thenReturn(true);
         when(sourceCheck.checkAll(anyLong())).thenReturn(List.of());
-        when(sourceSummary.summarize(any())).thenAnswer(inv ->
-                new com.cue.source.dto.SourceSummary(inv.getArgument(0), "소스 단위 요약"));
+        when(sourceExcerpt.excerpt(any())).thenAnswer(inv -> inv.getArgument(0)); // 원문 발췌는 AI를 부르지 않는다
         // 프롬프트에 따라 응답 선택: 초기 평가 / 재평가 / 트렌드 요약
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             Map<?, ?> props = (Map<?, ?>) ((Map<?, ?>) inv.getArgument(1)).get("properties");
@@ -256,21 +255,6 @@ class DailyEvaluationFlowTest {
 
         verify(sourceCheck).restoreHash(eq(1L), any(), any());
         assertEquals(5, evaluationCount(id));
-    }
-
-    @Test
-    void 일괄_요약이_실패한_source는_평가는_저장하되_해시를_되돌려_다음에_다시_읽는다() throws Exception {
-        String token = signUpAndLogin("degraded@cue.com");
-        long id = createIdea(token, FULL);
-        evaluate(token, id);
-        when(sourceCheck.checkAll(id)).thenReturn(List.of(changed()));
-        doAnswer(inv -> new com.cue.source.dto.SourceSummary(inv.getArgument(0), null, true))
-                .when(sourceSummary).summarize(any());
-
-        var result = evaluate(token, id); // 원래 조회한 항목으로 재평가는 진행된다
-        assertEquals("EVALUATED", result.get("status").asString());
-        assertTrue(result.get("changed").asBoolean());
-        verify(sourceCheck).restoreHash(eq(1L), any(), any());
     }
 
     // ===== 글로벌 트렌드(TREND) 평가 =====
