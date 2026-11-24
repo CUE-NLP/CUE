@@ -161,6 +161,7 @@ cd backend && ./gradlew bootRun
 | `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
 | `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
 | `TREND_DAYS` / `TREND_TOP_N` | `7` / `5` | 글로벌 트렌드: "급상승" 기간(일) / provider(HN·GitHub·Hugging Face)마다 읽고 요약할 상위 항목 수 |
+| `TREND_MIN_REEVAL_DAYS` | `3` | 아이디어의 TREND 재평가 최소 간격(일). 새 트렌드가 생겨도 이 기간 안이면 호출하지 않는다(첫 평가는 바로, 0이면 새 트렌드마다) |
 | `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
 | `SEMANTIC_SCHOLAR_API_KEY` | 없음 | (선택) Semantic Scholar API 키. **없으면 익명 공유 한도가 낮아 429(`G002`)가 잦습니다** |
 | `WIKIMEDIA_USER_AGENT` | 프로젝트 식별용 일반 문자열 | Wikimedia API 필수 User-Agent (개인 이메일을 넣지 마세요) |
@@ -329,7 +330,7 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | `idea_score_histories` | 평가 시점의 총점 스냅샷 (점수 이력 차트용) |
 | `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각 |
 | `trends` | 글로벌 트렌드 1행/일 (아이디어·키워드와 무관): 최종 요약 · provider · 상위 항목 해시 |
-| `trend_sources` / `trend_items` | 트렌드의 provider별 요약 / 상위 항목과 항목 요약 (원문은 저장 안 함) |
+| `trend_items` | 트렌드의 상위 항목과 항목 요약 (원문은 저장 안 함) |
 
 ---
 

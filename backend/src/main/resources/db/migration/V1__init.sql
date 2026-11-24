@@ -61,15 +61,6 @@ CREATE TABLE trends (
 CREATE INDEX idx_trends_created_at ON trends (created_at DESC);
 ALTER TABLE ideas ADD CONSTRAINT fk_ideas_last_trend FOREIGN KEY (last_trend_id) REFERENCES trends (id);
 
--- 트렌드의 provider(source)별 요약 (항목 요약들로 만든 중간 단계)
-CREATE TABLE trend_sources (
-    id       BIGSERIAL PRIMARY KEY,
-    trend_id BIGINT      NOT NULL REFERENCES trends (id) ON DELETE CASCADE,
-    provider VARCHAR(30) NOT NULL,
-    summary  TEXT        NOT NULL
-);
-CREATE INDEX idx_trend_sources_trend_id ON trend_sources (trend_id);
-
 -- 트렌드에 쓰인 상위 항목과 항목 요약 (원문은 저장하지 않는다). 같은 URL은 다음 수집에서 재사용한다.
 CREATE TABLE trend_items (
     id            BIGSERIAL PRIMARY KEY,

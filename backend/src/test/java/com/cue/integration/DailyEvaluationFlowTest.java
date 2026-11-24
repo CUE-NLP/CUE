@@ -271,6 +271,7 @@ class DailyEvaluationFlowTest {
         String token = signUpAndLogin("trend@cue.com");
         long id = createIdea(token, FULL);
         evaluate(token, id); // TREND 65
+        ageLastTrend(id, 5); // 재평가 최소 간격(3일)이 지난 트렌드
 
         TrendSnapshot next = newTrend("새로운 흐름");
         when(globalTrend.today()).thenReturn(next);
@@ -291,6 +292,35 @@ class DailyEvaluationFlowTest {
         clearInvocations(gemini);
         assertEquals("NO_CHANGE", evaluate(token, id).get("status").asString());
         verify(gemini, never()).generateJson(anyString(), anyMap());
+    }
+
+    /** 아이디어가 마지막으로 TREND 평가에 쓴 트렌드의 생성일을 {@code days}일 앞으로 당긴다. */
+    private void ageLastTrend(long ideaId, int days) {
+        jdbc.update("update trends set created_at = created_at - make_interval(days => ?) where id = (select last_trend_id from ideas where id = ?)",
+                days, ideaId);
+    }
+
+    @Test
+    void 재평가_최소_간격_안의_새_트렌드는_TREND를_다시_평가하지_않고_간격이_지난_트렌드로는_평가한다() throws Exception {
+        String token = signUpAndLogin("cadence@cue.com");
+        long id = createIdea(token, FULL);
+        evaluate(token, id); // TREND 첫 평가 (바로)
+        Long firstTrendId = jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id);
+        assertEquals(5, evaluationCount(id));
+
+        // 방금 만든 트렌드와 같은 날의 새 트렌드: 간격(3일) 안이라 호출하지 않는다 (완료 표시도 그대로)
+        when(globalTrend.today()).thenReturn(newTrend("같은 날 새 흐름"));
+        clearInvocations(gemini);
+        assertEquals("NO_CHANGE", evaluate(token, id).get("status").asString());
+        verify(gemini, never()).generateJson(anyString(), anyMap());
+        assertEquals(firstTrendId, jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
+
+        // 마지막 평가에 쓴 트렌드가 5일 전이 되면 다음 트렌드로 재평가한다
+        ageLastTrend(id, 5);
+        TrendSnapshot later = newTrend("며칠 뒤 새 흐름");
+        when(globalTrend.today()).thenReturn(later);
+        assertEquals("EVALUATED", evaluate(token, id).get("status").asString());
+        assertEquals(later.id(), jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
     }
 
     @Test
