@@ -63,14 +63,30 @@ class SourceCheckServiceTest {
     }
 
     @Test
-    void 첫_조회는_변경_없음으로_해시와_시각만_기록한다() {
+    void 첫_조회는_해시와_시각을_기록하면서_항목을_돌려준다() {
+        // 첫 평가는 이 항목을 근거로 쓴다. 항목을 버리면 첫 평가에 외부 자료가 하나도 들어가지 않는다.
         Source s = new Source(null, ApiProvider.GITHUB, "kw");
         when(repo.findById(1L)).thenReturn(Optional.of(s));
         SourceCheckResult r = service.check(1L);
-        assertEquals(SourceCheckResult.Status.UNCHANGED, r.status());
+        assertEquals(SourceCheckResult.Status.CHANGED, r.status());
+        assertEquals(githubItems, r.items());
         assertNotNull(s.getContentHash());
         assertNotNull(s.getCheckedAt());
         verify(repo).save(s);
+
+        assertEquals(SourceCheckResult.Status.UNCHANGED, service.check(1L).status()); // 두 번째부터는 해시 비교
+    }
+
+    @Test
+    void 첫_조회_뒤_평가가_실패해_해시를_비우면_다음_조회가_다시_항목을_돌려준다() {
+        Source s = new Source(null, ApiProvider.GITHUB, "kw");
+        when(repo.findById(1L)).thenReturn(Optional.of(s));
+        assertEquals(githubItems, service.check(1L).items());
+
+        service.restoreHash(1L, null, null); // 첫 평가가 실패해 조회 이전 상태(해시 없음)로 되돌림
+        SourceCheckResult again = service.check(1L);
+        assertTrue(again.changed());
+        assertEquals(githubItems, again.items());
     }
 
     @Test
@@ -121,7 +137,7 @@ class SourceCheckServiceTest {
         stackFails = true;
 
         List<SourceCheckResult> results = service.checkAll(7L);
-        assertEquals(List.of(SourceCheckResult.Status.FAILED, SourceCheckResult.Status.FAILED, SourceCheckResult.Status.UNCHANGED),
+        assertEquals(List.of(SourceCheckResult.Status.FAILED, SourceCheckResult.Status.FAILED, SourceCheckResult.Status.CHANGED), // ok는 첫 조회
                 results.stream().map(SourceCheckResult::status).toList());
         assertNull(bad.getContentHash());
         assertNull(bad.getCheckedAt());
