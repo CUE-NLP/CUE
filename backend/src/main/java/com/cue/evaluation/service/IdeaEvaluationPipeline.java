@@ -32,29 +32,29 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 아이디어 한 개의 하루 평가 파이프라인. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 이 클래스는
- * @Transactional을 쓰지 않고, 필요한 DB 작업만 짧은 트랜잭션({@link TransactionTemplate} 또는 EvaluationService)으로 처리한다.
+ * @Transactional을 쓰지 않고, 필요한 DB 작업만 짧은 트랜잭션({@link TransactionTemplate} 또는 EvaluationRecorder)으로 처리한다.
  *
  * <p>하루 평가는 서로 독립인 두 갈래다.
  * <ul>
  *   <li><b>A. 키워드 근거 자료 → 기존 4개 기준</b>: 아이디어 종류별 source를 키워드로 조회해 해시로 변경을 감지하고, 변경된 source마다
- *       상위 N개 원문 읽기→항목 요약→소스 요약({@link SourceSummaryService}) 후 전체 평가 요청이면 초기 평가, 아니면 재평가 ({@link EvaluationAnalyzer})</li>
+ *       상위 N개 원문 읽기→항목 요약→소스 요약({@link SourceSummaryService}) 후 전체 평가 요청이면 초기 평가, 아니면 재평가 ({@link EvidenceEvaluator})</li>
  *   <li><b>B. 글로벌 트렌드 → TREND</b>: 그날의 글로벌 트렌드({@link GlobalTrendService#today()}, 아이디어와 무관)를 아이디어 4항목에 대입해
  *       첫 평가(0~100) 또는 재평가(±10) ({@link TrendEvaluator}). 이 아이디어가 이미 그 트렌드로 평가됐으면 호출하지 않는다</li>
  * </ul>
  * 순서: ① 대상 확인(I001/I004)·Gemini 사용 가능 확인(E001) → ② 새 턴 시작(예약 가중치 적용) → ③ 트렌드 확보·source 조회 →
  * ④ A도 B도 필요 없으면 평가·날짜 갱신 없이 종료 → ⑤ A, B를 각자 try로 실행 → ⑥ 성공한 쪽의 결과만 한 트랜잭션으로 저장
  * (총점·이력·날짜는 합쳐서 한 번). 한 쪽이 실패해도 다른 쪽은 저장하고, 실패한 쪽(A는 source 해시를 되돌려, B는 평가 완료 표시를 안 해서)은
- * 다음 실행에서 다시 한다. 실패가 있으면 저장 뒤 그 예외를 던진다. 동시 실행 방지(평가는 한 번에 하나)와 평가 상태 기록은 {@link EvaluationJobService}가 맡는다.
+ * 다음 실행에서 다시 한다. 실패가 있으면 저장 뒤 그 예외를 던진다. 동시 실행 방지(평가는 한 번에 하나)와 평가 상태 기록은 {@link EvaluationQueueService}가 맡는다.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class DailyEvaluationService {
+public class IdeaEvaluationPipeline {
     private final IdeaRepository ideas;
     private final SourceRepository sources;
     private final SourceCheckService sourceCheckService;
-    private final EvaluationService evaluationService;
-    private final EvaluationAnalyzer analyzer;
+    private final EvaluationRecorder evaluationService;
+    private final EvidenceEvaluator analyzer;
     private final TrendEvaluator trendEvaluator;
     private final GlobalTrendService globalTrend;
     private final SourceSummaryService sourceSummaryService;

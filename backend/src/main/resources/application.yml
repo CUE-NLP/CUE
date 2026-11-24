@@ -37,10 +37,11 @@ cue:
     # false면 Gemini를 쓰지 않고 SimpleIdeaAnalyzer만 사용 (테스트 등). 키가 비어 있으면 호출 없이 폴백한다.
     enabled: ${GEMINI_ENABLED:true}
     api-key: ${GEMINI_API_KEY:}
-    model: ${GEMINI_MODEL:gemini-2.5-flash}
+    # 무료 티어 한도(AI Studio 확인): gemini-3.5-flash-lite 분당 15회·일일 500회, 일반 Flash 계열은 분당 5회·일일 20회라 평가 배치에 부족하다
+    model: ${GEMINI_MODEL:gemini-3.5-flash-lite}
     base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com}
     timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:10}
-    # 평가용 호출 사이 최소 간격(ms). 무료 티어 분당 한도(약 10회)용. 0이면 제한 없음
+    # 평가용 호출 사이 최소 간격(ms). 무료 티어 분당 한도(3.5 Flash-Lite는 15회, 6500ms면 분당 약 9회)용. 0이면 제한 없음
     min-interval-ms: ${GEMINI_MIN_INTERVAL_MS:6500}
   evaluation:
     # 일일 재평가 스케줄러. 테스트에서는 enabled=false.

@@ -18,9 +18,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class AutoEvaluationStarter {
+public class AutoEvaluationListener {
     private final EvaluationProperties props;
-    private final EvaluationJobService jobs;
+    private final EvaluationQueueService jobs;
     private final GeminiClient gemini;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

@@ -24,9 +24,7 @@ public class JwtPrincipalConverter implements Converter<Jwt, UsernamePasswordAut
                 userId,
                 jwt.getClaimAsString("email"),
                 jwt.getClaimAsString("nickname"));
-        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+        return new UsernamePasswordAuthenticationToken(
                 principal, jwt.getTokenValue(), List.of(new SimpleGrantedAuthority("ROLE_USER")));
-        authentication.setDetails(jwt); // 로그아웃에서 현재 액세스 토큰의 jti·만료 시각을 읽는다
-        return authentication;
     }
 }

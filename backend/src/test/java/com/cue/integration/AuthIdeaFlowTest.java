@@ -159,7 +159,7 @@ class AuthIdeaFlowTest {
     // ===== 보류/활성, 수정, 확인, 평가 이력 =====
 
     @Autowired com.cue.source.repository.SourceRepository sourceRepository;
-    @Autowired com.cue.evaluation.service.EvaluationService evaluationService;
+    @Autowired com.cue.evaluation.service.EvaluationRecorder evaluationService;
 
     private long createIdea(String token, String body) throws Exception {
         String res = mvc.perform(post("/api/ideas").header("Authorization", token)

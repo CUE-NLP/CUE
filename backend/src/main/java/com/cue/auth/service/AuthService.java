@@ -3,9 +3,7 @@ package com.cue.auth.service;
 import com.cue.auth.dto.LoginRequest;
 import com.cue.auth.dto.TokenResponse;
 import com.cue.auth.entity.RefreshToken;
-import com.cue.auth.entity.RevokedAccessToken;
 import com.cue.auth.repository.RefreshTokenRepository;
-import com.cue.auth.repository.RevokedAccessTokenRepository;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.global.security.JwtProperties;
@@ -18,9 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.Base64;
 import java.util.HexFormat;
 import lombok.RequiredArgsConstructor;
@@ -35,7 +31,6 @@ public class AuthService {
 
     private final UserRepository users;
     private final RefreshTokenRepository refreshTokens;
-    private final RevokedAccessTokenRepository revokedAccessTokens;
     private final PasswordEncoder encoder;
     private final JwtTokenProvider tokenProvider;
     private final JwtProperties jwtProperties;
@@ -72,24 +67,21 @@ public class AuthService {
     }
 
     /**
-     * 로그아웃: 현재 액세스 토큰(jti)을 만료 시각까지 폐기하고, 요청 본문의 리프레시 토큰(현재 기기)을 폐기한다.
-     * 다른 기기의 토큰은 건드리지 않는다. 리프레시 토큰이 없거나 다른 사용자 것이거나 이미 폐기됐어도 성공(멱등)이다.
+     * 로그아웃: 요청 본문의 리프레시 토큰(현재 기기)을 폐기한다. 액세스 토큰은 서버가 기억하지 않는 JWT라 폐기하지 않고
+     * 만료(짧은 수명)까지 유효하다. 다른 기기의 토큰은 건드리지 않는다.
+     * 리프레시 토큰이 없거나 다른 사용자 것이거나 이미 폐기됐어도 성공(멱등)이다.
      */
     @Transactional
-    public void logout(Long userId, String jti, Instant accessTokenExpiresAt, String rawRefreshToken) {
-        if (!revokedAccessTokens.existsById(jti)) {
-            revokedAccessTokens.save(new RevokedAccessToken(jti, userId,
-                    LocalDateTime.ofInstant(accessTokenExpiresAt, ZoneId.systemDefault())));
-        }
+    public void logout(Long userId, String rawRefreshToken) {
         refreshTokens.findByTokenHash(hash(rawRefreshToken))
                 .filter(t -> t.getUserId().equals(userId))
                 .ifPresent(t -> t.revoke(LocalDateTime.now()));
     }
 
-    /** 만료된 리프레시 토큰 행과 만료된 액세스 토큰 폐기 기록을 삭제한다. 삭제한 행 수를 반환한다. */
+    /** 만료된 리프레시 토큰 행을 삭제한다. 삭제한 행 수를 반환한다. */
     @Transactional
     public int cleanupExpired(LocalDateTime now) {
-        return refreshTokens.deleteExpired(now) + revokedAccessTokens.deleteExpired(now);
+        return refreshTokens.deleteExpired(now);
     }
 
     private TokenResponse issueTokens(User user) {

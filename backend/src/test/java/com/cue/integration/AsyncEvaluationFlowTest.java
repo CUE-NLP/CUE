@@ -8,7 +8,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.cue.evaluation.service.EvaluationBatchService;
+import com.cue.evaluation.service.DailyEvaluationBatch;
 import com.cue.evaluation.service.EvaluationStateRecovery;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
@@ -55,7 +55,7 @@ class AsyncEvaluationFlowTest {
     @Autowired ObjectMapper mapper;
     @Autowired JdbcTemplate jdbc;
     @Autowired EvaluationStateRecovery recovery;
-    @Autowired EvaluationBatchService batch;
+    @Autowired DailyEvaluationBatch batch;
     @MockitoBean GeminiClient gemini;
     @MockitoBean SourceCheckService sourceCheck;
     @MockitoBean GlobalTrendService globalTrend;
@@ -273,7 +273,7 @@ class AsyncEvaluationFlowTest {
         long failing = createIdea(token, FULL);
         doAnswer(inv -> mapper.readTree(INITIAL)).when(gemini).generateJson(anyString(), anyMap());
 
-        EvaluationBatchService.Summary summary = batch.runAll();
+        DailyEvaluationBatch.Summary summary = batch.runAll();
         assertEquals(2, summary.total());
         assertEquals("IDLE", idea(token, id).get("evaluationStatus").asString());
         assertTrue(idea(token, id).get("totalScore").asDouble() > 0);

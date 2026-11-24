@@ -154,12 +154,3 @@ CREATE TABLE refresh_tokens (
     created_at TIMESTAMP   NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_refresh_tokens_user ON refresh_tokens (user_id);
-
--- 로그아웃으로 폐기된 액세스 토큰의 jti. 토큰 자체의 만료 시각(expires_at)까지만 보관하며 이후에는 정리 작업이 삭제한다.
-CREATE TABLE revoked_access_tokens (
-    jti        VARCHAR(36) PRIMARY KEY,
-    user_id    BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    expires_at TIMESTAMP   NOT NULL,
-    revoked_at TIMESTAMP   NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_revoked_access_tokens_expires ON revoked_access_tokens (expires_at);

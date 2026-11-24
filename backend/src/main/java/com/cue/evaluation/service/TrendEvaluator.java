@@ -44,32 +44,32 @@ public class TrendEvaluator {
         boolean initial = idea.lastTrendId() == null;
         BigDecimal current = idea.scores().getOrDefault(ScoreType.TREND, BigDecimal.ZERO);
         JsonNode n = gemini.generateJson(prompts.render("trend-evaluation", Map.of(
-                "problem", EvaluationAnalyzer.nullToEmpty(idea.problem()),
-                "target", EvaluationAnalyzer.nullToEmpty(idea.target()),
-                "solution", EvaluationAnalyzer.nullToEmpty(idea.solution()),
-                "expectation", EvaluationAnalyzer.nullToEmpty(idea.expectation()),
+                "problem", EvidenceEvaluator.nullToEmpty(idea.problem()),
+                "target", EvidenceEvaluator.nullToEmpty(idea.target()),
+                "solution", EvidenceEvaluator.nullToEmpty(idea.solution()),
+                "expectation", EvidenceEvaluator.nullToEmpty(idea.expectation()),
                 "currentTrendScore", initial ? "없음 (첫 평가)" : current.toPlainString(),
                 "trendSummary", trend.summary(),
                 "trendItems", trend.sources().isEmpty() ? "(항목 없음)" : SourceTextFormat.formatSources(trend.sources()))), SCHEMA);
 
         BigDecimal diff;
         if (initial) {
-            BigDecimal score = EvaluationAnalyzer.number(n.path("score"));
+            BigDecimal score = EvidenceEvaluator.number(n.path("score"));
             if (score == null) {
                 return List.of();
             }
-            diff = EvaluationAnalyzer.clamp(score, BigDecimal.ZERO, EvaluationAnalyzer.MAX_SCORE).subtract(current);
+            diff = EvidenceEvaluator.clamp(score, BigDecimal.ZERO, EvidenceEvaluator.MAX_SCORE).subtract(current);
         } else {
-            BigDecimal d = EvaluationAnalyzer.number(n.path("difference"));
+            BigDecimal d = EvidenceEvaluator.number(n.path("difference"));
             if (d == null || n.path("evidenceSummary").asString("").isBlank()) {
                 return List.of();
             }
-            diff = EvaluationAnalyzer.clamp(d, EvaluationAnalyzer.MAX_DIFFERENCE.negate(), EvaluationAnalyzer.MAX_DIFFERENCE);
+            diff = EvidenceEvaluator.clamp(d, EvidenceEvaluator.MAX_DIFFERENCE.negate(), EvidenceEvaluator.MAX_DIFFERENCE);
         }
         if (diff.signum() == 0) {
             return List.of();
         }
-        return List.of(EvaluationAnalyzer.toChange(ScoreType.TREND, diff, n, EvaluationAnalyzer.indexByUrl(trend.sources()))
+        return List.of(EvidenceEvaluator.toChange(ScoreType.TREND, diff, n, EvidenceEvaluator.indexByUrl(trend.sources()))
                 .withTrendId(trend.id()));
     }
 }
