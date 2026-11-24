@@ -22,6 +22,32 @@ function speechConstructor(): SpeechConstructor | undefined {
   }
   return browser.SpeechRecognition || browser.webkitSpeechRecognition
 }
+function KeyboardIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <rect x="2" y="5" width="16" height="10" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M5.5 8.5h1M9.5 8.5h1M13.5 8.5h1M6.5 11.5h7"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+function MicIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <rect x="7" y="2.5" width="6" height="10" rx="3" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M4.5 10a5.5 5.5 0 0 0 11 0M10 15.5V18"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
 
 export default function InputPage({
   raw,
@@ -112,7 +138,9 @@ export default function InputPage({
           back()
         }}
       />
-      <h1>{mode === 'voice' ? '어떤 생각이 떠올랐나요?' : '떠오른 생각을 적어보세요'}</h1>
+      <h1 className="font-bold">
+        {mode === 'voice' ? '어떤 생각이 떠올랐나요?' : '떠오른 생각을 적어보세요'}
+      </h1>
       <div className={tw('mode-row')}>
         <p>{mode === 'voice' ? '편하게 적어주세요.' : '정리되지 않은 문장도 괜찮아요.'}</p>
         <div className={tw('mode-toggle')} role="group" aria-label="입력 방식">
@@ -125,7 +153,7 @@ export default function InputPage({
               setMode('keyboard')
             }}
           >
-            ⌨
+            <KeyboardIcon />
           </button>
           <button
             className={tw(mode === 'voice' ? 'selected' : '')}
@@ -133,7 +161,7 @@ export default function InputPage({
             aria-pressed={mode === 'voice'}
             onClick={() => setMode('voice')}
           >
-            ♩
+            <MicIcon size={18} />
           </button>
         </div>
       </div>
@@ -179,7 +207,7 @@ export default function InputPage({
             aria-label={recording ? '녹음 중지' : '녹음 시작'}
             onClick={recording ? stop : start}
           >
-            {recording ? '■' : '♩'}
+            {recording ? '■' : <MicIcon size={32} />}
           </button>
           <span className={tw('voice-tip')}>
             {recording
@@ -191,7 +219,11 @@ export default function InputPage({
         </div>
       )}
       <div className={tw('bottom-actions')}>
-        <Button onClick={mode === 'voice' && !raw && !recording ? start : next}>
+        <Button
+          // 구조화 버튼은 입력이 비어 있으면 누를 수 없다 (녹음 시작·녹음 마치기 버튼은 그대로 눌린다)
+          disabled={!recording && !(mode === 'voice' && !raw) && !raw.trim()}
+          onClick={mode === 'voice' && !raw && !recording ? start : next}
+        >
           {mode === 'voice' && !raw && !recording
             ? '녹음 시작'
             : recording
