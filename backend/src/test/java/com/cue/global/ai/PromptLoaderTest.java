@@ -10,22 +10,20 @@ class PromptLoaderTest {
 
     @Test
     void 플레이스홀더를_값으로_치환한다() {
-        String out = loader.render("trend-summary", Map.of("keywords", "agent, rag", "items", "- 항목 하나"));
-        assertTrue(out.contains("agent, rag"));
+        String out = loader.render("global-trend-summary", Map.of("items", "- 항목 하나"));
         assertTrue(out.contains("- 항목 하나"));
-        assertFalse(out.contains("{{keywords}}"));
         assertFalse(out.contains("{{items}}"));
     }
 
     @Test
     void 값에_들어_있는_플레이스홀더_모양은_다시_치환하지_않는다() {
-        String out = loader.render("trend-summary", Map.of("keywords", "{{items}}", "items", "X"));
-        assertTrue(out.contains("[키워드]\n{{items}}"));
+        String out = loader.render("initial-evaluation", Map.of("target", "{{items}}", "items", "X"));
+        assertTrue(out.contains("타깃: {{items}}"));
     }
 
     @Test
     void 주어지지_않은_플레이스홀더는_그대로_둔다() {
-        String out = loader.render("trend-summary", Map.of("keywords", "k"));
+        String out = loader.render("initial-evaluation", Map.of("target", "t"));
         assertTrue(out.contains("{{items}}"));
     }
 

@@ -161,12 +161,14 @@ cd backend && ./gradlew bootRun
 | `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
 | `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
 | `TREND_DAYS` / `TREND_TOP_N` | `7` / `5` | 글로벌 트렌드: "급상승" 기간(일) / provider(HN·GitHub·Hugging Face)마다 읽고 요약할 상위 항목 수 |
+| `TREND_MIN_REEVAL_DAYS` | `1` | 아이디어의 TREND 재평가 최소 간격(일). 기본 1 = 하루에 한 번(트렌드 상위 항목이 어제와 같으면 새 트렌드가 없어 호출도 없다). 첫 평가는 바로, 0이면 같은 날 새 트렌드에도 평가 |
 | `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
 | `SEMANTIC_SCHOLAR_API_KEY` | 없음 | (선택) Semantic Scholar API 키. **없으면 익명 공유 한도가 낮아 429(`G002`)가 잦습니다** |
 | `WIKIMEDIA_USER_AGENT` | 프로젝트 식별용 일반 문자열 | Wikimedia API 필수 User-Agent (개인 이메일을 넣지 마세요) |
 | `SOURCE_PAPERS_YEARS` / `SOURCE_PAGEVIEWS_DAYS` | `2` / `30` | 논문은 최근 N년(올해 포함)만 / 위키 문서 조회수를 합산할 최근 일수 |
 | `SOURCE_TOP_N` / `SOURCE_TRENDING_DAYS` | `5` / `30` | source마다 읽고 요약할 상위 항목 수 / "급상승" 기간(일) |
-| `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | 원문을 자르는 길이 / 같은 URL 요약 재사용 기간(일) |
+| `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | (글로벌 트렌드) 원문을 자르는 길이 / 같은 URL 요약 재사용 기간(일) |
+| `SOURCE_EXCERPT_CHARS` | `800` | 키워드 근거 자료에서 항목당 평가 프롬프트에 넣는 원문 발췌 길이(AI 요약 호출 없음) |
 | `SOURCE_BATCH_CONTENT_CHARS` / `SOURCE_BATCH_TOTAL_CHARS` | `4000` / `16000` | 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자) |
 | `GEMINI_MIN_INTERVAL_MS` | `6500` | 평가용 Gemini 호출 사이 최소 간격(ms, 무료 티어 분당 한도용) |
 | `EVALUATION_ENABLED` | `true` | 일일 재평가 스케줄러 사용 여부 (테스트는 `false`) |
@@ -326,10 +328,9 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 | `evaluations` | 항목별 재평가 이력 (변화량 · 변경 후 점수 · 당시 가중치 · 근거 요약 · 평가 날짜). TREND 평가만 `trend_id`로 그날 트렌드에 연결 |
 | `evaluation_references` | 평가 근거 출처 URL |
 | `idea_score_histories` | 평가 시점의 총점 스냅샷 (점수 이력 차트용) |
-| `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각·소스 단위 요약 |
-| `source_items` | source의 상위 항목 요약(source당 일괄 1회 호출로 생성) (원문은 저장 안 함, 변경 시 덮어쓰기) |
+| `sources` | 아이디어별 검색 키워드·API·콘텐츠 해시(변경 감지)·확인 시각 |
 | `trends` | 글로벌 트렌드 1행/일 (아이디어·키워드와 무관): 최종 요약 · provider · 상위 항목 해시 |
-| `trend_sources` / `trend_items` | 트렌드의 provider별 요약 / 상위 항목과 항목 요약 (원문은 저장 안 함) |
+| `trend_items` | 트렌드의 상위 항목과 항목 요약 (원문은 저장 안 함) |
 
 ---
 

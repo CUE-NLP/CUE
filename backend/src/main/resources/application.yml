@@ -60,11 +60,13 @@ cue:
     # 최근 N일 안에 올라온 글·저장소를 인기 순으로 보고, provider마다 상위 top-n개를 읽어 요약한다 (Gemini 호출 수에 비례)
     days: ${TREND_DAYS:7}
     top-n: ${TREND_TOP_N:5}
+    # 아이디어의 TREND 재평가 최소 간격(일). 기본 1 = 하루에 한 번(트렌드는 하루 1회 갱신, 상위 항목이 어제와 같으면 새 트렌드가 없어 호출도 없다). 첫 평가는 바로. 0이면 같은 날 새 트렌드에도 평가
+    min-reeval-days: ${TREND_MIN_REEVAL_DAYS:1}
   source:
     # 외부 자료 API 토큰/키: 모두 선택. 없으면 익명 호출(rate limit 낮음). 값은 환경변수로만 주입하고 커밋하지 않는다.
     connect-timeout: 3s
     read-timeout: 5s
-    # source마다 읽고 요약할 상위 항목 수 (Gemini 호출 수에 비례)
+    # source마다 읽을 상위 항목 수 (근거 자료는 AI 요약 없이 원문 발췌를 평가 프롬프트에 직접 넣는다. 글로벌 트렌드는 Gemini 호출 크기에 비례)
     top-n: ${SOURCE_TOP_N:5}
     # "급상승" 판단 기간(일): 최근 N일 안의 글·저장소를 인기 순으로
     trending-days: ${SOURCE_TRENDING_DAYS:30}
@@ -72,9 +74,11 @@ cue:
     max-content-chars: ${SOURCE_MAX_CONTENT_CHARS:8000}
     fetch-max-bytes: 1048576
     max-redirects: 3
-    # 같은 URL의 항목 요약을 재사용하는 기간(일). 0이면 항상 다시 요약
+    # 키워드 근거 자료: 항목 하나당 평가 프롬프트에 직접 넣는 원문 발췌 길이(글자). AI 요약 호출 없이 정리한 원문 앞부분을 쓴다
+    excerpt-chars: ${SOURCE_EXCERPT_CHARS:800}
+    # (글로벌 트렌드만) 같은 URL의 항목 요약을 재사용하는 기간(일). 0이면 항상 다시 요약
     summary-reuse-days: ${SOURCE_SUMMARY_REUSE_DAYS:7}
-    # 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자)
+    # (글로벌 트렌드만) 항목 일괄 요약(provider당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자)
     batch-content-chars: ${SOURCE_BATCH_CONTENT_CHARS:4000}
     batch-total-chars: ${SOURCE_BATCH_TOTAL_CHARS:16000}
     # Semantic Scholar: 최근 N년(올해 포함) 논문만 / Wikipedia: 문서 조회수를 합산할 최근 일수 / Wikimedia 필수 User-Agent(개인 이메일 금지)

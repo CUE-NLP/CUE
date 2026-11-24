@@ -57,7 +57,7 @@ class DailyEvaluationFlowTest {
     @Autowired DailyEvaluationBatch batch;
     @MockitoBean GeminiClient gemini;
     @MockitoBean SourceCheckService sourceCheck;
-    @MockitoBean com.cue.source.service.SourceSummaryService sourceSummary;
+    @MockitoBean com.cue.source.service.SourceExcerptService sourceExcerpt;
     @MockitoBean GlobalTrendService globalTrend;
 
     private static final String FULL = "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\","
@@ -85,13 +85,12 @@ class DailyEvaluationFlowTest {
     @BeforeEach
     void reset() {
         jdbc.execute("TRUNCATE users, trends RESTART IDENTITY CASCADE");
-        org.mockito.Mockito.reset(gemini, sourceCheck, sourceSummary, globalTrend);
+        org.mockito.Mockito.reset(gemini, sourceCheck, sourceExcerpt, globalTrend);
         trendReply = TREND_REPLY;
         when(globalTrend.today()).thenReturn(newTrend("에이전트 도구가 뜬다"));
         when(gemini.available()).thenReturn(true);
         when(sourceCheck.checkAll(anyLong())).thenReturn(List.of());
-        when(sourceSummary.summarize(any())).thenAnswer(inv ->
-                new com.cue.source.dto.SourceSummary(inv.getArgument(0), "소스 단위 요약"));
+        when(sourceExcerpt.excerpt(any())).thenAnswer(inv -> inv.getArgument(0)); // 원문 발췌는 AI를 부르지 않는다
         // 프롬프트에 따라 응답 선택: 초기 평가 / 재평가 / 트렌드 요약
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             Map<?, ?> props = (Map<?, ?>) ((Map<?, ?>) inv.getArgument(1)).get("properties");
@@ -258,21 +257,6 @@ class DailyEvaluationFlowTest {
         assertEquals(5, evaluationCount(id));
     }
 
-    @Test
-    void 일괄_요약이_실패한_source는_평가는_저장하되_해시를_되돌려_다음에_다시_읽는다() throws Exception {
-        String token = signUpAndLogin("degraded@cue.com");
-        long id = createIdea(token, FULL);
-        evaluate(token, id);
-        when(sourceCheck.checkAll(id)).thenReturn(List.of(changed()));
-        doAnswer(inv -> new com.cue.source.dto.SourceSummary(inv.getArgument(0), null, true))
-                .when(sourceSummary).summarize(any());
-
-        var result = evaluate(token, id); // 원래 조회한 항목으로 재평가는 진행된다
-        assertEquals("EVALUATED", result.get("status").asString());
-        assertTrue(result.get("changed").asBoolean());
-        verify(sourceCheck).restoreHash(eq(1L), any(), any());
-    }
-
     // ===== 글로벌 트렌드(TREND) 평가 =====
 
     private double trendScore(tools.jackson.databind.JsonNode idea) {
@@ -287,6 +271,7 @@ class DailyEvaluationFlowTest {
         String token = signUpAndLogin("trend@cue.com");
         long id = createIdea(token, FULL);
         evaluate(token, id); // TREND 65
+        ageLastTrend(id, 5); // 재평가 최소 간격(1일)이 지난 트렌드
 
         TrendSnapshot next = newTrend("새로운 흐름");
         when(globalTrend.today()).thenReturn(next);
@@ -307,6 +292,35 @@ class DailyEvaluationFlowTest {
         clearInvocations(gemini);
         assertEquals("NO_CHANGE", evaluate(token, id).get("status").asString());
         verify(gemini, never()).generateJson(anyString(), anyMap());
+    }
+
+    /** 아이디어가 마지막으로 TREND 평가에 쓴 트렌드의 생성일을 {@code days}일 앞으로 당긴다. */
+    private void ageLastTrend(long ideaId, int days) {
+        jdbc.update("update trends set created_at = created_at - make_interval(days => ?) where id = (select last_trend_id from ideas where id = ?)",
+                days, ideaId);
+    }
+
+    @Test
+    void 재평가_최소_간격_안의_새_트렌드는_TREND를_다시_평가하지_않고_간격이_지난_트렌드로는_평가한다() throws Exception {
+        String token = signUpAndLogin("cadence@cue.com");
+        long id = createIdea(token, FULL);
+        evaluate(token, id); // TREND 첫 평가 (바로)
+        Long firstTrendId = jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id);
+        assertEquals(5, evaluationCount(id));
+
+        // 방금 만든 트렌드와 같은 날의 새 트렌드: 간격(1일) 안이라 호출하지 않는다 (완료 표시도 그대로)
+        when(globalTrend.today()).thenReturn(newTrend("같은 날 새 흐름"));
+        clearInvocations(gemini);
+        assertEquals("NO_CHANGE", evaluate(token, id).get("status").asString());
+        verify(gemini, never()).generateJson(anyString(), anyMap());
+        assertEquals(firstTrendId, jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
+
+        // 마지막 평가에 쓴 트렌드가 5일 전이 되면 다음 트렌드로 재평가한다
+        ageLastTrend(id, 5);
+        TrendSnapshot later = newTrend("며칠 뒤 새 흐름");
+        when(globalTrend.today()).thenReturn(later);
+        assertEquals("EVALUATED", evaluate(token, id).get("status").asString());
+        assertEquals(later.id(), jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
     }
 
     @Test

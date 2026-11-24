@@ -10,21 +10,23 @@ import com.cue.idea.entity.Idea;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.score.entity.ScoreType;
 import com.cue.source.dto.SourceCheckResult;
-import com.cue.source.dto.SourceSummary;
 import com.cue.source.entity.Source;
 import com.cue.source.repository.SourceRepository;
 import com.cue.source.service.SourceCheckService;
-import com.cue.source.service.SourceSummaryService;
+import com.cue.source.service.SourceExcerptService;
+import com.cue.trend.config.TrendProperties;
 import com.cue.trend.dto.TrendSnapshot;
+import com.cue.trend.entity.Trend;
+import com.cue.trend.repository.TrendRepository;
 import com.cue.trend.service.GlobalTrendService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -37,7 +39,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>하루 평가는 서로 독립인 두 갈래다.
  * <ul>
  *   <li><b>A. 키워드 근거 자료 → 기존 4개 기준</b>: 아이디어 종류별 source를 키워드로 조회해 해시로 변경을 감지하고, 변경된 source마다
- *       상위 N개 원문 읽기→항목 요약→소스 요약({@link SourceSummaryService}) 후 전체 평가 요청이면 초기 평가, 아니면 재평가 ({@link EvidenceEvaluator})</li>
+ *       상위 N개 원문을 읽어 정리한 발췌({@link SourceExcerptService}, AI 호출 없음)를 한 번의 평가 호출에 넣어 전체 평가 요청이면 초기 평가, 아니면 재평가 ({@link EvidenceEvaluator})</li>
  *   <li><b>B. 글로벌 트렌드 → TREND</b>: 그날의 글로벌 트렌드({@link GlobalTrendService#today()}, 아이디어와 무관)를 아이디어 4항목에 대입해
  *       첫 평가(0~100) 또는 재평가(±10) ({@link TrendEvaluator}). 이 아이디어가 이미 그 트렌드로 평가됐으면 호출하지 않는다</li>
  * </ul>
@@ -57,9 +59,11 @@ public class IdeaEvaluationPipeline {
     private final EvidenceEvaluator analyzer;
     private final TrendEvaluator trendEvaluator;
     private final GlobalTrendService globalTrend;
-    private final SourceSummaryService sourceSummaryService;
+    private final SourceExcerptService sourceExcerptService;
     private final GeminiClient gemini;
     private final TransactionTemplate tx;
+    private final TrendRepository trendRepository;
+    private final TrendProperties trendProps;
 
     /**
      * @throws CustomException 없는 아이디어 I001, 보류 I004, AI 사용 불가 E001,
@@ -85,7 +89,7 @@ public class IdeaEvaluationPipeline {
                 .filter(SourceCheckResult::changed).toList();
 
         boolean runA = !changed.isEmpty() || snapshot.needsFullEvaluation();
-        boolean runB = trend != null && !trend.id().equals(snapshot.lastTrendId());
+        boolean runB = trend != null && !trend.id().equals(snapshot.lastTrendId()) && trendDue(snapshot, trend);
         if (!runA && !runB) {
             return EvaluationRunResult.noChange();
         }
@@ -94,11 +98,10 @@ public class IdeaEvaluationPipeline {
         RuntimeException failure = null;
         boolean fullDone = false;
         Long trendDone = null;
-        Set<Long> degraded = new java.util.HashSet<>(); // 일괄 요약이 실패해 원래 항목으로 평가한 source
 
         if (runA) {
             try {
-                changes.addAll(evaluateEvidence(snapshot, changed, degraded));
+                changes.addAll(evaluateEvidence(snapshot, changed));
                 fullDone = snapshot.needsFullEvaluation();
             } catch (RuntimeException e) {
                 restoreHashes(changed, previous); // 다음 실행에서 같은 변경을 다시 감지한다
@@ -128,8 +131,6 @@ public class IdeaEvaluationPipeline {
             }
             throw e;
         }
-        // 일괄 요약에 실패해 짧은 요약으로 평가한 source는 해시를 되돌려 다음 실행에서 다시 읽고 요약한다
-        restoreHashes(changed.stream().filter(r -> degraded.contains(r.sourceId())).toList(), previous);
         if (failure != null) {
             log.warn("하루 평가 일부가 실패했습니다 (성공한 쪽은 저장됨, 실패한 쪽은 다음 실행에서 다시) ideaId={}: {}", ideaId, failure.toString());
             throw failure;
@@ -137,14 +138,25 @@ public class IdeaEvaluationPipeline {
         return EvaluationRunResult.evaluated(updated);
     }
 
-    /** A: 변경된 source의 원문을 읽고 요약해 기존 4개 기준을 평가한다. */
-    private List<ScoreChange> evaluateEvidence(IdeaSnapshot snapshot, List<SourceCheckResult> changed, Set<Long> degraded) {
-        List<SourceSummary> summaries = changed.stream().map(sourceSummaryService::summarize).toList();
-        summaries.stream().filter(SourceSummary::degraded).forEach(d -> degraded.add(d.result().sourceId()));
-        List<SourceCheckResult> enriched = summaries.stream().map(SourceSummary::result).toList();
+    /** A: 변경된 source의 원문 발췌를 만들어(AI 호출 없음) 기존 4개 기준을 한 번의 호출로 평가한다. */
+    private List<ScoreChange> evaluateEvidence(IdeaSnapshot snapshot, List<SourceCheckResult> changed) {
+        List<SourceCheckResult> enriched = changed.stream().map(sourceExcerptService::excerpt).toList();
         return snapshot.needsFullEvaluation()
                 ? analyzer.initialEvaluate(snapshot, enriched)
                 : analyzer.reEvaluate(snapshot, enriched);
+    }
+
+    /**
+     * TREND를 지금 평가할 차례인지. 첫 평가(아직 TREND를 평가한 적 없음)는 바로, 재평가는 마지막으로 평가에 쓴 트렌드가 오늘 트렌드보다
+     * {@code cue.trend.min-reeval-days}일 이상 오래됐을 때만 한다(트렌디함은 천천히 변하는 지표라 매일 부를 필요가 없다).
+     * 차례가 아니면 호출도 완료 표시도 하지 않아, 기간이 지난 뒤의 트렌드로 자연스럽게 다시 평가된다.
+     */
+    private boolean trendDue(IdeaSnapshot snapshot, TrendSnapshot trend) {
+        if (snapshot.lastTrendId() == null || trendProps.minReevalDays() <= 0) {
+            return true;
+        }
+        LocalDateTime last = tx.execute(s -> trendRepository.findById(snapshot.lastTrendId()).map(Trend::getCreatedAt).orElse(null));
+        return last == null || ChronoUnit.DAYS.between(last.toLocalDate(), trend.createdAt().toLocalDate()) >= trendProps.minReevalDays();
     }
 
     private void restoreHashes(List<SourceCheckResult> changed, Map<Long, PreviousHash> previous) {
