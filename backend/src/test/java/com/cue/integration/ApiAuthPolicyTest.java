@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.cue.global.ai.AiLane;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.ErrorCode;
 import com.cue.source.service.SourceCheckService;
@@ -222,13 +223,16 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("endpoints")
     void 유효한_토큰이면_인증_에러가_아니다(Endpoint e) throws Exception {
+        if (e.path().equals("/api/ideas/structure")) {
+            org.mockito.Mockito.doReturn(mapper.createObjectNode()).when(gemini).generateJson(
+                    org.mockito.ArgumentMatchers.eq(AiLane.INTERACTIVE),
+                    org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.anyMap());
+        }
         String token = signUpAndLogin("ok-" + System.nanoTime() + "@cue.com");
         Long ideaId = e.ownsIdea() ? createIdea(token) : 1L;
         String code = mapper.readTree(call(e, ideaId, token).andReturn().getResponse().getContentAsString()).get("code").asString();
-        // 구조화는 이 테스트 환경에서 비활성화된 Gemini가 필요하다.
-        String expectedCode = e.path().equals("/api/ideas/structure")
-                ? ErrorCode.AI_NOT_CONFIGURED.getCode() : "200";
-        assertEquals(expectedCode, code, e + " 는 인증 검사를 통과해야 한다");
+        assertEquals("200", code, e + " 는 본인 토큰으로 성공해야 한다");
     }
 
     @ParameterizedTest(name = "{0}")
