@@ -140,7 +140,7 @@ export function EditModal({
       .map(({ key }) => [key, fields[key]]),
   )
   const hasChange = Object.keys(changed).length > 0
-  // 하나라도 비어 있으면 백엔드가 보류(HOLD)로 바꾸고, 모두 채워진 채 내용이 바뀌면 저장 직후 평가를 다시 시작한다
+  // 하나라도 비어 있으면 백엔드가 보류(HOLD)로 바꾸고, 모두 채워진 채 내용이 바뀌면 다음 평가에서 처음부터 다시 평가한다
   const hasEmpty = fieldLabels.some(({ key }) => !fields[key].trim())
   const notice = evaluating
     ? {
@@ -154,7 +154,7 @@ export function EditModal({
         }
       : hasChange
         ? {
-            text: '저장하면 바뀐 내용으로 평가가 다시 시작돼요.',
+            text: '저장한 내용은 다음 평가 때 점수에 반영돼요.',
             tone: 'bg-[#f5f2ff] text-[#5b4bb7]',
           }
         : null

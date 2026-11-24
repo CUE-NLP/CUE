@@ -128,7 +128,8 @@ export default function App() {
     setError('')
     try {
       const idea = await createIdea(fields)
-      setSelected(idea)
+      // ACTIVE로 저장되면 백엔드가 커밋 직후 평가를 대기열에 넣지만 응답은 그 전 상태(IDLE)라 한 번 더 받는다
+      setSelected(await getIdea(idea.id).catch(() => idea))
       setRaw('')
       setFields({ ...emptyFields })
       navigate('result')
