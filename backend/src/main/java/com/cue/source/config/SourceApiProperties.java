@@ -18,7 +18,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param pageviewsDays      Wikipedia: 문서 조회수를 합산하는 최근 일수
  * @param wikimediaUserAgent Wikimedia 정책상 필수인 User-Agent. 프로젝트를 식별하는 일반 문자열로 두고 개인 이메일은 넣지 않는다
  * @param pageviewsBaseUrl   Wikimedia pageviews REST API 주소 (테스트에서 바꿀 수 있다)
- * @param summaryReuseDays   같은 URL의 항목 요약을 다시 만들지 않고 재사용하는 기간(일). 0이면 항상 다시 요약
+ * @param summaryReuseDays   (글로벌 트렌드만) 같은 URL의 항목 요약을 다시 만들지 않고 재사용하는 기간(일). 0이면 항상 다시 요약
+ * @param excerptChars       키워드 근거 자료에서 항목 하나당 평가 프롬프트에 직접 넣는 원문 발췌 길이(글자). AI 요약 호출 없이 정리한 원문 앞부분을 쓴다
  */
 @ConfigurationProperties(prefix = "cue.source")
 public record SourceApiProperties(
@@ -36,6 +37,7 @@ public record SourceApiProperties(
         @DefaultValue("30") int pageviewsDays,
         @DefaultValue("CUE-idea-portfolio/1.0 (student project; non-commercial)") String wikimediaUserAgent,
         @DefaultValue("https://wikimedia.org") String pageviewsBaseUrl,
+        @DefaultValue("800") int excerptChars,
         @DefaultValue Api github,
         @DefaultValue Api huggingFace,
         @DefaultValue Api stackExchange,

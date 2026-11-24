@@ -1,6 +1,6 @@
 package com.cue.idea.service;
 
-import com.cue.evaluation.service.EvaluationJobService;
+import com.cue.evaluation.service.EvaluationQueueService;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
@@ -11,13 +11,13 @@ import org.springframework.stereotype.Service;
 
 /**
  * 수동 평가 요청 (POST /api/ideas/{id}/evaluate). 소유자·활성·AI 사용 가능 여부는 요청 시점에 동기로 검사하고,
- * 평가 자체는 큐에 넣고 바로 돌아온다(비동기). 평가 동안의 트랜잭션은 {@link EvaluationJobService}가 잡지 않는다.
+ * 평가 자체는 큐에 넣고 바로 돌아온다(비동기). 평가 동안의 트랜잭션은 {@link EvaluationQueueService}가 잡지 않는다.
  */
 @Service
 @RequiredArgsConstructor
 public class IdeaEvaluationService {
     private final IdeaService ideaService;
-    private final EvaluationJobService jobs;
+    private final EvaluationQueueService jobs;
     private final GeminiClient gemini;
 
     /**

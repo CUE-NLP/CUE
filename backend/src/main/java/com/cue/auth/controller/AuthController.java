@@ -12,9 +12,7 @@ import com.cue.global.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 import lombok.RequiredArgsConstructor;
 
@@ -48,16 +46,14 @@ public class AuthController {
     }
 
     @Operation(summary = "로그아웃",
-            description = "**현재 액세스 토큰**(`Authorization` 헤더)을 즉시 무효화하고(이후 같은 토큰은 `A005`), "
-                    + "요청 본문의 리프레시 토큰을 폐기한다(현재 기기만, 다른 기기의 로그인은 유지). "
+            description = "요청 본문의 리프레시 토큰을 폐기한다(현재 기기만, 다른 기기의 로그인은 유지). "
                     + "리프레시 토큰이 없거나 이미 폐기됐거나 본인 것이 아니어도 성공(멱등)이며, 본인 것이 아닌 토큰은 폐기하지 않는다. "
-                    + "액세스 토큰이 이미 만료됐다면(`A004`) 먼저 `/api/auth/refresh`로 재발급한 뒤 로그아웃한다. "
-                    + "성공 후 클라이언트는 두 토큰을 모두 지운다.")
+                    + "액세스 토큰은 서버가 폐기하지 않으므로 **만료될 때까지(짧은 수명) 유효**하다. 그래서 성공 후 클라이언트가 두 토큰을 모두 지워야 한다. "
+                    + "이 API는 액세스 토큰이 필요하다. 이미 만료됐다면(`A004`) 먼저 `/api/auth/refresh`로 재발급한 뒤 로그아웃한다.")
     @PostMapping("/logout")
-    public CommonResponse<Void> logout(@AuthenticationPrincipal UserPrincipal principal, Authentication authentication,
+    public CommonResponse<Void> logout(@AuthenticationPrincipal UserPrincipal principal,
                                        @Valid @RequestBody RefreshRequest req) {
-        Jwt jwt = (Jwt) authentication.getDetails();
-        authService.logout(principal.id(), jwt.getId(), jwt.getExpiresAt(), req.refreshToken());
+        authService.logout(principal.id(), req.refreshToken());
         return CommonResponse.onSuccess();
     }
 }

@@ -1,35 +1,28 @@
 package com.cue.idea.service;
 
+import com.cue.global.ai.AiLane;
+import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.ItCategory;
-import java.net.http.HttpClient;
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Primary;
-import org.springframework.http.MediaType;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 
 /**
- * Gemini API로 아이디어 종류와 검색 키워드를 추출한다 (JSON 구조화 응답).
+ * Gemini API로 아이디어 종류와 검색 키워드를 추출한다 (JSON 구조화 응답). 호출은 {@link GeminiClient}의 <b>인터랙티브 레인</b>(가벼운 모델·짧은 간격·재시도)으로 보낸다.
  * 호출·파싱 실패 시 {@link SimpleIdeaAnalyzer}로 폴백해, AI 장애가 아이디어 등록/수정 실패로 번지지 않게 한다.
  */
 @Slf4j
 @Component
 @Primary
-@EnableConfigurationProperties(GeminiProperties.class)
 @ConditionalOnProperty(prefix = "cue.gemini", name = "enabled", havingValue = "true", matchIfMissing = true)
 class GeminiIdeaAnalyzer implements IdeaAnalyzer {
     static final int MAX_KEYWORDS = 2;
@@ -98,41 +91,22 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
             이번에는 itCategory만 판단한다. 키워드는 사용자가 이미 정했으므로 만들지 않는다. 출력 JSON에는 "itCategory" 키만 쓴다.
             """;
 
-    private final RestClient restClient;
-    private final ObjectMapper objectMapper;
-    private final GeminiProperties props;
+    private final GeminiClient gemini;
     private final SimpleIdeaAnalyzer fallback;
 
-    @Autowired
-    GeminiIdeaAnalyzer(RestClient.Builder builder, ObjectMapper objectMapper, GeminiProperties props,
-                       SimpleIdeaAnalyzer fallback) {
-        Duration timeout = Duration.ofSeconds(props.timeoutSeconds());
-        JdkClientHttpRequestFactory factory =
-                new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(timeout).build());
-        factory.setReadTimeout(timeout);
-        this.restClient = builder.requestFactory(factory).baseUrl(props.baseUrl()).build();
-        this.objectMapper = objectMapper;
-        this.props = props;
-        this.fallback = fallback;
-    }
-
-    /** 테스트용: 이미 구성된 RestClient(MockRestServiceServer 연결)를 그대로 쓴다. */
-    GeminiIdeaAnalyzer(RestClient restClient, ObjectMapper objectMapper, GeminiProperties props,
-                       SimpleIdeaAnalyzer fallback) {
-        this.restClient = restClient;
-        this.objectMapper = objectMapper;
-        this.props = props;
+    GeminiIdeaAnalyzer(GeminiClient gemini, SimpleIdeaAnalyzer fallback) {
+        this.gemini = gemini;
         this.fallback = fallback;
     }
 
     @Override
     public IdeaAnalysis analyze(Idea idea) {
-        if (props.apiKey() == null || props.apiKey().isBlank()) {
-            log.warn("GEMINI_API_KEY가 없어 임시 분석기로 대체합니다.");
+        if (!gemini.available()) {
+            log.warn("Gemini를 쓸 수 없어(비활성 또는 API 키 없음) 임시 분석기로 대체합니다.");
             return fallback.analyze(idea);
         }
         try {
-            return requestAnalysis(idea);
+            return requestAnalysis(idea, false);
         } catch (RuntimeException e) {
             log.warn("Gemini 분석 실패, 임시 분석기로 대체합니다: {}", e.toString());
             return fallback.analyze(idea);
@@ -141,8 +115,8 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
 
     @Override
     public ItCategory analyzeCategory(Idea idea) {
-        if (props.apiKey() == null || props.apiKey().isBlank()) {
-            log.warn("GEMINI_API_KEY가 없어 임시 분석기로 대체합니다.");
+        if (!gemini.available()) {
+            log.warn("Gemini를 쓸 수 없어(비활성 또는 API 키 없음) 임시 분석기로 대체합니다.");
             return fallback.analyzeCategory(idea);
         }
         try {
@@ -153,87 +127,61 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         }
     }
 
-    /** Gemini를 호출해 결과를 파싱한다. 실패하면 G002(CustomException). */
-    IdeaAnalysis requestAnalysis(Idea idea) {
-        return requestAnalysis(idea, false);
-    }
-
-    /** typeOnly면 키워드 없이 종류만 요청한다 (사용자가 키워드를 직접 정한 경우). */
+    /** typeOnly면 키워드 없이 종류만 요청한다 (사용자가 키워드를 직접 정한 경우). 실패하면 GeminiClient의 CustomException. */
     IdeaAnalysis requestAnalysis(Idea idea, boolean typeOnly) {
-        String body;
-        try {
-            body = restClient.post()
-                    .uri("/v1beta/models/{model}:generateContent", props.model())
-                    .header("x-goog-api-key", props.apiKey())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(buildRequest(idea, typeOnly))
-                    .retrieve()
-                    .body(String.class);
-        } catch (RuntimeException e) {
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
-        }
-        return parse(body, typeOnly);
-    }
-
-    IdeaAnalysis parse(String responseBody) {
-        return parse(responseBody, false);
-    }
-
-    IdeaAnalysis parse(String responseBody, boolean typeOnly) {
-        try {
-            JsonNode text = objectMapper.readTree(responseBody)
-                    .path("candidates").path(0).path("content").path("parts").path(0).path("text");
-            if (!text.isString()) {
-                throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
-            }
-            JsonNode result = objectMapper.readTree(text.asString());
-            if (typeOnly) {
-                return new IdeaAnalysis(ItCategory.fromAi(result.path("itCategory").asString(null)), List.of());
-            }
-            LinkedHashSet<String> keywords = new LinkedHashSet<>();
-            for (JsonNode k : result.path("keywords")) {
-                String keyword = k.asString("").trim();
-                if (!keyword.isEmpty() && keyword.length() <= MAX_KEYWORD_LENGTH) {
-                    if (HANGUL.matcher(keyword).find()) {
-                        log.warn("Gemini가 영어가 아닌 키워드를 반환했습니다: {}", keyword);
-                    }
-                    keywords.add(keyword);
-                }
-                if (keywords.size() == MAX_KEYWORDS) {
-                    break;
-                }
-            }
-            if (keywords.isEmpty()) {
-                throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
-            }
-            return new IdeaAnalysis(ItCategory.fromAi(result.path("itCategory").asString(null)), List.copyOf(keywords));
-        } catch (CustomException e) {
-            throw e;
-        } catch (RuntimeException e) {
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
-        }
-    }
-
-    private Map<String, Object> buildRequest(Idea idea, boolean typeOnly) {
         String userText = "타깃: " + idea.getTarget() + "\n문제: " + idea.getProblem()
                 + "\n해결: " + idea.getSolution() + "\n기대효과: " + idea.getExpectation();
-        List<String> types = Arrays.stream(ItCategory.values()).map(Enum::name).toList();
-        Map<String, Object> categorySchema = Map.of("type", "STRING", "enum", types);
-        Map<String, Object> schema = typeOnly
-                ? Map.of("type", "OBJECT", "properties", Map.of("itCategory", categorySchema), "required", List.of("itCategory"))
-                : Map.of("type", "OBJECT",
-                        "properties", Map.of(
-                                "itCategory", categorySchema,
-                                "keywords", Map.of("type", "ARRAY", "items", Map.of("type", "STRING"),
-                                        "minItems", 1, "maxItems", MAX_KEYWORDS)),
-                        "required", List.of("itCategory", "keywords"));
         String systemPrompt = typeOnly ? SYSTEM_PROMPT + TYPE_ONLY_NOTICE : SYSTEM_PROMPT;
-        return Map.of(
-                "systemInstruction", Map.of("parts", List.of(Map.of("text", systemPrompt))),
-                "contents", List.of(Map.of("role", "user", "parts", List.of(Map.of("text", userText)))),
-                "generationConfig", Map.of(
-                        "responseMimeType", "application/json",
-                        "responseSchema", schema,
-                        "temperature", 0.2));
+        return parse(gemini.generateJson(AiLane.INTERACTIVE, systemPrompt, userText, schema(typeOnly)), typeOnly);
+    }
+
+    /** 응답 JSON을 종류·키워드로 바꾼다. 키워드가 하나도 없으면(종류만 모드 제외) E002. */
+    static IdeaAnalysis parse(JsonNode result, boolean typeOnly) {
+        ItCategory category = ItCategory.fromAi(result.path("itCategory").asString(null));
+        if (typeOnly) {
+            return new IdeaAnalysis(category, List.of());
+        }
+        List<String> keywords = normalizeKeywords(result.path("keywords"));
+        if (keywords.isEmpty()) {
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+        }
+        return new IdeaAnalysis(category, keywords);
+    }
+
+    /** 공백·중복·너무 긴 값을 없애고 {@value #MAX_KEYWORDS}개까지만 남긴다. 한글이 섞이면 경고 로그만 남긴다. */
+    static List<String> normalizeKeywords(JsonNode keywordsNode) {
+        LinkedHashSet<String> keywords = new LinkedHashSet<>();
+        for (JsonNode k : keywordsNode) {
+            String keyword = k.asString("").trim();
+            if (!keyword.isEmpty() && keyword.length() <= MAX_KEYWORD_LENGTH) {
+                if (HANGUL.matcher(keyword).find()) {
+                    log.warn("Gemini가 영어가 아닌 키워드를 반환했습니다: {}", keyword);
+                }
+                keywords.add(keyword);
+            }
+            if (keywords.size() == MAX_KEYWORDS) {
+                break;
+            }
+        }
+        return List.copyOf(keywords);
+    }
+
+    /** itCategory enum 스키마 (분석기와 구조화 API가 같이 쓴다). */
+    static Map<String, Object> categorySchema() {
+        List<String> types = Arrays.stream(ItCategory.values()).map(Enum::name).toList();
+        return Map.of("type", "STRING", "enum", types);
+    }
+
+    /** 키워드 배열 스키마 (최대 2개). */
+    static Map<String, Object> keywordsSchema(int minItems) {
+        return Map.of("type", "ARRAY", "items", Map.of("type", "STRING"), "minItems", minItems, "maxItems", MAX_KEYWORDS);
+    }
+
+    private static Map<String, Object> schema(boolean typeOnly) {
+        return typeOnly
+                ? Map.of("type", "OBJECT", "properties", Map.of("itCategory", categorySchema()), "required", List.of("itCategory"))
+                : Map.of("type", "OBJECT",
+                        "properties", Map.of("itCategory", categorySchema(), "keywords", keywordsSchema(1)),
+                        "required", List.of("itCategory", "keywords"));
     }
 }

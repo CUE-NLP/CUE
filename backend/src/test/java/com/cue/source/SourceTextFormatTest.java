@@ -26,4 +26,16 @@ class SourceTextFormatTest {
                 List.of(SourceCheckResult.changed(1L, ApiProvider.GITHUB, "k", many, LocalDateTime.now())));
         assertEquals(SourceTextFormat.MAX_ITEMS, capped.split("\n").length);
     }
+
+    @Test
+    void 상한을_넓히면_근거_평가용으로_더_많은_항목과_긴_발췌를_담는다() {
+        List<SourceItem> many = java.util.stream.IntStream.range(0, 40)
+                .mapToObj(i -> new SourceItem("t" + i, "https://u/" + i, "발".repeat(900))).toList();
+        String text = SourceTextFormat.formatSources(
+                List.of(SourceCheckResult.changed(1L, ApiProvider.GITHUB, "k", many, LocalDateTime.now())),
+                SourceTextFormat.EVIDENCE_MAX_ITEMS, SourceTextFormat.EVIDENCE_MAX_SUMMARY_CHARS);
+        String[] lines = text.split("\n");
+        assertEquals(SourceTextFormat.EVIDENCE_MAX_ITEMS, lines.length);
+        assertTrue(lines[0].endsWith("| " + "발".repeat(900)));
+    }
 }

@@ -61,15 +61,6 @@ CREATE TABLE trends (
 CREATE INDEX idx_trends_created_at ON trends (created_at DESC);
 ALTER TABLE ideas ADD CONSTRAINT fk_ideas_last_trend FOREIGN KEY (last_trend_id) REFERENCES trends (id);
 
--- 트렌드의 provider(source)별 요약 (항목 요약들로 만든 중간 단계)
-CREATE TABLE trend_sources (
-    id       BIGSERIAL PRIMARY KEY,
-    trend_id BIGINT      NOT NULL REFERENCES trends (id) ON DELETE CASCADE,
-    provider VARCHAR(30) NOT NULL,
-    summary  TEXT        NOT NULL
-);
-CREATE INDEX idx_trend_sources_trend_id ON trend_sources (trend_id);
-
 -- 트렌드에 쓰인 상위 항목과 항목 요약 (원문은 저장하지 않는다). 같은 URL은 다음 수집에서 재사용한다.
 CREATE TABLE trend_items (
     id            BIGSERIAL PRIMARY KEY,
@@ -124,25 +115,10 @@ CREATE TABLE sources (
     provider      VARCHAR(30)  NOT NULL,
     keyword       VARCHAR(255) NOT NULL,
     content_hash  VARCHAR(64),
-    checked_at    TIMESTAMP,
-    summary       TEXT,          -- 상위 항목 요약들로 만든 소스 단위 최종 요약 (변경 감지 시 덮어씀)
-    summarized_at TIMESTAMP
+    checked_at    TIMESTAMP
 );
 CREATE INDEX idx_sources_idea_provider ON sources (idea_id, provider);
 CREATE INDEX idx_sources_content_hash ON sources (content_hash);
-
--- source의 상위 N개 항목 요약. 변경이 감지되면 덮어쓰고, 같은 URL은 재평가 때 재사용한다 (원문은 저장하지 않는다).
-CREATE TABLE source_items (
-    id           BIGSERIAL PRIMARY KEY,
-    source_id    BIGINT       NOT NULL REFERENCES sources (id) ON DELETE CASCADE,
-    url          TEXT         NOT NULL,
-    title        VARCHAR(500) NOT NULL,
-    published_at VARCHAR(10),
-    metrics      VARCHAR(255),
-    summary      TEXT         NOT NULL,
-    summarized_at TIMESTAMP   NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_source_items_source_id ON source_items (source_id);
 
 -- 리프레시 토큰: 원문은 저장하지 않고 SHA-256 해시만 저장한다. 회전 시 사용된 토큰은 revoked_at을 채워 남겨 두고(재사용 탐지), 재사용이 감지되면 해당 사용자의 모든 토큰을 폐기한다.
 CREATE TABLE refresh_tokens (
@@ -154,12 +130,3 @@ CREATE TABLE refresh_tokens (
     created_at TIMESTAMP   NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_refresh_tokens_user ON refresh_tokens (user_id);
-
--- 로그아웃으로 폐기된 액세스 토큰의 jti. 토큰 자체의 만료 시각(expires_at)까지만 보관하며 이후에는 정리 작업이 삭제한다.
-CREATE TABLE revoked_access_tokens (
-    jti        VARCHAR(36) PRIMARY KEY,
-    user_id    BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    expires_at TIMESTAMP   NOT NULL,
-    revoked_at TIMESTAMP   NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_revoked_access_tokens_expires ON revoked_access_tokens (expires_at);

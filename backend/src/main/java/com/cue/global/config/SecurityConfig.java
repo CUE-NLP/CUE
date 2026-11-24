@@ -1,6 +1,5 @@
 package com.cue.global.config;
 
-import com.cue.auth.repository.RevokedAccessTokenRepository;
 import com.cue.global.security.CorsProperties;
 import com.cue.global.security.JwtPrincipalConverter;
 import com.cue.global.security.JwtProperties;
@@ -20,13 +19,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
-import org.springframework.security.oauth2.core.OAuth2Error;
-import org.springframework.security.oauth2.core.OAuth2TokenValidator;
-import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
@@ -86,20 +79,8 @@ public class SecurityConfig {
     }
 
     @Bean
-    JwtDecoder jwtDecoder(JwtProperties props, RevokedAccessTokenRepository revoked) {
-        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(secretKey(props)).macAlgorithm(MacAlgorithm.HS256).build();
-        // 서명·만료 검증에 더해: jti가 없는 토큰과 로그아웃으로 폐기된 jti는 무효(A005)로 거부한다.
-        // 보호된 요청마다 PK 조회 1회가 추가된다.
-        OAuth2TokenValidator<Jwt> notRevoked = jwt -> {
-            if (jwt.getId() == null) {
-                return OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token", "Jwt has no jti", null));
-            }
-            if (revoked.existsById(jwt.getId())) {
-                return OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token", "Jwt has been revoked", null));
-            }
-            return OAuth2TokenValidatorResult.success();
-        };
-        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefault(), notRevoked));
-        return decoder;
+    JwtDecoder jwtDecoder(JwtProperties props) {
+        // 서명·만료만 검증한다(기본 검증기). 액세스 토큰은 서버가 폐기하지 않아 요청마다 DB를 조회하지 않는다.
+        return NimbusJwtDecoder.withSecretKey(secretKey(props)).macAlgorithm(MacAlgorithm.HS256).build();
     }
 }

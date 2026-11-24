@@ -42,6 +42,7 @@ public class IdeaService {
     private final IdeaScoreHistoryRepository histories;
     private final SourceRepository sources;
     private final IdeaAnalyzer analyzer;
+    private final AnalysisCache analysisCache;
     private final org.springframework.context.ApplicationEventPublisher events;
 
     /**
@@ -98,11 +99,13 @@ public class IdeaService {
     private void extractAndRegisterSources(Idea idea) {
         ItCategory category;
         List<String> keywords;
+        // 구조화 API가 같은 4개 항목으로 이미 뽑아 둔 결과가 있으면(사용자가 고치지 않은 경우) AI를 다시 부르지 않는다
+        IdeaAnalysis cached = analysisCache.find(idea.getUser().getId(), idea);
         if (idea.hasUserKeywords()) {
-            category = analyzer.analyzeCategory(idea);
+            category = cached != null ? cached.itCategory() : analyzer.analyzeCategory(idea);
             keywords = idea.keywordList();
         } else {
-            IdeaAnalysis analysis = analyzer.analyze(idea);
+            IdeaAnalysis analysis = cached != null ? cached : analyzer.analyze(idea);
             category = analysis.itCategory();
             keywords = analysis.keywords().stream().limit(MAX_KEYWORDS).toList();
             idea.applyKeywords(keywords, KeywordOrigin.AI);

@@ -36,7 +36,7 @@ import tools.jackson.databind.JsonNode;
  */
 @Component
 @RequiredArgsConstructor
-public class EvaluationAnalyzer {
+public class EvidenceEvaluator {
     /** 재평가 한 번에서 기준 하나가 움직일 수 있는 최대 점수(정수). 프롬프트가 어겨도 서버가 한 번 더 제한한다. */
     public static final BigDecimal MAX_DIFFERENCE = BigDecimal.TEN;
     static final BigDecimal MAX_SCORE = new BigDecimal("100");
@@ -133,7 +133,8 @@ public class EvaluationAnalyzer {
         vars.put("target", nullToEmpty(idea.target()));
         vars.put("solution", nullToEmpty(idea.solution()));
         vars.put("expectation", nullToEmpty(idea.expectation()));
-        String items = changed.isEmpty() ? "(변경된 자료 없음)" : SourceTextFormat.formatSources(changed);
+        String items = changed.isEmpty() ? "(변경된 자료 없음)"
+                : SourceTextFormat.formatSources(changed, SourceTextFormat.EVIDENCE_MAX_ITEMS, SourceTextFormat.EVIDENCE_MAX_SUMMARY_CHARS);
         vars.put("currentScores", scores.toString().strip());
         vars.put("changedItems", items); // re-evaluation
         vars.put("items", items);        // initial-evaluation

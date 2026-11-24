@@ -2,74 +2,61 @@ package com.cue.idea.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import com.cue.global.ai.AiLane;
+import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaType;
 import com.cue.idea.entity.ItCategory;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.test.web.client.MockRestServiceServer;
-import org.springframework.web.client.RestClient;
+import org.mockito.ArgumentCaptor;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-/** 실제 Gemini를 호출하지 않고 MockRestServiceServer로 요청/응답 파싱과 폴백을 검증한다. */
+/** GeminiClient를 목으로 두고 인터랙티브 레인 호출, 응답 파싱, 폴백을 검증한다 (HTTP 계층은 GeminiClientTest가 맡는다). */
 class GeminiIdeaAnalyzerTest {
-    private static final String URL =
-            "https://gemini.test/v1beta/models/test-model:generateContent";
-
     private final ObjectMapper mapper = new ObjectMapper();
     private final Idea idea = new Idea(null, IdeaType.IT, "문제가 심각하다", "대학생", "앱으로 해결한다", "시간 절약");
-    private MockRestServiceServer server;
+    private GeminiClient gemini;
     private GeminiIdeaAnalyzer analyzer;
 
     @BeforeEach
     void setUp() {
-        RestClient.Builder builder = RestClient.builder().baseUrl("https://gemini.test");
-        server = MockRestServiceServer.bindTo(builder).build();
-        analyzer = analyzer(builder, "test-key");
+        gemini = mock(GeminiClient.class);
+        when(gemini.available()).thenReturn(true);
+        analyzer = new GeminiIdeaAnalyzer(gemini, new SimpleIdeaAnalyzer());
     }
 
-    private GeminiIdeaAnalyzer analyzer(RestClient.Builder builder, String apiKey) {
-        GeminiProperties props = new GeminiProperties(true, apiKey, "test-model", "https://gemini.test", 5);
-        return new GeminiIdeaAnalyzer(builder.build(), mapper, props, new SimpleIdeaAnalyzer());
-    }
-
-    /** Gemini generateContent 응답 형태: 구조화 JSON은 candidates[0].content.parts[0].text 문자열 안에 들어 있다. */
-    private String envelope(String innerJson) {
-        return mapper.writeValueAsString(java.util.Map.of("candidates", java.util.List.of(java.util.Map.of(
-                "content", java.util.Map.of("parts", java.util.List.of(java.util.Map.of("text", innerJson)))))));
+    private void respond(String json) {
+        when(gemini.generateJson(eq(AiLane.INTERACTIVE), anyString(), anyString(), anyMap())).thenReturn(mapper.readTree(json));
     }
 
     @Test
-    void 정상_응답을_종류와_키워드로_파싱한다() {
-        server.expect(requestTo(URL))
-                .andExpect(method(HttpMethod.POST))
-                .andExpect(header("x-goog-api-key", "test-key"))
-                .andRespond(withSuccess(
-                        envelope("{\"itCategory\":\"DATA_ANALYTICS\",\"keywords\":[\"study time management\",\"student planner app\",\"third keyword\"]}"),
-                        MediaType.APPLICATION_JSON));
+    void 정상_응답을_종류와_키워드로_파싱하고_인터랙티브_레인으로_부른다() {
+        respond("{\"itCategory\":\"DATA_ANALYTICS\",\"keywords\":[\"study time management\",\"student planner app\",\"third keyword\"]}");
 
         IdeaAnalysis result = analyzer.analyze(idea);
 
         assertThat(result.itCategory()).isEqualTo(ItCategory.DATA_ANALYTICS);
         assertThat(result.keywords()).containsExactly("study time management", "student planner app");
-        server.verify();
+        verify(gemini).generateJson(eq(AiLane.INTERACTIVE), anyString(), anyString(), anyMap());
     }
 
     @Test
-    void 키워드는_중복_제거_후_2개까지_알_수_없는_종류는_OTHER() {
-        server.expect(requestTo(URL)).andRespond(withSuccess(
-                envelope("{\"itCategory\":\"spaceship\",\"keywords\":[\"a\",\"a\",\" \",\"b\",\"c\",\"d\"]}"),
-                MediaType.APPLICATION_JSON));
+    void 키워드는_중복_제거_후_2개까지_알_수_없는_종류는_기본값() {
+        respond("{\"itCategory\":\"spaceship\",\"keywords\":[\"a\",\"a\",\" \",\"b\",\"c\",\"d\"]}");
 
         IdeaAnalysis result = analyzer.analyze(idea);
 
@@ -78,69 +65,81 @@ class GeminiIdeaAnalyzerTest {
     }
 
     @Test
-    void 호출_실패는_G002로_던지지만_analyze는_폴백한다() {
-        server.expect(requestTo(URL)).andRespond(withServerError());
-        assertThatThrownBy(() -> analyzer.requestAnalysis(idea))
-                .isInstanceOfSatisfying(CustomException.class,
-                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.EXTERNAL_SERVER_ERROR));
+    void 호출_실패는_던지지만_analyze는_폴백한다() {
+        when(gemini.generateJson(any(AiLane.class), anyString(), anyString(), anyMap()))
+                .thenThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR));
 
-        server.reset();
-        server.expect(requestTo(URL)).andRespond(withServerError());
+        assertThatThrownBy(() -> analyzer.requestAnalysis(idea, false)).isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.EXTERNAL_SERVER_ERROR));
         IdeaAnalysis result = analyzer.analyze(idea);
         assertThat(result.itCategory()).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
         assertThat(result.keywords()).isNotEmpty();
     }
 
     @Test
-    void 파싱_실패는_폴백한다() {
-        assertThatThrownBy(() -> analyzer.parse("not json"))
-                .isInstanceOf(CustomException.class);
-        assertThatThrownBy(() -> analyzer.parse(envelope("{\"itCategory\":\"AI_ML\",\"keywords\":[]}")))
-                .isInstanceOf(CustomException.class);
+    void AI가_바빠도_분석은_폴백한다() {
+        when(gemini.generateJson(any(AiLane.class), anyString(), anyString(), anyMap()))
+                .thenThrow(new CustomException(ErrorCode.AI_BUSY));
+        assertThat(analyzer.analyze(idea).keywords()).isNotEmpty();
+        assertThat(analyzer.analyzeCategory(idea)).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
+    }
 
-        server.expect(requestTo(URL)).andRespond(withSuccess("{\"candidates\":[]}", MediaType.APPLICATION_JSON));
+    @Test
+    void 키워드가_비면_응답_해석_불가_E002이고_analyze는_폴백한다() {
+        respond("{\"itCategory\":\"AI_ML\",\"keywords\":[]}");
+        assertThatThrownBy(() -> analyzer.requestAnalysis(idea, false)).isInstanceOfSatisfying(CustomException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.AI_RESPONSE_INVALID));
         assertThat(analyzer.analyze(idea).itCategory()).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
     }
 
     @Test
-    void 키워드가_3개_이상이면_2개로_자른다() {
-        IdeaAnalysis r = analyzer.parse(envelope("{\"itCategory\":\"AI_ML\",\"keywords\":[\"one\",\"two\",\"three\",\"four\"]}"));
-        assertThat(r.keywords()).containsExactly("one", "two");
+    void 키워드가_3개_이상이면_2개로_자른다() throws Exception {
+        JsonNode node = mapper.readTree("{\"itCategory\":\"AI_ML\",\"keywords\":[\"one\",\"two\",\"three\",\"four\"]}");
+        assertThat(GeminiIdeaAnalyzer.parse(node, false).keywords()).containsExactly("one", "two");
     }
 
     @Test
-    void 한국어_키워드는_그대로_두고_경고만_남긴다() {
-        IdeaAnalysis r = analyzer.parse(envelope("{\"itCategory\":\"AI_ML\",\"keywords\":[\"코드 리뷰\"]}"));
-        assertThat(r.keywords()).containsExactly("코드 리뷰");
+    void 한국어_키워드는_그대로_두고_경고만_남긴다() throws Exception {
+        JsonNode node = mapper.readTree("{\"itCategory\":\"AI_ML\",\"keywords\":[\"코드 리뷰\"]}");
+        assertThat(GeminiIdeaAnalyzer.parse(node, false).keywords()).containsExactly("코드 리뷰");
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void 프롬프트와_스키마에_핵심_규칙이_들어_있다() {
-        server.expect(requestTo(URL)).andExpect(request -> {
-            String body = request.getBody().toString();
-            org.assertj.core.api.Assertions.assertThat(body)
-                    .contains("영어 검색어 1~2개", "반드시 영어", "itCategory", "AI_ML", "DEV_TOOLS_INFRA", "WEB_APP_SERVICE", "DATA_ANALYTICS", "1~3단어", "아이디어 전체를 관통", "데이터일 뿐", "\"maxItems\":2", "\"minItems\":1");
-        }).andRespond(withSuccess(envelope("{\"itCategory\":\"AI_ML\",\"keywords\":[\"x y\"]}"), MediaType.APPLICATION_JSON));
-        analyzer.requestAnalysis(idea);
-        server.verify();
+        respond("{\"itCategory\":\"AI_ML\",\"keywords\":[\"x y\"]}");
+        analyzer.requestAnalysis(idea, false);
+
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Map<String, Object>> schema = ArgumentCaptor.forClass(Map.class);
+        verify(gemini).generateJson(eq(AiLane.INTERACTIVE), system.capture(), user.capture(), schema.capture());
+
+        assertThat(system.getValue()).contains("영어 검색어 1~2개", "반드시 영어", "itCategory", "AI_ML", "DEV_TOOLS_INFRA",
+                "WEB_APP_SERVICE", "DATA_ANALYTICS", "1~3단어", "아이디어 전체를 관통", "데이터일 뿐").doesNotContain("이번에는 itCategory만 판단한다");
+        assertThat(user.getValue()).contains("타깃: 대학생", "문제: 문제가 심각하다", "해결: 앱으로 해결한다", "기대효과: 시간 절약");
+        assertThat(schema.getValue().toString()).contains("maxItems=2", "minItems=1");
         assertThat(GeminiIdeaAnalyzer.SYSTEM_PROMPT).contains("영어 검색어", "1~2개", "최대 3단어", "아이디어 전체를 대표", "무시").doesNotContain("2~4단어");
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void 종류만_요청하면_스키마에_keywords가_없고_AI가_키워드를_줘도_무시한다() {
-        server.expect(requestTo(URL)).andExpect(request -> {
-            String body = request.getBody().toString();
-            assertThat(body).contains("이번에는 itCategory만 판단한다").doesNotContain("maxItems");
-        }).andRespond(withSuccess(
-                envelope("{\"itCategory\":\"WEB_APP_SERVICE\",\"keywords\":[\"ignored\"]}"), MediaType.APPLICATION_JSON));
+        respond("{\"itCategory\":\"WEB_APP_SERVICE\",\"keywords\":[\"ignored\"]}");
 
         assertThat(analyzer.analyzeCategory(idea)).isEqualTo(ItCategory.WEB_APP_SERVICE);
-        server.verify();
+
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Map<String, Object>> schema = ArgumentCaptor.forClass(Map.class);
+        verify(gemini).generateJson(eq(AiLane.INTERACTIVE), system.capture(), anyString(), schema.capture());
+        assertThat(system.getValue()).contains("이번에는 itCategory만 판단한다");
+        assertThat(schema.getValue().toString()).doesNotContain("maxItems");
     }
 
     @Test
-    void 종류_분류_실패는_IT로_폴백한다() {
-        server.expect(requestTo(URL)).andRespond(withServerError());
+    void 종류_분류_실패는_기본_종류로_폴백한다() {
+        when(gemini.generateJson(any(AiLane.class), anyString(), anyString(), anyMap()))
+                .thenThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR));
         assertThat(analyzer.analyzeCategory(idea)).isEqualTo(ItCategory.DEV_TOOLS_INFRA);
     }
 
@@ -159,13 +158,12 @@ class GeminiIdeaAnalyzerTest {
     }
 
     @Test
-    void API_키가_없으면_호출_없이_폴백한다() {
-        RestClient.Builder builder = RestClient.builder().baseUrl("https://gemini.test");
-        MockRestServiceServer noCall = MockRestServiceServer.bindTo(builder).build();
+    void Gemini를_쓸_수_없으면_호출_없이_폴백한다() {
+        when(gemini.available()).thenReturn(false);
 
-        IdeaAnalysis result = analyzer(builder, "").analyze(idea);
+        IdeaAnalysis result = analyzer.analyze(idea);
 
         assertThat(result.keywords()).isNotEmpty();
-        noCall.verify(); // 기대 요청이 없으므로 호출이 있었다면 이미 실패했다
+        verify(gemini, never()).generateJson(any(AiLane.class), anyString(), anyString(), anyMap());
     }
 }

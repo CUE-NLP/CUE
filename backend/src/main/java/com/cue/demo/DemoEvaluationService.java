@@ -1,7 +1,7 @@
 package com.cue.demo;
 
 import com.cue.demo.dto.DemoRunResponse;
-import com.cue.evaluation.service.EvaluationJobService;
+import com.cue.evaluation.service.EvaluationQueueService;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
@@ -20,7 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * 시연용 "지금 조회·평가" 실행. 호출한 사용자의 ACTIVE 아이디어를 기존 비동기 실행기 큐({@link EvaluationJobService})에 넣고,
+ * 시연용 "지금 조회·평가" 실행. 호출한 사용자의 ACTIVE 아이디어를 기존 비동기 실행기 큐({@link EvaluationQueueService})에 넣고,
  * 필요하면 글로벌 트렌드 수집도 같은 큐 맨 앞에 넣는다(다른 사용자 아이디어는 건드리지 않는다). 상태 전이는 수동 평가·배치와 같은 조건부 UPDATE를 쓰고,
  * 큐에 들어간 아이디어는 끝날 때까지 수정할 수 없다(I005). 평가 동안 트랜잭션을 잡지 않는다.
  *
@@ -38,7 +38,7 @@ public class DemoEvaluationService {
     private final GeminiClient gemini;
     private final IdeaRepository ideas;
     private final SourceRepository sources;
-    private final EvaluationJobService jobs;
+    private final EvaluationQueueService jobs;
     private final GlobalTrendService globalTrend;
 
     private final ConcurrentMap<Long, Instant> lastRun = new ConcurrentHashMap<>();
