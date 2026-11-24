@@ -271,7 +271,7 @@ class DailyEvaluationFlowTest {
         String token = signUpAndLogin("trend@cue.com");
         long id = createIdea(token, FULL);
         evaluate(token, id); // TREND 65
-        ageLastTrend(id, 5); // 재평가 최소 간격(3일)이 지난 트렌드
+        ageLastTrend(id, 5); // 재평가 최소 간격(1일)이 지난 트렌드
 
         TrendSnapshot next = newTrend("새로운 흐름");
         when(globalTrend.today()).thenReturn(next);
@@ -308,7 +308,7 @@ class DailyEvaluationFlowTest {
         Long firstTrendId = jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id);
         assertEquals(5, evaluationCount(id));
 
-        // 방금 만든 트렌드와 같은 날의 새 트렌드: 간격(3일) 안이라 호출하지 않는다 (완료 표시도 그대로)
+        // 방금 만든 트렌드와 같은 날의 새 트렌드: 간격(1일) 안이라 호출하지 않는다 (완료 표시도 그대로)
         when(globalTrend.today()).thenReturn(newTrend("같은 날 새 흐름"));
         clearInvocations(gemini);
         assertEquals("NO_CHANGE", evaluate(token, id).get("status").asString());
