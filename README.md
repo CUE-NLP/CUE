@@ -21,7 +21,7 @@ React 화면은 `frontend/src/pages/`, 재사용 UI·모달은 `frontend/src/com
    - **키워드 근거 자료**로 판단하는 4개: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성
    - **글로벌 트렌드**로 판단하는 1개: **트렌디함(`TREND`)** — 아이디어와 무관하게 하루 1회 모은 Hacker News · GitHub · Hugging Face 급상승 자료를 아이디어에 대입해 판단
 4. **갱신(Idea Delta)**: 매일(기본 03:00 KST) 두 갈래로 재평가합니다. 변화가 있을 때만 Gemini를 호출하고, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
-   - **A. 키워드 근거 자료 → 4개 기준**: 아이디어 종류별 외부 API를 아이디어 키워드로 조회 → 변경 감지 → 상위 항목 원문 읽기 → 항목·소스 요약 → 재평가
+   - **A. 키워드 근거 자료 → 4개 기준**: 외부 API에서 키워드 자료를 조회해 원문 발췌로 한 번 평가합니다. 전체 평가는 조회에 성공한 모든 소스의 상위 항목을 쓰고, 일반 재평가는 해시가 달라진 소스의 상위 항목을 씁니다.
    - **B. 글로벌 트렌드 → TREND**: 하루 1회(아이디어 수와 무관) 키워드 없이 급상승 자료를 수집·요약 → 각 아이디어에 대입해 TREND 점수 갱신 (트렌드가 어제와 같으면 호출하지 않음)
 
 ## 저장소 구조
@@ -117,11 +117,13 @@ backend/src/main/java/com/cue
 ├── idea/            아이디어 저장 · 수정 · 조회 · 리더보드 · 확인 처리 · 평가/점수 이력
 ├── score/           항목별 점수 (5개 기준: 4개 근거 기준 + TREND)
 ├── evaluation/      일일 평가 파이프라인(스케줄러 · 근거 4개 기준 평가 · TREND 평가) · 결과 저장 (변화량 · 근거 요약 · 출처 · 총점 이력)
-├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange/Hacker News/Semantic Scholar/Wikipedia Pageviews, 키워드 급상승 조회·원문 읽기) · 해시 변경 감지 · 항목/소스 요약
+├── source/          아이디어별 외부 자료 수집 설정 · API 클라이언트(GitHub/Hugging Face/Stack Exchange/Hacker News/Semantic Scholar/Wikipedia Pageviews, 키워드 급상승 조회·원문 읽기) · 해시 변경 감지 · 원문 발췌
 └── trend/           글로벌 트렌드(키워드 없음, 하루 1회 수집·요약) — TREND 평가의 근거
 ```
 
 각 도메인은 `controller / service / repository / entity / dto` 로 나누고, 보일러플레이트는 Lombok(`@Getter`, `@RequiredArgsConstructor` 등)으로 줄입니다.
+
+기존 로컬 `ACTIVE` 아이디어를 근거 자료와 함께 다시 전체 평가하려면, 평가 대기·진행 중인 작업이 끝난 뒤 해당 아이디어의 `needs_full_evaluation`을 `true`로 설정하고 수동 평가를 요청하거나 일일 배치를 기다립니다. 소스 해시를 따로 초기화할 필요는 없습니다. `TREND`도 첫 평가 방식으로 다시 계산하려면 `last_trend_id`를 `NULL`로 설정합니다.
 
 ## 시작하기
 

@@ -7,8 +7,8 @@ import java.util.List;
 /**
  * source 하나를 조회한 결과.
  * - CHANGED: 이전 해시와 달라졌거나 <b>처음 조회</b>(해시 기록). {@code items}에 이번 조회 결과가 담긴다. 처음 조회의 항목이 첫 평가의 근거가 된다.
- * - UNCHANGED: 해시가 같아 변화 없음. {@code items}는 비어 있다.
- * - FAILED: 외부 API 오류. 해시·조회 시각은 갱신하지 않는다.
+ * - UNCHANGED: 해시가 같아 변화 없음. 전체 평가에 쓸 수 있도록 {@code items}에 이번 조회 결과를 담는다.
+ * - FAILED: 외부 API 오류. {@code items}는 비어 있고 해시·조회 시각은 갱신하지 않는다.
  */
 public record SourceCheckResult(
         Long sourceId,
@@ -29,8 +29,8 @@ public record SourceCheckResult(
         return new SourceCheckResult(id, p, k, Status.CHANGED, items, at, null);
     }
 
-    public static SourceCheckResult unchanged(Long id, ApiProvider p, String k, LocalDateTime at) {
-        return new SourceCheckResult(id, p, k, Status.UNCHANGED, List.of(), at, null);
+    public static SourceCheckResult unchanged(Long id, ApiProvider p, String k, List<SourceItem> items, LocalDateTime at) {
+        return new SourceCheckResult(id, p, k, Status.UNCHANGED, items, at, null);
     }
 
     public static SourceCheckResult failed(Long id, ApiProvider p, String k, String message) {

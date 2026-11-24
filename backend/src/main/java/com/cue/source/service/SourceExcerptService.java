@@ -13,7 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * 변경이 감지된 source의 상위 N개 항목을 읽고, 평가 프롬프트에 그대로 넣을 <b>원문 발췌</b>를 만든다. <b>Gemini를 부르지 않는다.</b>
+ * 평가 대상 source의 상위 N개 항목을 읽고, 평가 프롬프트에 그대로 넣을 <b>원문 발췌</b>를 만든다. <b>Gemini를 부르지 않는다.</b>
  *
  * <p>예전에는 항목 일괄 요약 1회 + 소스 요약 1회(source당 2회)를 쓰고 그 요약을 다시 평가에 넣었다. 지금은 API가 주는 짧은 설명과
  * 원문 앞부분({@link TextExcerpt})을 합쳐 {@link SourceItem#summary()} 자리에 넣고, 아이디어 하나를 한 번의 평가 호출로 처리한다.
@@ -39,16 +39,17 @@ public class SourceExcerptService {
     }
 
     /** 상위 N개 항목의 {@code summary}를 원문 발췌로 바꾼 조회 결과를 돌려준다. */
-    public SourceCheckResult excerpt(SourceCheckResult changed) {
-        SourceClient client = clients.get(changed.provider());
+    public SourceCheckResult excerpt(SourceCheckResult result) {
+        SourceClient client = clients.get(result.provider());
         List<SourceItem> items = new ArrayList<>();
-        for (SourceItem item : changed.items().stream().limit(props.topN()).toList()) {
-            items.add(new SourceItem(item.title(), item.url(), summaryOf(client, changed, item), item.publishedAt(), item.metrics()));
+        for (SourceItem item : result.items().stream().limit(props.topN()).toList()) {
+            items.add(new SourceItem(item.title(), item.url(), summaryOf(client, result, item), item.publishedAt(), item.metrics()));
         }
-        return SourceCheckResult.changed(changed.sourceId(), changed.provider(), changed.keyword(), items, changed.checkedAt());
+        return new SourceCheckResult(result.sourceId(), result.provider(), result.keyword(), result.status(), items,
+                result.checkedAt(), result.errorMessage());
     }
 
-    private String summaryOf(SourceClient client, SourceCheckResult changed, SourceItem item) {
+    private String summaryOf(SourceClient client, SourceCheckResult result, SourceItem item) {
         String description = clip(normalize(item.summary()), MAX_DESCRIPTION_CHARS);
         int budget = Math.max(props.excerptChars() - description.length() - 3, MIN_EXCERPT_CHARS);
         if (client == null || normalize(item.summary()).length() >= props.excerptChars()) {
@@ -58,7 +59,7 @@ public class SourceExcerptService {
         try {
             excerpt = TextExcerpt.of(client.fetchContent(item), budget);
         } catch (RuntimeException e) {
-            log.warn("원문 읽기 실패, API 설명만 씁니다 sourceId={} url={}: {}", changed.sourceId(), item.url(), e.toString());
+            log.warn("원문 읽기 실패, API 설명만 씁니다 sourceId={} url={}: {}", result.sourceId(), item.url(), e.toString());
         }
         if (excerpt.isEmpty()) {
             return description;
