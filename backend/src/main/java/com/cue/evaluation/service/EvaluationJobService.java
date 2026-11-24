@@ -10,6 +10,7 @@ import com.cue.trend.service.GlobalTrendService;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -25,6 +26,10 @@ import org.springframework.stereotype.Service;
  *       이미 QUEUED/RUNNING이면 아무것도 하지 않고 현재 상태를 돌려준다(멱등). 대기열이 가득 차면 E004.</li>
  *   <li>{@link #execute}: 실행기 스레드와 일일 배치가 같이 쓰는 실제 실행. <b>전역 락</b>으로 한 번에 하나만 평가해 수동 요청과 배치가
  *       Gemini를 동시에 두드리지 않게 한다. QUEUED/IDLE → RUNNING → IDLE(성공) 또는 FAILED(예외, 에러 코드 기록). 예외는 로그로 남기고 삼키지 않는다(다시 던진다).</li>
+ *   <li>{@link #executeBatch}·{@link #prepareTrendForBatch}: 일일 배치용 실행. <b>수동 평가(수동 요청·저장 직후 자동·시연)가 항상 배치보다 우선</b>한다.
+ *       수동 작업은 큐에 넣기 전에 대기 수({@code manualPending})를 올리고 끝난 뒤에 내리며, 배치는 락을 잡은 뒤 이 값이 0일 때만 시작한다
+ *       (0이 아니면 락을 풀고 기다림). 확인과 락 획득이 한 락 안에서 일어나므로 그 사이에 수동 요청이 끼어도 배치가 먼저 시작하지 못한다.
+ *       이미 실행 중인 배치 아이디어 1개는 끊지 않고(비선점) 끝날 때까지 기다린 뒤 수동 평가가 먼저 실행된다.</li>
  * </ul>
  * 상태 전이는 {@link IdeaRepository}의 조건부 UPDATE로만 하고, 평가 동안 DB 트랜잭션을 잡지 않는다.
  */
@@ -32,9 +37,9 @@ import org.springframework.stereotype.Service;
 @Service
 public class EvaluationJobService {
     /** 실행기 작업은 큐에 넣은 것(QUEUED)만 집는다 (그사이 배치가 먼저 평가했다면 건너뜀). */
-    static final Set<EvaluationStatus> WORKER_ALLOWED = EnumSet.of(EvaluationStatus.QUEUED);
+    private static final Set<EvaluationStatus> WORKER_ALLOWED = EnumSet.of(EvaluationStatus.QUEUED);
     /** 일일 배치는 대기 중이 아닌 모든 아이디어를 대상으로 한다 (QUEUED도 같이 처리해 중복 평가를 피함). */
-    public static final Set<EvaluationStatus> BATCH_ALLOWED =
+    private static final Set<EvaluationStatus> BATCH_ALLOWED =
             EnumSet.of(EvaluationStatus.IDLE, EvaluationStatus.FAILED, EvaluationStatus.QUEUED);
 
     private final IdeaRepository ideas;
@@ -42,6 +47,8 @@ public class EvaluationJobService {
     private final ThreadPoolTaskExecutor executor;
     private final GlobalTrendService globalTrend;
     private final ReentrantLock lock = new ReentrantLock(true);
+    /** 큐에 넣었지만 아직 끝나지 않은 수동 작업(평가·트렌드 갱신) 수. 0이 아니면 배치는 시작하지 않고 양보한다. */
+    private final AtomicInteger manualPending = new AtomicInteger();
 
     public EvaluationJobService(IdeaRepository ideas, DailyEvaluationService evaluation, GlobalTrendService globalTrend,
                                 @Qualifier(EvaluationExecutorConfig.EXECUTOR) ThreadPoolTaskExecutor executor) {
@@ -57,18 +64,24 @@ public class EvaluationJobService {
      * @throws CustomException 대기열 가득 E004
      */
     public void submitTrendRefresh(boolean force) {
+        manualPending.incrementAndGet(); // 락 대기 전에 올려 배치가 먼저 끼어들지 못하게 한다
         try {
             executor.execute(() -> {
-                lock.lock();
                 try {
-                    globalTrend.refresh(force);
-                } catch (RuntimeException e) {
-                    log.error("글로벌 트렌드 수동 갱신 실패", e);
+                    lock.lock();
+                    try {
+                        globalTrend.refresh(force);
+                    } catch (RuntimeException e) {
+                        log.error("글로벌 트렌드 수동 갱신 실패", e);
+                    } finally {
+                        lock.unlock();
+                    }
                 } finally {
-                    lock.unlock();
+                    manualPending.decrementAndGet();
                 }
             });
         } catch (TaskRejectedException e) {
+            manualPending.decrementAndGet();
             throw new CustomException(ErrorCode.EVALUATION_QUEUE_FULL);
         }
     }
@@ -84,10 +97,12 @@ public class EvaluationJobService {
         if (ideas.markQueued(ideaId) == 0) {
             return ideas.findEvaluationStatus(ideaId).orElseThrow(() -> new CustomException(ErrorCode.IDEA_NOT_FOUND));
         }
+        manualPending.incrementAndGet(); // 락 대기 전에 올려 배치가 먼저 끼어들지 못하게 한다
         try {
             executor.execute(() -> runQueued(ideaId));
             return EvaluationStatus.QUEUED;
         } catch (TaskRejectedException e) {
+            manualPending.decrementAndGet();
             if (throwOnFull) {
                 ideas.markIdle(ideaId, LocalDateTime.now());
                 throw new CustomException(ErrorCode.EVALUATION_QUEUE_FULL);
@@ -98,11 +113,73 @@ public class EvaluationJobService {
         }
     }
 
+    /**
+     * 일일 배치가 아이디어 1개를 평가한다. 수동 작업이 대기·진행 중이면 시작하지 않고 모두 끝나길 기다린다(수동 우선).
+     * 확인을 락 안에서 하므로, 확인 뒤 락을 얻기까지의 사이에 수동 요청이 올라와도 배치가 먼저 시작하지 못한다.
+     * 이미 시작한 평가는 끊지 않는다. 기다리는 중 인터럽트되면(종료) 평가하지 않고 변화 없음으로 돌아간다.
+     *
+     * @throws RuntimeException 평가 실패 (상태는 FAILED와 에러 코드로 기록된 뒤다)
+     */
+    public EvaluationRunResult executeBatch(Long ideaId) {
+        while (true) {
+            if (!awaitManualIdle()) {
+                return EvaluationRunResult.noChange();
+            }
+            lock.lock();
+            try {
+                if (manualPending.get() == 0) {
+                    return execute(ideaId, BATCH_ALLOWED);
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
+
+    /**
+     * 일일 배치가 아이디어 루프 전에 오늘의 글로벌 트렌드를 확보한다. 수동 작업이 있으면 양보하고, 전역 락 안에서 수집해
+     * 같은 시각에 Gemini를 두드리는 다른 평가와 겹치지 않게 한다.
+     */
+    public void prepareTrendForBatch() {
+        while (true) {
+            if (!awaitManualIdle()) {
+                return;
+            }
+            lock.lock();
+            try {
+                if (manualPending.get() == 0) {
+                    globalTrend.today();
+                    return;
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
+
+    /** 수동 작업이 모두 끝날 때까지 락 없이 기다린다. 인터럽트되면 false. */
+    private boolean awaitManualIdle() {
+        if (manualPending.get() > 0) {
+            log.info("수동 평가가 먼저 끝나길 기다립니다 (대기·진행 {}건)", manualPending.get());
+        }
+        while (manualPending.get() > 0) {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void runQueued(Long ideaId) {
         try {
             execute(ideaId, WORKER_ALLOWED);
         } catch (RuntimeException e) {
             // execute가 이미 로그와 FAILED 상태를 남겼다. 실행기 스레드로 예외가 새지 않게만 한다.
+        } finally {
+            manualPending.decrementAndGet();
         }
     }
 
@@ -111,7 +188,7 @@ public class EvaluationJobService {
      *
      * @throws RuntimeException 평가 실패 (상태는 FAILED와 에러 코드로 기록된 뒤다)
      */
-    public EvaluationRunResult execute(Long ideaId, Set<EvaluationStatus> allowedFrom) {
+    private EvaluationRunResult execute(Long ideaId, Set<EvaluationStatus> allowedFrom) {
         lock.lock();
         try {
             if (ideas.markRunning(ideaId, LocalDateTime.now(), allowedFrom) == 0) {
