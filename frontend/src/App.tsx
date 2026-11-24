@@ -165,12 +165,29 @@ export default function App() {
     setError('')
     try {
       const idea = await createIdea(fields)
-      // ACTIVE로 저장되면 백엔드가 커밋 직후 평가를 대기열에 넣지만 응답은 그 전 상태(IDLE)라 한 번 더 받는다
-      setSelected(await getIdea(idea.id).catch(() => idea))
+      let evaluateError: unknown = null
+      if (idea.status === 'ACTIVE') {
+        // 네 칸이 다 찬 아이디어는 저장하자마자 평가를 요청해 바로 평가 중 화면을 띄운다
+        try {
+          const result = await evaluateIdea(idea.id)
+          setSelected({ ...result.idea, evaluationStatus: result.status })
+        } catch (cause) {
+          evaluateError = cause
+          setSelected(await getIdea(idea.id).catch(() => idea))
+        }
+      } else {
+        // 빈 칸이 있으면 보류(HOLD)로 저장되고 평가하지 않는다
+        setSelected(await getIdea(idea.id).catch(() => idea))
+      }
       setRaw('')
       setFields({ ...emptyFields })
       structuredText.current = ''
       navigate('result')
+      if (evaluateError instanceof ApiError && evaluateError.status === 401) fail(evaluateError)
+      else if (evaluateError) {
+        const code = evaluateError instanceof ApiError ? ` (${evaluateError.code})` : ''
+        setError(`저장은 됐지만 평가를 요청하지 못했어요${code}. 아래 버튼으로 다시 요청해 주세요.`)
+      }
     } catch (cause) {
       fail(cause)
     } finally {
