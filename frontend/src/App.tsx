@@ -128,7 +128,8 @@ export default function App() {
     setError('')
     try {
       const idea = await createIdea(fields)
-      setSelected(idea)
+      // ACTIVE로 저장되면 백엔드가 커밋 직후 평가를 대기열에 넣지만 응답은 그 전 상태(IDLE)라 한 번 더 받는다
+      setSelected(await getIdea(idea.id).catch(() => idea))
       setRaw('')
       setFields({ ...emptyFields })
       navigate('result')
@@ -159,13 +160,23 @@ export default function App() {
       fail(cause)
     }
   }
-  async function saveEdit(next: IdeaFields) {
+  async function saveEdit(next: Partial<IdeaFields>) {
     if (!selected) return
     setBusy(true)
+    setError('')
     try {
-      setSelected(await updateIdea(selected.id, next))
+      const saved = await updateIdea(selected.id, next)
+      // 내용이 바뀐 ACTIVE 아이디어는 저장 직후 백엔드가 평가를 대기열에 넣지만 응답은 그 전 상태라 한 번 더 받는다
+      setSelected(await getIdea(saved.id).catch(() => saved))
       setOverlay(null)
     } catch (cause) {
+      if (cause instanceof ApiError && cause.code === 'I005') {
+        // 평가 중이라 거절됨: 모달을 닫아 안내가 보이게 하고, 평가 중 상태를 받아 자동 새로고침을 시작한다
+        setOverlay(null)
+        getIdea(selected.id)
+          .then(setSelected)
+          .catch(() => undefined)
+      }
       fail(cause)
     } finally {
       setBusy(false)

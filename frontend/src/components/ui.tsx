@@ -43,7 +43,20 @@ export function Brand({ back, onBell }: { back?: () => void; onBell?: () => void
       <span className={tw('brand')}>CUE</span>
       {onBell && (
         <button type="button" className={tw('bell-button')} onClick={onBell} aria-label="변화 알림">
-          ♧
+          <svg
+            className="block"
+            viewBox="0 0 24 24"
+            width="24"
+            height="24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16zM10 20.5a2 2 0 0 0 4 0" />
+          </svg>
         </button>
       )}
     </header>
