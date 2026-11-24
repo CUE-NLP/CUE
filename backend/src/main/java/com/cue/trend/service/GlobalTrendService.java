@@ -15,10 +15,8 @@ import com.cue.trend.config.TrendProperties;
 import com.cue.trend.dto.TrendSnapshot;
 import com.cue.trend.entity.Trend;
 import com.cue.trend.entity.TrendItem;
-import com.cue.trend.entity.TrendSource;
 import com.cue.trend.repository.TrendItemRepository;
 import com.cue.trend.repository.TrendRepository;
-import com.cue.trend.repository.TrendSourceRepository;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -40,7 +38,8 @@ import tools.jackson.databind.JsonNode;
  * <ol>
  *   <li>고정 provider {@link ApiProvider#TREND_PROVIDERS}(HN·GitHub·Hugging Face)를 키워드 없이 "급상승" 기준으로 조회 (상위 {@code cue.trend.top-n})</li>
  *   <li>항목들의 해시({@link SourceHasher})가 가장 최근 트렌드와 같으면 재요약하지 않고 그 행을 그대로 쓴다</li>
- *   <li>다르면 항목 원문 읽기 → provider당 항목 일괄 요약 1회({@code trend-item-summary-batch}) → provider별 요약 → 최종 요약({@code global-trend-summary}) 후 새 행으로 저장.
+ *   <li>다르면 항목 원문 읽기 → <b>모든 provider의 항목을 한 번의 일괄 호출</b>({@code trend-item-summary-batch})로 요약 → <b>최종 요약 1회</b>({@code global-trend-summary},
+ *       항목 요약 줄들을 그대로 입력) 후 새 행으로 저장한다. 하루 호출은 최대 2회다(예전 provider별 요약 단계는 쓰이지 않아 없앴다).
  *       같은 URL의 항목 요약은 {@code cue.source.summary-reuse-days} 안이면 이전 행에서 재사용한다</li>
  * </ol>
  * 결과는 그날 첫 호출에서 만들어 메모리에 두고(재시작하면 DB의 오늘 행을 쓴다) 이후엔 그대로 돌려준다.
@@ -59,7 +58,6 @@ public class GlobalTrendService {
     private final ItemBatchSummarizer batch;
     private final TrendRepository trends;
     private final TrendItemRepository trendItems;
-    private final TrendSourceRepository trendSources;
     private final TransactionTemplate tx;
     private final SourceApiProperties sourceProps;
     private final SearchSettings settings;
@@ -69,7 +67,7 @@ public class GlobalTrendService {
     private LocalDateTime failedAt;
 
     public GlobalTrendService(List<SourceClient> clientList, GeminiClient gemini, PromptLoader prompts, ItemBatchSummarizer batch,
-                              TrendRepository trends, TrendItemRepository trendItems, TrendSourceRepository trendSources,
+                              TrendRepository trends, TrendItemRepository trendItems,
                               TransactionTemplate tx, SourceApiProperties sourceProps, TrendProperties props) {
         clientList.forEach(c -> clients.put(c.provider(), c));
         this.gemini = gemini;
@@ -77,7 +75,6 @@ public class GlobalTrendService {
         this.batch = batch;
         this.trends = trends;
         this.trendItems = trendItems;
-        this.trendSources = trendSources;
         this.tx = tx;
         this.sourceProps = sourceProps;
         this.settings = new SearchSettings(props.topN(), props.days());
@@ -182,13 +179,10 @@ public class GlobalTrendService {
         }
         LocalDateTime reuseAfter = LocalDateTime.now().minusDays(sourceProps.summaryReuseDays());
 
-        Map<ApiProvider, List<SourceItem>> summarized = new LinkedHashMap<>();
-        Map<ApiProvider, List<LocalDateTime>> times = new LinkedHashMap<>();
-        Map<ApiProvider, String> providerSummaries = new LinkedHashMap<>();
+        // 같은 URL의 최근 요약은 재사용하고, 나머지는 원문을 읽어 모든 provider를 한 번의 일괄 호출로 요약한다
+        Map<String, TrendItem> reusedItems = new HashMap<>();
+        List<ItemBatchSummarizer.Entry> toSummarize = new ArrayList<>();
         for (Map.Entry<ApiProvider, List<SourceItem>> e : found.entrySet()) {
-            // 같은 URL의 최근 요약은 재사용하고, 나머지는 원문을 읽어 provider당 한 번의 일괄 호출로 요약한다
-            Map<String, TrendItem> reusedItems = new HashMap<>();
-            List<ItemBatchSummarizer.Entry> toSummarize = new ArrayList<>();
             for (SourceItem item : e.getValue()) {
                 TrendItem old = previous.get(item.url());
                 if (old != null && sourceProps.summaryReuseDays() > 0 && old.getSummarizedAt().isAfter(reuseAfter)) {
@@ -197,14 +191,19 @@ public class GlobalTrendService {
                     readContent(clients.get(e.getKey()), item).ifPresent(c -> toSummarize.add(new ItemBatchSummarizer.Entry(item, c)));
                 }
             }
-            Map<String, String> fresh = Map.of();
-            if (!toSummarize.isEmpty()) {
-                try {
-                    fresh = batch.summarize("trend-item-summary-batch", Map.of(), toSummarize);
-                } catch (RuntimeException ex) { // 일괄 호출 실패: 이 provider는 재사용 항목만으로 진행한다
-                    log.warn("트렌드 항목 일괄 요약 실패 provider={}: {}", e.getKey(), ex.toString());
-                }
+        }
+        Map<String, String> fresh = Map.of();
+        if (!toSummarize.isEmpty()) {
+            try {
+                fresh = batch.summarize("trend-item-summary-batch", Map.of(), toSummarize);
+            } catch (RuntimeException ex) { // 일괄 호출 실패: 재사용 항목만으로 진행한다 (하나도 없으면 아래에서 만들지 못함)
+                log.warn("트렌드 항목 일괄 요약 실패, 재사용 항목만으로 진행합니다: {}", ex.toString());
             }
+        }
+
+        Map<ApiProvider, List<SourceItem>> summarized = new LinkedHashMap<>();
+        Map<ApiProvider, List<LocalDateTime>> times = new LinkedHashMap<>();
+        for (Map.Entry<ApiProvider, List<SourceItem>> e : found.entrySet()) {
             List<SourceItem> items = new ArrayList<>();
             List<LocalDateTime> at = new ArrayList<>();
             for (SourceItem item : e.getValue()) {
@@ -217,39 +216,24 @@ public class GlobalTrendService {
                     at.add(LocalDateTime.now());
                 }
             }
-            if (items.isEmpty()) {
-                continue; // 읽을 수 있었던 항목이 없는 provider는 트렌드에서 뺀다
-            }
-            summarized.put(e.getKey(), items);
-            times.put(e.getKey(), at);
-            try {
-                String text = summarizeLines(SourceTextFormat.formatSources(List.of(asResult(e.getKey(), items))));
-                if (text != null) {
-                    providerSummaries.put(e.getKey(), text);
-                }
-            } catch (RuntimeException ex) { // provider 요약이 없어도 최종 요약은 그 provider의 항목 목록으로 만든다
-                log.warn("트렌드 provider 요약 실패 provider={}: {}", e.getKey(), ex.toString());
+            if (!items.isEmpty()) { // 읽을 수 있었던 항목이 없는 provider는 트렌드에서 뺀다
+                summarized.put(e.getKey(), items);
+                times.put(e.getKey(), at);
             }
         }
         if (summarized.isEmpty()) {
             throw new IllegalStateException("요약할 수 있는 트렌드 항목이 없습니다");
         }
 
-        // 최종 요약: provider별 요약(없으면 그 provider의 항목 목록)을 합쳐서
-        StringBuilder lines = new StringBuilder();
-        for (ApiProvider p : summarized.keySet()) {
-            String text = providerSummaries.get(p);
-            lines.append(text != null ? "[" + p + "] " + text.replaceAll("\\s+", " ")
-                    : SourceTextFormat.formatSources(List.of(asResult(p, summarized.get(p))))).append("\n");
-        }
-        String finalSummary = summarizeLines(lines.toString().strip());
+        // 최종 요약 1회: 항목 요약 줄들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`)을 그대로 입력한다
+        List<SourceCheckResult> results = summarized.entrySet().stream().map(en -> asResult(en.getKey(), en.getValue())).toList();
+        String finalSummary = summarizeLines(SourceTextFormat.formatSources(results, 30, 300));
         if (finalSummary == null) {
             throw new IllegalStateException("최종 트렌드 요약이 비어 있습니다");
         }
 
         Long id = tx.execute(s -> {
             Trend trend = trends.save(new Trend(finalSummary, List.copyOf(summarized.keySet()), hash));
-            providerSummaries.forEach((p, text) -> trendSources.save(new TrendSource(trend, p, text)));
             for (Map.Entry<ApiProvider, List<SourceItem>> e : summarized.entrySet()) {
                 List<LocalDateTime> at = times.get(e.getKey());
                 for (int i = 0; i < e.getValue().size(); i++) {

@@ -50,11 +50,11 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 - 서버 검증(`ItemBatchSummarizer`): `url`이 입력에 있던 것만, 같은 url 중복은 첫 번째만, 빈 요약은 버림, 요약 500자 제한. 빠진 항목은 건너뛰고 원래 조회한 짧은 요약을 쓴다. `responseSchema`로 형식을 강제한다.
 
 ### global-trend-summary.txt
-목적: **글로벌 트렌드**를 3~5문장으로 요약한다. **두 단계에 같은 프롬프트를 쓴다**: ① provider별 요약 — 한 provider의 항목 요약들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 입력으로 → `trend_sources`에 저장, ② 최종 트렌드 요약 — provider별 요약들을 입력으로 → `trends.summary`에 저장되고 TREND 평가 프롬프트의 `{{trendSummary}}`로 쓰인다.
+목적: **글로벌 트렌드**를 3~5문장으로 요약한다. 모든 provider의 항목 요약 줄들(`[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약`)을 입력으로 한 번 호출하고, 결과는 `trends.summary`에 저장되어 TREND 평가 프롬프트의 `{{trendSummary}}`로 쓰인다. (예전에는 provider별 요약 단계가 더 있었으나 쓰이지 않아 없앴다.)
 
 | 플레이스홀더 | 설명 |
 | --- | --- |
-| `{{items}}` | 자료 목록. 단계 ①은 항목 줄(`[PROVIDER] …`), 단계 ②는 provider별 요약 줄(`[PROVIDER] 요약문`) |
+| `{{items}}` | 항목 요약 줄 목록(`[PROVIDER] 제목 \| URL \| 날짜 \| 지표 \| 항목 요약`) |
 
 출력 스키마와 예시:
 ```json

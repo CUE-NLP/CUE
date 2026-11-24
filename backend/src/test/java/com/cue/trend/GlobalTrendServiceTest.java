@@ -19,10 +19,8 @@ import com.cue.trend.config.TrendProperties;
 import com.cue.trend.dto.TrendSnapshot;
 import com.cue.trend.entity.Trend;
 import com.cue.trend.entity.TrendItem;
-import com.cue.trend.entity.TrendSource;
 import com.cue.trend.repository.TrendItemRepository;
 import com.cue.trend.repository.TrendRepository;
-import com.cue.trend.repository.TrendSourceRepository;
 import com.cue.trend.service.GlobalTrendService;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -43,12 +41,10 @@ class GlobalTrendServiceTest {
     private final GeminiClient gemini = mock(GeminiClient.class);
     private final TrendRepository trends = mock(TrendRepository.class);
     private final TrendItemRepository itemRepo = mock(TrendItemRepository.class);
-    private final TrendSourceRepository sourceRepo = mock(TrendSourceRepository.class);
     private final JsonMapper mapper = JsonMapper.builder().build();
 
     private final List<Trend> savedTrends = new ArrayList<>();
     private final List<TrendItem> savedItems = new ArrayList<>();
-    private final List<TrendSource> savedSources = new ArrayList<>();
     private final List<String> prompts = new ArrayList<>();
     private final List<ApiProvider> trendingCalls = new ArrayList<>();
     private final List<String> fetched = new ArrayList<>();
@@ -100,8 +96,8 @@ class GlobalTrendServiceTest {
         SourceApiProperties props = new SourceApiProperties(Duration.ofSeconds(3), Duration.ofSeconds(5), 5, 30,
                 8000, 1048576, 3, reuseDays, 4000, 16000, 2, 30, "ua", "https://wikimedia.org", 800, null, null, null, null, null, null);
         return new GlobalTrendService(ApiProvider.TREND_PROVIDERS.stream().map(this::client).toList(), gemini,
-                new PromptLoader(), new ItemBatchSummarizer(gemini, new PromptLoader(), props), trends, itemRepo, sourceRepo, new TransactionTemplate(mock(PlatformTransactionManager.class)),
-                props, new TrendProperties(7, 2));
+                new PromptLoader(), new ItemBatchSummarizer(gemini, new PromptLoader(), props), trends, itemRepo, new TransactionTemplate(mock(PlatformTransactionManager.class)),
+                props, new TrendProperties(7, 2, 1));
     }
 
     @BeforeEach
@@ -117,7 +113,6 @@ class GlobalTrendServiceTest {
         when(trends.findById(anyLong())).thenAnswer(inv ->
                 Optional.of(savedTrends.stream().filter(t -> t.getId().equals(inv.getArgument(0))).findFirst().orElse(latest)));
         when(itemRepo.save(any(TrendItem.class))).thenAnswer(inv -> { savedItems.add(inv.getArgument(0)); return inv.getArgument(0); });
-        when(sourceRepo.save(any(TrendSource.class))).thenAnswer(inv -> { savedSources.add(inv.getArgument(0)); return inv.getArgument(0); });
         when(itemRepo.findByTrendIdOrderById(anyLong())).thenAnswer(inv -> {
             long id = inv.getArgument(0);
             return savedItems.stream().filter(i -> i.getTrend().getId() == id).toList();
@@ -132,25 +127,25 @@ class GlobalTrendServiceTest {
     }
 
     @Test
-    void 키워드_없이_3개_provider를_조회해_항목_요약_provider_요약_최종_요약_순으로_저장한다() {
+    void 키워드_없이_3개_provider를_조회해_항목_일괄_요약_1회와_최종_요약_1회로_저장한다() {
         TrendSnapshot snapshot = service(7).today();
 
         assertEquals(ApiProvider.TREND_PROVIDERS, trendingCalls);
         assertEquals(6, fetched.size());
-        // provider마다 (항목 일괄 1 + provider 요약 1), 마지막에 최종 1 = 3×2+1 = 7회
-        assertEquals(7, prompts.size());
-        assertTrue(prompts.get(0).contains("원문 HACKER_NEWS-1") && prompts.get(0).contains("원문 HACKER_NEWS-2")); // 한 호출에 항목 2개
-        assertFalse(prompts.get(0).contains("{{"));
-        assertTrue(prompts.get(1).contains("[HACKER_NEWS] HACKER_NEWS-1 | https://HACKER_NEWS/1")); // provider 요약 입력: 항목 줄 목록
-        String last = prompts.get(6);                                                              // 최종 요약 입력: provider 요약들
-        assertTrue(last.contains("[HACKER_NEWS] 요약 2") && last.contains("[GITHUB] 요약 4") && last.contains("[HUGGING_FACE] 요약 6"));
-        assertEquals("요약 7", snapshot.summary());
+        // 모든 provider의 항목을 한 번에 요약(1회) + 항목 요약 줄들로 최종 요약(1회) = 2회
+        assertEquals(2, prompts.size());
+        String batchPrompt = prompts.get(0);
+        assertTrue(batchPrompt.contains("원문 HACKER_NEWS-1") && batchPrompt.contains("원문 GITHUB-2") && batchPrompt.contains("원문 HUGGING_FACE-2")); // 한 호출에 항목 6개
+        assertFalse(batchPrompt.contains("{{"));
+        String last = prompts.get(1); // 최종 요약 입력: 항목 요약 줄들
+        assertTrue(last.contains("[HACKER_NEWS] HACKER_NEWS-1 | https://HACKER_NEWS/1 | 2026-06-01 | stars=1 | 항목요약"));
+        assertTrue(last.contains("[GITHUB] GITHUB-2") && last.contains("[HUGGING_FACE] HUGGING_FACE-2"));
+        assertEquals("요약 2", snapshot.summary());
 
         Trend saved = savedTrends.get(0);
         assertEquals("HACKER_NEWS,GITHUB,HUGGING_FACE", saved.getProviders());
         assertEquals(SourceHasher.hash(allItems()), saved.getContentHash());
         assertEquals(6, savedItems.size());
-        assertEquals(3, savedSources.size());
         assertEquals(3, snapshot.sources().size());
         assertEquals("항목요약", snapshot.sources().get(0).items().get(0).summary());
     }
@@ -198,7 +193,7 @@ class GlobalTrendServiceTest {
 
         assertFalse(fetched.contains("https://GITHUB/1")); // 재사용: 다시 읽지 않는다
         assertEquals(5, fetched.size());
-        assertEquals(7, prompts.size());                    // 일괄 3 + provider 3 + 최종 1
+        assertEquals(2, prompts.size());                    // 일괄 1 + 최종 1
         assertEquals(101L, snapshot.id());
         assertEquals(6, savedItems.stream().filter(i -> i.getTrend().getId() == 101L).count());
         assertTrue(savedItems.stream().anyMatch(i -> "저장된 항목 요약".equals(i.getSummary()) && i.getTrend().getId() == 101L));
@@ -238,7 +233,7 @@ class GlobalTrendServiceTest {
     void 최종_요약이_실패하면_아무것도_저장하지_않고_null() {
         doAnswer(inv -> {
             String prompt = inv.getArgument(0);
-            if (prompt.contains("[HACKER_NEWS] 요약")) throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // 최종 단계 입력
+            if (!prompt.contains("[항목 목록]")) throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // 최종 요약 호출
             return reply(prompt);
         }).when(gemini).generateJson(anyString(), anyMap());
         assertNull(service(7).today());
@@ -247,7 +242,7 @@ class GlobalTrendServiceTest {
     }
 
     @Test
-    void 이전_항목_요약이_전부_재사용되면_일괄_호출_없이_provider_요약과_최종_요약만_한다() {
+    void 이전_항목_요약이_전부_재사용되면_일괄_호출_없이_최종_요약만_한다() {
         latest = existing(5L, "old-hash", LocalDateTime.now().minusDays(1));
         savedTrends.add(latest);
         for (ApiProvider p : ApiProvider.TREND_PROVIDERS)
@@ -257,22 +252,27 @@ class GlobalTrendServiceTest {
         service(7).today();
 
         assertTrue(fetched.isEmpty());
-        assertEquals(4, prompts.size()); // provider 3 + 최종 1
+        assertEquals(1, prompts.size()); // 최종 1
         assertTrue(prompts.stream().noneMatch(p -> p.contains("[항목 목록]")));
     }
 
     @Test
-    void 일괄_호출이_실패한_provider는_빠지고_나머지로_만든다() {
-        int[] n = {0};
+    void 일괄_호출이_실패하면_재사용_항목만으로_만들고_재사용할_게_없으면_만들지_못한다() {
         doAnswer(inv -> {
             String prompt = inv.getArgument(0);
-            if (prompt.contains("[항목 목록]") && ++n[0] == 1) throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // HN 일괄 실패
+            if (prompt.contains("[항목 목록]")) throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // 일괄 실패
             return reply(prompt);
         }).when(gemini).generateJson(anyString(), anyMap());
-        TrendSnapshot snapshot = service(7).today();
-        assertEquals("GITHUB,HUGGING_FACE", savedTrends.get(0).getProviders());
-        assertEquals(4, savedItems.size());
-        assertEquals(2, snapshot.sources().size());
+
+        assertNull(service(7).today()); // 재사용할 이전 요약이 없다
+        assertTrue(savedTrends.isEmpty());
+
+        latest = existing(5L, "old-hash", LocalDateTime.now().minusDays(1));
+        savedTrends.add(latest);
+        savedItems.add(new TrendItem(latest, ApiProvider.GITHUB, "https://GITHUB/1", "GITHUB-1", "", "", "저장된 항목 요약", LocalDateTime.now().minusDays(1)));
+        TrendSnapshot snapshot = service(7).today(); // GITHUB-1만 재사용 가능
+        assertEquals("GITHUB", savedTrends.get(savedTrends.size() - 1).getProviders());
+        assertEquals(1, snapshot.sources().size());
     }
 
     @Test

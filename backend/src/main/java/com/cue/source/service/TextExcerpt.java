@@ -16,6 +16,10 @@ public final class TextExcerpt {
     private static final Pattern FRONT_MATTER = Pattern.compile("\\A---\\s*\\n.*?\\n---\\s*(\\n|\\z)", Pattern.DOTALL);
     private static final Pattern CODE_BLOCK = Pattern.compile("```.*?```", Pattern.DOTALL);
     private static final Pattern HTML_COMMENT = Pattern.compile("<!--.*?-->", Pattern.DOTALL);
+    /** 질문 본문 HTML의 코드 블록(`<pre>…</pre>`)은 글이 아니라 코드라 통째로 버린다. */
+    private static final Pattern PRE_BLOCK = Pattern.compile("<pre[^>]*>.*?</pre>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
+    /** GitHub 경고 표시(`[!IMPORTANT]`, `[!NOTE]` 등). */
+    private static final Pattern ALERT_MARK = Pattern.compile("\\[![A-Za-z]+]");
     private static final Pattern HTML_TAG = Pattern.compile("<[^>]{1,200}>");
     private static final Pattern IMAGE = Pattern.compile("!\\[[^\\]]*]\\([^)]*\\)");
     private static final Pattern LINK = Pattern.compile("\\[([^\\]]*)]\\([^)]*\\)");
@@ -33,10 +37,13 @@ public final class TextExcerpt {
         text = FRONT_MATTER.matcher(text).replaceFirst("");
         text = CODE_BLOCK.matcher(text).replaceAll(" ");
         text = HTML_COMMENT.matcher(text).replaceAll(" ");
+        text = PRE_BLOCK.matcher(text).replaceAll(" ");
+        text = ALERT_MARK.matcher(text).replaceAll(" ");
         text = IMAGE.matcher(text).replaceAll(" ");
         text = LINK.matcher(text).replaceAll("$1");
         text = HTML_TAG.matcher(text).replaceAll(" ");
         text = BARE_URL.matcher(text).replaceAll(" ");
+        text = decodeEntities(text);
 
         StringBuilder out = new StringBuilder();
         for (String line : text.split("\n")) {
@@ -55,6 +62,12 @@ public final class TextExcerpt {
         }
         String result = out.toString();
         return result.length() > maxChars ? result.substring(0, maxChars) + "…" : result;
+    }
+
+    /** HTML이 남긴 흔한 엔티티를 글자로 되돌린다(`&amp;`는 이중 변환을 피하려고 마지막에). */
+    private static String decodeEntities(String text) {
+        return text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
+                .replace("&nbsp;", " ").replace("&amp;", "&");
     }
 
     /** {@code ---}, {@code ===}처럼 글자가 없는 구분선. */

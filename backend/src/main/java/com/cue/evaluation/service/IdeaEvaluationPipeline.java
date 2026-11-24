@@ -14,10 +14,14 @@ import com.cue.source.entity.Source;
 import com.cue.source.repository.SourceRepository;
 import com.cue.source.service.SourceCheckService;
 import com.cue.source.service.SourceExcerptService;
+import com.cue.trend.config.TrendProperties;
 import com.cue.trend.dto.TrendSnapshot;
+import com.cue.trend.entity.Trend;
+import com.cue.trend.repository.TrendRepository;
 import com.cue.trend.service.GlobalTrendService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -58,6 +62,8 @@ public class IdeaEvaluationPipeline {
     private final SourceExcerptService sourceExcerptService;
     private final GeminiClient gemini;
     private final TransactionTemplate tx;
+    private final TrendRepository trendRepository;
+    private final TrendProperties trendProps;
 
     /**
      * @throws CustomException 없는 아이디어 I001, 보류 I004, AI 사용 불가 E001,
@@ -83,7 +89,7 @@ public class IdeaEvaluationPipeline {
                 .filter(SourceCheckResult::changed).toList();
 
         boolean runA = !changed.isEmpty() || snapshot.needsFullEvaluation();
-        boolean runB = trend != null && !trend.id().equals(snapshot.lastTrendId());
+        boolean runB = trend != null && !trend.id().equals(snapshot.lastTrendId()) && trendDue(snapshot, trend);
         if (!runA && !runB) {
             return EvaluationRunResult.noChange();
         }
@@ -138,6 +144,19 @@ public class IdeaEvaluationPipeline {
         return snapshot.needsFullEvaluation()
                 ? analyzer.initialEvaluate(snapshot, enriched)
                 : analyzer.reEvaluate(snapshot, enriched);
+    }
+
+    /**
+     * TREND를 지금 평가할 차례인지. 첫 평가(아직 TREND를 평가한 적 없음)는 바로, 재평가는 마지막으로 평가에 쓴 트렌드가 오늘 트렌드보다
+     * {@code cue.trend.min-reeval-days}일 이상 오래됐을 때만 한다(트렌디함은 천천히 변하는 지표라 매일 부를 필요가 없다).
+     * 차례가 아니면 호출도 완료 표시도 하지 않아, 기간이 지난 뒤의 트렌드로 자연스럽게 다시 평가된다.
+     */
+    private boolean trendDue(IdeaSnapshot snapshot, TrendSnapshot trend) {
+        if (snapshot.lastTrendId() == null || trendProps.minReevalDays() <= 0) {
+            return true;
+        }
+        LocalDateTime last = tx.execute(s -> trendRepository.findById(snapshot.lastTrendId()).map(Trend::getCreatedAt).orElse(null));
+        return last == null || ChronoUnit.DAYS.between(last.toLocalDate(), trend.createdAt().toLocalDate()) >= trendProps.minReevalDays();
     }
 
     private void restoreHashes(List<SourceCheckResult> changed, Map<Long, PreviousHash> previous) {

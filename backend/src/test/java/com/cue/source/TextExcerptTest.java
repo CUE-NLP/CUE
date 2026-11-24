@@ -43,7 +43,13 @@ class TextExcerptTest {
     @Test
     void HTML_본문의_태그와_엔티티_줄바꿈을_정리한다() {
         String out = TextExcerpt.of("<p>I am building a <code>React</code> app.</p>\n<pre>x = 1</pre>\n<p>It fails.</p>", 200);
-        assertEquals("I am building a React app. x = 1 It fails.", out);
+        assertEquals("I am building a React app. It fails.", out); // <pre> 코드 블록은 버린다
+    }
+
+    @Test
+    void GitHub_경고_표시를_지우고_엔티티를_글자로_되돌린다() {
+        String out = TextExcerpt.of("[!IMPORTANT]\nJoin Q&amp;A &lt;now&gt; &quot;today&quot; it&#39;s ok&nbsp;fine", 200);
+        assertEquals("Join Q&A <now> \"today\" it's ok fine", out);
     }
 
     @Test
