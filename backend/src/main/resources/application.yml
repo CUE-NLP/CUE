@@ -43,6 +43,21 @@ cue:
     timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:10}
     # 평가용 호출 사이 최소 간격(ms). 무료 티어 분당 한도(3.5 Flash-Lite는 15회, 6500ms면 분당 약 9회)용. 0이면 제한 없음
     min-interval-ms: ${GEMINI_MIN_INTERVAL_MS:6500}
+    # 배치 호출이 429/503을 받았을 때 재시도 횟수 (지수 백오프, Retry-After 우선)
+    max-retries: ${GEMINI_MAX_RETRIES:2}
+    # 인터랙티브 레인(구조화·키워드 추출): 사용자가 기다리는 호출. 모델을 따로 두면 모델별 한도가 분리된다. 비우면 기본 모델
+    interactive:
+      model: ${GEMINI_INTERACTIVE_MODEL:gemini-2.5-flash-lite}
+      min-interval-ms: ${GEMINI_INTERACTIVE_MIN_INTERVAL_MS:2000}
+      # 속도 제한 때문에 기다릴 수 있는 최대 시간(ms). 넘으면 E006 (AI 바쁨)
+      max-wait-ms: ${GEMINI_INTERACTIVE_MAX_WAIT_MS:5000}
+      max-retries: ${GEMINI_INTERACTIVE_MAX_RETRIES:1}
+  structuring:
+    # 같은 사용자의 구조화 요청 최소 간격(초). 캐시 적중은 소비하지 않는다
+    cooldown-seconds: ${STRUCTURING_COOLDOWN_SECONDS:3}
+    # 같은 원문 결과 캐시 유지 시간(분)과 최대 개수. 저장 때 키워드·종류 재추출을 생략하는 근거로도 쓴다
+    cache-ttl-minutes: ${STRUCTURING_CACHE_TTL_MINUTES:10}
+    cache-max-entries: ${STRUCTURING_CACHE_MAX_ENTRIES:500}
   evaluation:
     # 일일 재평가 스케줄러. 테스트에서는 enabled=false.
     enabled: ${EVALUATION_ENABLED:true}

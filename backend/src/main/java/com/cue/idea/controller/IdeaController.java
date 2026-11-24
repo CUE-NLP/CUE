@@ -10,12 +10,15 @@ import com.cue.idea.dto.EvaluateIdeaResponse;
 import com.cue.idea.dto.EvaluationResponse;
 import com.cue.idea.dto.IdeaHistoryResponse;
 import com.cue.idea.dto.IdeaResponse;
+import com.cue.idea.dto.StructureIdeaRequest;
+import com.cue.idea.dto.StructureIdeaResponse;
 import com.cue.idea.dto.UpdateIdeaRequest;
 import com.cue.idea.dto.UpdateWeightsRequest;
 import com.cue.idea.entity.IdeaSort;
 import com.cue.idea.entity.IdeaStatus;
 import com.cue.idea.service.IdeaEvaluationService;
 import com.cue.idea.service.IdeaService;
+import com.cue.idea.service.IdeaStructuringService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -32,6 +35,22 @@ import lombok.RequiredArgsConstructor;
 public class IdeaController {
     private final IdeaService ideaService;
     private final IdeaEvaluationService ideaEvaluationService;
+    private final IdeaStructuringService structuringService;
+
+    @Operation(summary = "아이디어 구조화(미리보기)",
+            description = "자유롭게 쓴 원문(최대 5000자)을 AI로 타깃·문제·해결·기대효과 4개 항목으로 정리해 돌려준다. **저장하지 않고 원문도 남기지 않는다.** "
+                    + "사용자가 결과를 확인·수정한 뒤 `POST /api/ideas`로 저장한다. "
+                    + "원문에 근거가 없는 항목은 AI가 채우지 않고 빈 문자열로 두며, 하나라도 비면 `complete=false`(그대로 저장하면 HOLD)이고 `missingFields`에 비어 있는 항목이 담긴다. "
+                    + "`complete=true`이면 IT 세부 종류(`itCategory`)와 영어 키워드 후보(`keywords`)도 함께 담기고, **내용을 고치지 않고 저장하면 서버가 이 결과를 다시 써서 저장 때 AI를 한 번 덜 호출한다**(고치면 평소처럼 다시 추출). "
+                    + "같은 원문을 다시 보내면 AI 호출 없이 직전 결과를 돌려주고, 같은 사용자는 3초(설정값) 안에 새 원문을 다시 보낼 수 없다(`I006`). "
+                    + "AI가 바쁘거나 실패하면(`E006`·`E001`·`E002`·`G002`) 프론트는 사용자가 4칸을 직접 채워 저장하게 안내한다.")
+    @ApiErrors({ErrorCode.AI_NOT_CONFIGURED, ErrorCode.AI_RESPONSE_INVALID, ErrorCode.AI_BUSY,
+            ErrorCode.STRUCTURING_TOO_FAST, ErrorCode.EXTERNAL_SERVER_ERROR})
+    @PostMapping("/structure")
+    public CommonResponse<StructureIdeaResponse> structure(@AuthenticationPrincipal UserPrincipal principal,
+                                                           @Valid @RequestBody StructureIdeaRequest req) {
+        return CommonResponse.onSuccess(structuringService.structure(principal.id(), req.text()));
+    }
 
     @Operation(summary = "아이디어 저장",
             description = "프론트가 구조화하고 사용자가 확인한 아이디어를 저장한다. 문제·타깃·해결·기대효과가 **모두 채워지면 ACTIVE**(평가 대상이 되고 외부 자료 검색 설정을 만든다), "

@@ -43,6 +43,7 @@ public enum ErrorCode {
     INVALID_WEIGHT(HttpStatus.BAD_REQUEST, "I003", "가중치는 5개 항목을 모두 0~100 정수로 입력하고 합이 100이어야 합니다."),
     IDEA_NOT_ACTIVE(HttpStatus.CONFLICT, "I004", "구조화 항목이 모두 채워지지 않은 보류 아이디어는 평가할 수 없습니다."),
     IDEA_EVALUATING(HttpStatus.CONFLICT, "I005", "평가가 진행 중인 아이디어는 수정할 수 없습니다. 평가가 끝난 뒤 다시 시도해 주세요."),
+    STRUCTURING_TOO_FAST(HttpStatus.TOO_MANY_REQUESTS, "I006", "구조화 요청을 너무 자주 보냈습니다. 잠시 후 다시 시도해주세요."),
 
     // ===== Source (외부 자료 수집, S-xxx) — 외부 API 통신 오류 자체는 G002 =====
     SOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "S001", "수집 설정(source)을 찾을 수 없습니다."),
@@ -57,7 +58,8 @@ public enum ErrorCode {
     AI_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, "E001", "AI 평가를 사용할 수 없습니다. (Gemini 비활성 또는 API 키 없음)"),
     AI_RESPONSE_INVALID(HttpStatus.BAD_GATEWAY, "E002", "AI 평가 응답을 해석할 수 없습니다."),
     EVALUATION_QUEUE_FULL(HttpStatus.SERVICE_UNAVAILABLE, "E004", "평가 요청이 많아 대기열이 가득 찼습니다. 잠시 후 다시 시도해주세요."),
-    EVALUATION_INTERRUPTED(HttpStatus.SERVICE_UNAVAILABLE, "E005", "서버가 재시작되어 평가가 중단되었습니다. 다시 시도해주세요.");
+    EVALUATION_INTERRUPTED(HttpStatus.SERVICE_UNAVAILABLE, "E005", "서버가 재시작되어 평가가 중단되었습니다. 다시 시도해주세요."),
+    AI_BUSY(HttpStatus.SERVICE_UNAVAILABLE, "E006", "AI가 지금 바쁩니다. 직접 입력하거나 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus status;
     private final String code;

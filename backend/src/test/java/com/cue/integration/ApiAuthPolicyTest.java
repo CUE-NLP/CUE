@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.cue.global.ai.AiLane;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.ErrorCode;
 import com.cue.source.service.SourceCheckService;
@@ -82,6 +83,7 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
                 new Endpoint(HttpMethod.GET, "/api/users/me", null),
                 new Endpoint(HttpMethod.POST, "/api/auth/logout", "{\"refreshToken\":\"x\"}"),
                 new Endpoint(HttpMethod.POST, "/api/ideas", IDEA_BODY),
+                new Endpoint(HttpMethod.POST, "/api/ideas/structure", "{\"text\":\"example\"}"),
                 new Endpoint(HttpMethod.GET, "/api/ideas", null),
                 new Endpoint(HttpMethod.GET, "/api/ideas/{id}", null),
                 new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}", "{\"problem\":\"x\"}"),
@@ -221,6 +223,12 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("endpoints")
     void 유효한_토큰이면_인증_에러가_아니다(Endpoint e) throws Exception {
+        if (e.path().equals("/api/ideas/structure")) {
+            org.mockito.Mockito.doReturn(mapper.createObjectNode()).when(gemini).generateJson(
+                    org.mockito.ArgumentMatchers.eq(AiLane.INTERACTIVE),
+                    org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.anyMap());
+        }
         String token = signUpAndLogin("ok-" + System.nanoTime() + "@cue.com");
         Long ideaId = e.ownsIdea() ? createIdea(token) : 1L;
         String code = mapper.readTree(call(e, ideaId, token).andReturn().getResponse().getContentAsString()).get("code").asString();
