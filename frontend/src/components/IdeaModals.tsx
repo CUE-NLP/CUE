@@ -6,6 +6,7 @@ import {
   dateText,
   deltaText,
   fieldLabels,
+  ideaTitle,
   Modal,
   scoreDescriptions,
   scoreLabels,
@@ -287,18 +288,38 @@ export function ChangeModal({
     <Modal title="변화 알림" close={close} className={tw('change-sheet')}>
       <h2>새로운 변화가 있어요</h2>
       {changes.length ? (
-        changes.map((idea) => (
-          <div className={tw('change-item')} key={idea.id}>
-            <strong>
-              {idea.solution || idea.problem || '내 아이디어'} ·{' '}
-              {idea.lastDifference != null
-                ? `${idea.lastDifference > 0 ? '+' : ''}${scoreText(idea.lastDifference)}점`
-                : '새 평가'}
-            </strong>
-            <p>어떤 근거가 달라졌는지 확인해 보세요.</p>
-            <Button onClick={() => open(idea)}>변화 근거 확인하기</Button>
-          </div>
-        ))
+        changes.map((idea) => {
+          const difference = idea.lastDifference ?? 0
+          // 이전 총점이 0이면 변화가 아니라 첫 평가로 본다 (상세 화면과 같은 규칙)
+          const first =
+            idea.lastDifference == null || Math.abs(idea.totalScore - idea.lastDifference) < 0.005
+          const unchanged = Math.abs(difference) < 0.005
+          return (
+            <div className={tw('change-item')} key={idea.id}>
+              <div className="flex min-w-0 items-baseline gap-1 text-[13px] font-bold text-[#6938ff]">
+                <span className="min-w-0 truncate" title={ideaTitle(idea)}>
+                  {ideaTitle(idea)}
+                </span>
+                <span className="shrink-0">·</span>
+                {first ? (
+                  <span className="shrink-0">첫 평가 완료</span>
+                ) : unchanged ? (
+                  <span className="shrink-0 text-[#647096]">변화 없음</span>
+                ) : (
+                  <span className={`shrink-0 ${tw(difference > 0 ? 'positive' : 'negative')}`}>
+                    {difference > 0 ? '▲' : '▼'} {deltaText(difference)}점
+                  </span>
+                )}
+              </div>
+              <p>
+                {first
+                  ? `첫 평가에서 ${scoreText(idea.totalScore)}점을 받았어요. 어떤 근거로 평가됐는지 확인해 보세요.`
+                  : '어떤 근거가 달라졌는지 확인해 보세요.'}
+              </p>
+              <Button onClick={() => open(idea)}>변화 근거 확인하기</Button>
+            </div>
+          )
+        })
       ) : (
         <p className={tw('subcopy')}>확인하지 않은 변화가 없어요.</p>
       )}
@@ -323,7 +344,7 @@ export function SettingsModal({
   }, [])
   return (
     <Modal title="설정" close={close} className={tw('settings-sheet')}>
-      <h2>설정</h2>
+      <h2 className="font-bold">설정</h2>
       <p className={tw('subcopy')}>{userName}님의 아이디어 포트폴리오</p>
       <div className={tw('settings-info')}>
         <strong>평가 주기</strong>
