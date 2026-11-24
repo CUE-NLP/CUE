@@ -9,7 +9,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.cue.evaluation.service.EvaluationBatchService;
+import com.cue.evaluation.service.DailyEvaluationBatch;
 import com.cue.evaluation.service.EvaluationScheduler;
 import com.cue.global.ai.GeminiClient;
 import com.cue.source.dto.SourceCheckResult;
@@ -54,7 +54,7 @@ class DailyEvaluationFlowTest {
     @Autowired ObjectMapper mapper;
     @Autowired JdbcTemplate jdbc;
     @Autowired ApplicationContext context;
-    @Autowired EvaluationBatchService batch;
+    @Autowired DailyEvaluationBatch batch;
     @MockitoBean GeminiClient gemini;
     @MockitoBean SourceCheckService sourceCheck;
     @MockitoBean com.cue.source.service.SourceSummaryService sourceSummary;
@@ -121,7 +121,7 @@ class DailyEvaluationFlowTest {
         return mapper.readTree(res).get("data").get("id").asLong();
     }
 
-    @Autowired com.cue.evaluation.service.DailyEvaluationService dailyEvaluation;
+    @Autowired com.cue.evaluation.service.IdeaEvaluationPipeline dailyEvaluation;
 
     /** 파이프라인을 직접(동기로) 실행하고 {status, changed, idea} 형태로 돌려준다. 비동기 API는 AsyncEvaluationFlowTest에서 본다. */
     private tools.jackson.databind.JsonNode evaluate(String token, long id) throws Exception {
@@ -437,9 +437,9 @@ class DailyEvaluationFlowTest {
         long good = createIdea(token, FULL);
         when(sourceCheck.checkAll(bad)).thenThrow(new IllegalStateException("boom"));
 
-        EvaluationBatchService.Summary summary = batch.runAll();
+        DailyEvaluationBatch.Summary summary = batch.runAll();
 
-        assertEquals(new EvaluationBatchService.Summary(2, 1, 1, 0, 1), summary);
+        assertEquals(new DailyEvaluationBatch.Summary(2, 1, 1, 0, 1), summary);
         verify(sourceCheck, never()).checkAll(hold);
         assertEquals(5, evaluationCount(good));
         assertEquals(0, evaluationCount(bad));
@@ -452,7 +452,7 @@ class DailyEvaluationFlowTest {
         long id = createIdea(token, FULL);
         when(gemini.available()).thenReturn(false);
 
-        assertEquals(new EvaluationBatchService.Summary(1, 0, 0, 0, 1), batch.runAll());
+        assertEquals(new DailyEvaluationBatch.Summary(1, 0, 0, 0, 1), batch.runAll());
         verify(sourceCheck, never()).checkAll(anyLong());
         assertEquals(0, evaluationCount(id));
     }

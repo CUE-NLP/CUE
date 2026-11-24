@@ -35,7 +35,7 @@ import org.springframework.stereotype.Service;
  */
 @Slf4j
 @Service
-public class EvaluationJobService {
+public class EvaluationQueueService {
     /** 실행기 작업은 큐에 넣은 것(QUEUED)만 집는다 (그사이 배치가 먼저 평가했다면 건너뜀). */
     private static final Set<EvaluationStatus> WORKER_ALLOWED = EnumSet.of(EvaluationStatus.QUEUED);
     /** 일일 배치는 대기 중이 아닌 모든 아이디어를 대상으로 한다 (QUEUED도 같이 처리해 중복 평가를 피함). */
@@ -43,14 +43,14 @@ public class EvaluationJobService {
             EnumSet.of(EvaluationStatus.IDLE, EvaluationStatus.FAILED, EvaluationStatus.QUEUED);
 
     private final IdeaRepository ideas;
-    private final DailyEvaluationService evaluation;
+    private final IdeaEvaluationPipeline evaluation;
     private final ThreadPoolTaskExecutor executor;
     private final GlobalTrendService globalTrend;
     private final ReentrantLock lock = new ReentrantLock(true);
     /** 큐에 넣었지만 아직 끝나지 않은 수동 작업(평가·트렌드 갱신) 수. 0이 아니면 배치는 시작하지 않고 양보한다. */
     private final AtomicInteger manualPending = new AtomicInteger();
 
-    public EvaluationJobService(IdeaRepository ideas, DailyEvaluationService evaluation, GlobalTrendService globalTrend,
+    public EvaluationQueueService(IdeaRepository ideas, IdeaEvaluationPipeline evaluation, GlobalTrendService globalTrend,
                                 @Qualifier(EvaluationExecutorConfig.EXECUTOR) ThreadPoolTaskExecutor executor) {
         this.ideas = ideas;
         this.evaluation = evaluation;

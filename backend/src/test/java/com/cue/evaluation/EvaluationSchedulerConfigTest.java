@@ -3,7 +3,7 @@ package com.cue.evaluation;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 
-import com.cue.evaluation.service.EvaluationBatchService;
+import com.cue.evaluation.service.DailyEvaluationBatch;
 import com.cue.evaluation.service.EvaluationScheduler;
 import java.lang.reflect.Method;
 import org.junit.jupiter.api.Test;
@@ -12,7 +12,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 class EvaluationSchedulerConfigTest {
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withBean(EvaluationBatchService.class, () -> mock(EvaluationBatchService.class))
+            .withBean(DailyEvaluationBatch.class, () -> mock(DailyEvaluationBatch.class))
             .withUserConfiguration(EvaluationScheduler.class);
 
     @Test

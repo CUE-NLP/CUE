@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "cue.evaluation", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class EvaluationScheduler {
-    private final EvaluationBatchService batch;
+    private final DailyEvaluationBatch batch;
 
     @Scheduled(cron = "${cue.evaluation.cron:0 0 3 * * *}", zone = "${cue.evaluation.zone:Asia/Seoul}")
     public void runDaily() {

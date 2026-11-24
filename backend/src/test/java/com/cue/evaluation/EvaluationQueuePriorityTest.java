@@ -11,8 +11,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.cue.evaluation.dto.EvaluationRunResult;
-import com.cue.evaluation.service.DailyEvaluationService;
-import com.cue.evaluation.service.EvaluationJobService;
+import com.cue.evaluation.service.IdeaEvaluationPipeline;
+import com.cue.evaluation.service.EvaluationQueueService;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.repository.IdeaRepository;
@@ -30,9 +30,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 /** 수동 평가가 일일 배치보다 항상 우선하는지 검증한다 (DB·Gemini 없이 목으로). */
-class EvaluationJobPriorityTest {
+class EvaluationQueuePriorityTest {
     private final IdeaRepository ideas = mock(IdeaRepository.class);
-    private final DailyEvaluationService evaluation = mock(DailyEvaluationService.class);
+    private final IdeaEvaluationPipeline evaluation = mock(IdeaEvaluationPipeline.class);
     private final GlobalTrendService trend = mock(GlobalTrendService.class);
 
     private final List<String> order = Collections.synchronizedList(new ArrayList<>());
@@ -41,7 +41,7 @@ class EvaluationJobPriorityTest {
     private final ExecutorService batchThread = Executors.newSingleThreadExecutor();
     private ThreadPoolTaskExecutor executor;
 
-    private EvaluationJobService jobs(int queueCapacity) {
+    private EvaluationQueueService jobs(int queueCapacity) {
         executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(1);
         executor.setMaxPoolSize(1);
@@ -62,7 +62,7 @@ class EvaluationJobPriorityTest {
             }
             return EvaluationRunResult.evaluated(false);
         });
-        return new EvaluationJobService(ideas, evaluation, trend, executor);
+        return new EvaluationQueueService(ideas, evaluation, trend, executor);
     }
 
     @AfterEach
@@ -76,7 +76,7 @@ class EvaluationJobPriorityTest {
 
     @Test
     void 수동_작업이_대기_중이면_배치는_락을_먼저_기다렸어도_그_뒤에_시작한다() throws Exception {
-        EvaluationJobService jobs = jobs(10);
+        EvaluationQueueService jobs = jobs(10);
         jobs.submit(1L, true);
         assertTrue(firstStarted.await(5, TimeUnit.SECONDS));
         jobs.submit(2L, true); // 실행기 대기열에 있어 아직 락에 도달하지 못한 수동 작업
@@ -93,7 +93,7 @@ class EvaluationJobPriorityTest {
 
     @Test
     void 수동_작업이_없으면_배치는_바로_실행된다() throws Exception {
-        EvaluationJobService jobs = jobs(10);
+        EvaluationQueueService jobs = jobs(10);
         EvaluationRunResult result = batchThread.submit(() -> jobs.executeBatch(7L)).get(5, TimeUnit.SECONDS);
         assertNotNull(result);
         assertEquals(List.of("배치7"), List.copyOf(order));
@@ -101,7 +101,7 @@ class EvaluationJobPriorityTest {
 
     @Test
     void 대기열이_가득_차_수동_요청이_거절되면_대기_수가_원복되어_배치가_막히지_않는다() throws Exception {
-        EvaluationJobService jobs = jobs(0); // 대기열 0: 스레드가 바쁘면 즉시 거절
+        EvaluationQueueService jobs = jobs(0); // 대기열 0: 스레드가 바쁘면 즉시 거절
         jobs.submit(1L, true);
         assertTrue(firstStarted.await(5, TimeUnit.SECONDS));
         CustomException e = assertThrows(CustomException.class, () -> jobs.submit(2L, true));

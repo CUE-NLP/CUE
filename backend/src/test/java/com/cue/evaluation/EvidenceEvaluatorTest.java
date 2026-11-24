@@ -8,7 +8,7 @@ import static org.mockito.Mockito.*;
 
 import com.cue.evaluation.dto.IdeaSnapshot;
 import com.cue.evaluation.dto.ScoreChange;
-import com.cue.evaluation.service.EvaluationAnalyzer;
+import com.cue.evaluation.service.EvidenceEvaluator;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.ai.PromptLoader;
 import com.cue.global.error.CustomException;
@@ -26,9 +26,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.json.JsonMapper;
 
-class EvaluationAnalyzerTest {
+class EvidenceEvaluatorTest {
     private final GeminiClient gemini = mock(GeminiClient.class);
-    private final EvaluationAnalyzer analyzer = new EvaluationAnalyzer(gemini, new PromptLoader());
+    private final EvidenceEvaluator analyzer = new EvidenceEvaluator(gemini, new PromptLoader());
     private final JsonMapper mapper = JsonMapper.builder().build();
 
     private static final SourceCheckResult CHANGED = SourceCheckResult.changed(1L, ApiProvider.GITHUB, "agent",
@@ -95,7 +95,7 @@ class EvaluationAnalyzerTest {
     void 근거_요약이_300자를_넘으면_자른다() {
         respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":2,\"evidenceSummary\":\"" + "가".repeat(500) + "\"}]}");
         String summary = analyzer.reEvaluate(idea("55"), List.of(CHANGED)).get(0).evidenceSummary();
-        assertEquals(EvaluationAnalyzer.MAX_SUMMARY_CHARS, summary.length());
+        assertEquals(EvidenceEvaluator.MAX_SUMMARY_CHARS, summary.length());
         assertTrue(summary.endsWith("…"));
     }
 

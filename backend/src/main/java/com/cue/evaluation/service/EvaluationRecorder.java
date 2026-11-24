@@ -20,10 +20,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** AI 평가 결과를 저장한다. 평가 스케줄러가 호출한다. */
+/**
+ * AI 평가 결과를 저장한다(항목별 Evaluation·총점 재계산·총점 이력·완료 표시를 한 트랜잭션으로, {@link #recordResults}).
+ * 하루 평가 파이프라인({@link IdeaEvaluationPipeline})이 호출하고, 새 평가 턴을 시작할 때 예약 가중치를 적용한다({@link #startTurn}).
+ */
 @Service
 @RequiredArgsConstructor
-public class EvaluationService {
+public class EvaluationRecorder {
     private final IdeaRepository ideas;
     private final EvaluationRepository evaluations;
     private final IdeaScoreHistoryRepository histories;
