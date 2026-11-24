@@ -1,5 +1,5 @@
 import { tw } from './tailwindStyles'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getMe, logout, type User } from './api/auth'
 import { authStore, ApiError } from './api/client'
 import {
@@ -8,6 +8,7 @@ import {
   getIdea,
   getIdeas,
   markIdeaChecked,
+  structureIdea,
   updateIdea,
   updateWeights,
   type Evaluation,
@@ -62,6 +63,7 @@ export default function App() {
   const [raw, setRaw] = useState(''),
     [fields, setFields] = useState<IdeaFields>({ ...emptyFields })
   const [busy, setBusy] = useState(false),
+    [structuring, setStructuring] = useState(false),
     [error, setError] = useState(''),
     [overlay, setOverlay] = useState<Overlay>(null)
   const [weightTarget, setWeightTarget] = useState<Idea | null>(null)
@@ -70,6 +72,8 @@ export default function App() {
     evaluation: Evaluation
   } | null>(null)
   const [changes, setChanges] = useState<Idea[]>([])
+  // 마지막으로 구조화에 성공한 원문. 같은 글로 다시 누르면 AI를 부르지 않는다
+  const structuredText = useRef('')
   function fail(cause: unknown) {
     setError(errorText(cause))
     if (cause instanceof ApiError && cause.status === 401) {
@@ -117,22 +121,73 @@ export default function App() {
   function startIdea() {
     setRaw('')
     setFields({ ...emptyFields })
+    structuredText.current = ''
     navigate('input')
   }
-  function beginReview() {
-    setFields((old) => ({ ...old, problem: old.problem || raw.trim() }))
-    navigate('review')
+  async function beginReview() {
+    const text = raw.trim()
+    // 글을 바꾸지 않았으면 이미 받은 결과와 사용자가 고친 내용을 그대로 쓴다
+    if (text === structuredText.current) {
+      navigate('review')
+      return
+    }
+    setStructuring(true)
+    setError('')
+    try {
+      const result = await structureIdea(text)
+      setFields({
+        target: result.target,
+        problem: result.problem,
+        solution: result.solution,
+        expectation: result.expectation,
+      })
+      structuredText.current = text
+      navigate('review')
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) {
+        fail(cause)
+        return
+      }
+      // AI가 바쁘거나(E006) 너무 빨리 다시 눌렀을 때(I006) 등은 직접 채우도록 원문을 문제 칸에 넣고 넘어간다
+      if (structuredText.current) {
+        structuredText.current = ''
+        setFields({ ...emptyFields, problem: text })
+      } else setFields((old) => ({ ...old, problem: old.problem || text }))
+      navigate('review')
+      const code = cause instanceof ApiError ? ` (${cause.code})` : ''
+      setError(`자동 정리를 하지 못했어요${code}. 네 항목을 직접 채워 주세요.`)
+    } finally {
+      setStructuring(false)
+    }
   }
   async function saveIdea() {
     setBusy(true)
     setError('')
     try {
       const idea = await createIdea(fields)
-      // ACTIVE로 저장되면 백엔드가 커밋 직후 평가를 대기열에 넣지만 응답은 그 전 상태(IDLE)라 한 번 더 받는다
-      setSelected(await getIdea(idea.id).catch(() => idea))
+      let evaluateError: unknown = null
+      if (idea.status === 'ACTIVE') {
+        // 네 칸이 다 찬 아이디어는 저장하자마자 평가를 요청해 바로 평가 중 화면을 띄운다
+        try {
+          const result = await evaluateIdea(idea.id)
+          setSelected({ ...result.idea, evaluationStatus: result.status })
+        } catch (cause) {
+          evaluateError = cause
+          setSelected(await getIdea(idea.id).catch(() => idea))
+        }
+      } else {
+        // 빈 칸이 있으면 보류(HOLD)로 저장되고 평가하지 않는다
+        setSelected(await getIdea(idea.id).catch(() => idea))
+      }
       setRaw('')
       setFields({ ...emptyFields })
+      structuredText.current = ''
       navigate('result')
+      if (evaluateError instanceof ApiError && evaluateError.status === 401) fail(evaluateError)
+      else if (evaluateError) {
+        const code = evaluateError instanceof ApiError ? ` (${evaluateError.code})` : ''
+        setError(`저장은 됐지만 평가를 요청하지 못했어요${code}. 아래 버튼으로 다시 요청해 주세요.`)
+      }
     } catch (cause) {
       fail(cause)
     } finally {
@@ -257,7 +312,8 @@ export default function App() {
             raw={raw}
             setRaw={setRaw}
             back={() => navigate('home')}
-            review={beginReview}
+            review={() => void beginReview()}
+            busy={structuring}
             onError={fail}
           />
         )}

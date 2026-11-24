@@ -54,12 +54,14 @@ export default function InputPage({
   setRaw,
   back,
   review,
+  busy,
   onError,
 }: {
   raw: string
   setRaw: (next: string | ((old: string) => string)) => void
   back: () => void
   review: () => void
+  busy: boolean
   onError: (error: unknown) => void
 }) {
   const [mode, setMode] = useState<Mode>('keyboard'),
@@ -220,15 +222,17 @@ export default function InputPage({
       )}
       <div className={tw('bottom-actions')}>
         <Button
-          // 구조화 버튼은 입력이 비어 있으면 누를 수 없다 (녹음 시작·녹음 마치기 버튼은 그대로 눌린다)
-          disabled={!recording && !(mode === 'voice' && !raw) && !raw.trim()}
+          // 구조화 버튼은 입력이 비어 있거나 AI가 정리하는 동안 누를 수 없다 (녹음 시작·녹음 마치기 버튼은 그대로 눌린다)
+          disabled={busy || (!recording && !(mode === 'voice' && !raw) && !raw.trim())}
           onClick={mode === 'voice' && !raw && !recording ? start : next}
         >
-          {mode === 'voice' && !raw && !recording
-            ? '녹음 시작'
-            : recording
-              ? '녹음 마치고 확인'
-              : '구조화 결과 확인하기 →'}
+          {busy
+            ? '정리하는 중…'
+            : mode === 'voice' && !raw && !recording
+              ? '녹음 시작'
+              : recording
+                ? '녹음 마치고 확인'
+                : '구조화 결과 확인하기 →'}
         </Button>
       </div>
     </section>
