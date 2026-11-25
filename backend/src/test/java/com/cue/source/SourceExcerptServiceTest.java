@@ -27,8 +27,8 @@ class SourceExcerptServiceTest {
 
     private SourceExcerptService service(int topN, int excerptChars) {
         when(client.provider()).thenReturn(ApiProvider.GITHUB);
-        SourceApiProperties props = new SourceApiProperties(Duration.ofSeconds(3), Duration.ofSeconds(5), topN, 30,
-                8000, 1048576, 3, 7, 4000, 16000, 2, 30, "ua", "https://wikimedia.org", excerptChars, null, null, null, null, null, null);
+        SourceApiProperties props = new SourceApiProperties(Duration.ofSeconds(3), Duration.ofSeconds(5), topN,
+                8000, 1048576, 3, 7, 4000, 16000, 30, "ua", "https://wikimedia.org", excerptChars, null, null, null, null, null, null);
         return new SourceExcerptService(List.of(client), props);
     }
 

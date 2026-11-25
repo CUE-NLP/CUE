@@ -28,7 +28,7 @@ public class SourceClientConfig {
 
     @Bean
     SearchSettings searchSettings(SourceApiProperties props) {
-        return new SearchSettings(props.topN(), props.trendingDays());
+        return SearchSettings.forKeywordSearch(props.topN());
     }
 
     /** 기사 등 임의의 웹 페이지를 읽는 안전한 가져오기 (SSRF 차단·리다이렉트/크기/시간 제한). */
@@ -71,7 +71,7 @@ public class SourceClientConfig {
     @Bean
     SemanticScholarSourceClient semanticScholarSourceClient(RestClient.Builder builder, SourceApiProperties props, SearchSettings settings) {
         return new SemanticScholarSourceClient(base(builder, props, url(props.semanticScholar(), SEMANTIC_SCHOLAR_URL)).build(),
-                props.semanticScholar().token(), settings, props.papersYears());
+                props.semanticScholar().token(), settings);
     }
 
     /** 위키백과 검색 + Wikimedia 조회수. Wikimedia 정책상 User-Agent가 필수다. */

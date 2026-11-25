@@ -151,8 +151,11 @@ public class GeminiClient {
                     sleep(backoff);
                     continue;
                 }
+                // 원인을 알 수 있게 상태 코드와 응답 본문 앞부분을 남긴다 (요청 헤더의 키는 로그에 넣지 않는다)
+                log.warn("Gemini 호출 실패 status={} lane={} model={} body={}", status, aiLane, model, abbreviate(e.getResponseBodyAsString()));
                 throw new CustomException(busy && interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR);
             } catch (RuntimeException e) {
+                log.warn("Gemini 호출 중 통신 오류 lane={} model={} cause={}: {}", aiLane, model, e.getClass().getSimpleName(), e.getMessage());
                 throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
             }
         }
@@ -170,6 +173,15 @@ public class GeminiClient {
             }
         }
         return interactive ? ms : Math.min(ms, BATCH_MAX_BACKOFF_MS);
+    }
+
+    /** 로그에 남길 응답 본문. 길면 앞 500자만. */
+    private static String abbreviate(String body) {
+        if (body == null) {
+            return "";
+        }
+        String oneLine = body.replaceAll("\\s+", " ").strip();
+        return oneLine.length() > 500 ? oneLine.substring(0, 500) + "..." : oneLine;
     }
 
     private void sleep(long ms) {

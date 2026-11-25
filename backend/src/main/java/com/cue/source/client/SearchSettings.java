@@ -9,6 +9,11 @@ public record SearchSettings(int topN, int trendingDays, Clock clock) {
         this(topN, trendingDays, Clock.systemUTC());
     }
 
+    /** 키워드 근거 조회용: 기간을 두지 않는다(기간 필터가 필요한 트렌드 조회는 호출하는 쪽이 기간을 담은 설정을 따로 넘긴다). */
+    public static SearchSettings forKeywordSearch(int topN) {
+        return new SearchSettings(topN, 0);
+    }
+
     /** 이 날짜 이후(포함하지 않음)만 최근으로 본다. */
     public LocalDate cutoffDate() {
         return LocalDate.now(clock).minusDays(trendingDays);

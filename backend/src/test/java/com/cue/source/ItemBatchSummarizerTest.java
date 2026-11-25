@@ -25,7 +25,7 @@ class ItemBatchSummarizerTest {
 
     private ItemBatchSummarizer summarizer(int perItem, int total) {
         return new ItemBatchSummarizer(gemini, new PromptLoader(), new SourceApiProperties(Duration.ofSeconds(3),
-                Duration.ofSeconds(5), 5, 30, 8000, 1048576, 3, 7, perItem, total, 2, 30, "ua", "https://wikimedia.org", 800, null, null, null, null, null, null));
+                Duration.ofSeconds(5), 5, 8000, 1048576, 3, 7, perItem, total, 30, "ua", "https://wikimedia.org", 800, null, null, null, null, null, null));
     }
 
     private static Entry entry(int n, String content) {

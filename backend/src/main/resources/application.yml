@@ -47,7 +47,7 @@ cue:
     max-retries: ${GEMINI_MAX_RETRIES:2}
     # 인터랙티브 레인(구조화·키워드 추출): 사용자가 기다리는 호출. 모델을 따로 두면 모델별 한도가 분리된다. 비우면 기본 모델
     interactive:
-      model: ${GEMINI_INTERACTIVE_MODEL:gemini-2.5-flash-lite}
+      model: ${GEMINI_INTERACTIVE_MODEL:gemini-3.1-flash-lite}
       min-interval-ms: ${GEMINI_INTERACTIVE_MIN_INTERVAL_MS:2000}
       # 속도 제한 때문에 기다릴 수 있는 최대 시간(ms). 넘으면 E006 (AI 바쁨)
       max-wait-ms: ${GEMINI_INTERACTIVE_MAX_WAIT_MS:5000}
@@ -83,8 +83,6 @@ cue:
     read-timeout: 5s
     # source마다 읽을 상위 항목 수 (근거 자료는 AI 요약 없이 원문 발췌를 평가 프롬프트에 직접 넣는다. 글로벌 트렌드는 Gemini 호출 크기에 비례)
     top-n: ${SOURCE_TOP_N:5}
-    # "급상승" 판단 기간(일): 최근 N일 안의 글·저장소를 인기 순으로
-    trending-days: ${SOURCE_TRENDING_DAYS:30}
     # 원문을 Gemini에 보내기 전 자르는 글자 수 / 웹 원문 응답 크기 상한(바이트) / 리다이렉트 최대 횟수
     max-content-chars: ${SOURCE_MAX_CONTENT_CHARS:8000}
     fetch-max-bytes: 1048576
@@ -96,8 +94,7 @@ cue:
     # (글로벌 트렌드만) 항목 일괄 요약(provider당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자)
     batch-content-chars: ${SOURCE_BATCH_CONTENT_CHARS:4000}
     batch-total-chars: ${SOURCE_BATCH_TOTAL_CHARS:16000}
-    # Semantic Scholar: 최근 N년(올해 포함) 논문만 / Wikipedia: 문서 조회수를 합산할 최근 일수 / Wikimedia 필수 User-Agent(개인 이메일 금지)
-    papers-years: ${SOURCE_PAPERS_YEARS:2}
+    # Wikipedia: 문서 조회수를 합산할 최근 일수 / Wikimedia 필수 User-Agent(개인 이메일 금지)
     pageviews-days: ${SOURCE_PAGEVIEWS_DAYS:30}
     wikimedia-user-agent: ${WIKIMEDIA_USER_AGENT:CUE-idea-portfolio/1.0 (student project; non-commercial)}
     github:

@@ -31,7 +31,7 @@ public class GithubSourceClient implements SourceClient {
 
     @Override
     public List<SourceItem> search(String keyword) {
-        return query(keyword + " pushed:>" + settings.cutoffDate(), settings);
+        return query(keyword, settings); // 기간 제한 없이 stars 순
     }
 
     /** 글로벌 트렌드: 최근 N일 안에 <b>새로 만들어진</b> 저장소를 stars 순으로 (키워드 없음). 갓 뜨는 프로젝트를 잡는다. */
