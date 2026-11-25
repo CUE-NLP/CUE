@@ -1,6 +1,6 @@
 import { tw } from '../tailwindStyles'
 import type { ReactNode } from 'react'
-import type { Idea, ScoreType } from '../api/ideas'
+import { IDEA_TITLE_MAX_LENGTH, type Idea, type ScoreType } from '../api/ideas'
 
 export const fieldLabels = [
   { key: 'target', label: '타깃 사용자', hint: '누가 이 아이디어를 사용하나요?' },
@@ -23,7 +23,20 @@ export const scoreDescriptions: Record<ScoreType, string> = {
   TREND: '최근 흐름과 맞닿아 있나요?',
 }
 export const scoreTypes = Object.keys(scoreLabels) as ScoreType[]
-export const ideaTitle = (idea: Idea) => idea.solution || idea.problem || '작성 중인 아이디어'
+export function ideaTitle(idea: Idea) {
+  if (idea.title?.trim()) return idea.title
+  const fallback = (idea.solution?.trim() || idea.problem?.trim() || '작성 중인 아이디어').replace(
+    /\s+/g,
+    ' ',
+  )
+  const characters = Array.from(fallback)
+  return characters.length > IDEA_TITLE_MAX_LENGTH
+    ? characters
+        .slice(0, IDEA_TITLE_MAX_LENGTH - 1)
+        .join('')
+        .trimEnd() + '…'
+    : fallback
+}
 export const evaluated = (idea: Idea) => idea.lastEvaluatedAt !== null
 export const scoreText = (value: number) =>
   Number(value).toLocaleString('ko-KR', { maximumFractionDigits: 2 })

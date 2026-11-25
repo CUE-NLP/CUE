@@ -16,7 +16,7 @@ React 화면은 `frontend/src/pages/`, 재사용 UI·모달은 `frontend/src/com
 ## 핵심 흐름
 
 1. **기록**: 텍스트·음성으로 자유롭게 입력 (음성은 프론트에서 STT 후 전달)
-2. **구조화**: 원문을 `POST /api/ideas/structure`로 보내면 서버가 AI로 타깃·문제·해결·기대효과 4개 항목으로 정리(저장 안 함) → **사용자가 검증·수정한 뒤에만 서버에 저장**. 4개가 모두 채워지면 평가 대상(`ACTIVE`), 하나라도 비면 `보류(HOLD)`로 저장됩니다.
+2. **구조화**: 원문을 `POST /api/ideas/structure`로 보내 추천 제목과 타깃·문제·해결·기대효과를 받습니다. 사용자가 확인·수정한 뒤 저장하며, 네 항목의 완성도로 평가 대상(`ACTIVE`)과 보류(`HOLD`)를 구분합니다.
 3. **평가**: 5개 기준으로 점수화합니다.
    - **키워드 근거 자료**로 판단하는 4개: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성
    - **글로벌 트렌드**로 판단하는 1개: **트렌디함(`TREND`)** — 아이디어와 무관하게 하루 1회 모은 Hacker News · GitHub · Hugging Face 급상승 자료를 아이디어에 대입해 판단
@@ -61,7 +61,7 @@ CUE
 
 ## 프론트가 맡는 역할
 - 아이디어 입력(텍스트·음성): **음성 인식(STT)은 프론트에서 처리**하고, 서버에는 텍스트만 보냅니다.
-- 원문을 `POST /api/ideas/structure`로 보내 AI 구조화(타깃 · 문제 · 해결 · 기대효과) 결과를 받고, 사용자 확인·수정 후 저장 요청 (구조화 API는 저장하지 않습니다. 항목이 비어 있으면 `complete=false`이고 그대로 저장하면 `보류`입니다. 실패(`E006` 등)하면 사용자가 직접 입력하게 안내)
+- 구조화 확인 화면에서 추천 제목과 네 항목을 수정할 수 있습니다. 구조화 API는 미리보기만 반환하며, 실패하면 직접 입력할 수 있습니다. 리더보드와 상세 화면은 저장한 제목을 보여 주며, 제목이 없으면 해결 방법이나 문제에서 짧은 표시용 제목을 만듭니다.
 - 리더보드(점수 · 순위 · 변화량), Idea Delta, 항목별 가중치 조절 화면 (**슬라이더 5개**: 4개 근거 기준 + 트렌디함)
 
 ## 백엔드 연동 참고
@@ -91,7 +91,7 @@ API 호출 (Authorization: Bearer {accessToken})
   - 인증이 필요 없는 API는 회원가입(`POST /api/users`)·로그인·재발급 세 개뿐이고, 나머지 `/api/**`(로그아웃 포함)는 모두 액세스 토큰이 필요합니다. 본인 소유가 아닌 아이디어는 `403 I002`, 없는 아이디어는 `404 I001`입니다. 이메일은 소문자로 정규화되므로 대소문자 구분 없이 가입·로그인합니다.
 - **에러 처리**: `code` 값으로 분기합니다. 토큰 만료는 `A004`입니다. 전체 목록은 [에러 코드](#에러-코드)를 참고하세요.
 - **5개 기준(`TREND` 추가) — 프론트 영향**: `scores`가 아이디어마다 **5행**(`PROBLEM_IMPORTANCE`·`MARKET_DEMAND`·`MARKET_DIFFERENTIATION`·`TECH_FEASIBILITY`·`TREND`)으로 내려오고 가중치 기본값은 각 20%입니다. 가중치 슬라이더를 4개 → 5개로 늘리고, `PATCH /api/ideas/{id}/weights` 요청에 `TREND`를 **반드시 포함**해야 합니다(5개 모두 필요, 합 100). 예전 4개짜리 요청은 `I003`으로 거절됩니다. `/evaluations`의 `scoreType`에도 `TREND`가 나옵니다.
-- **평가는 비동기입니다 (프론트 흐름)**: 아이디어를 저장(`POST /api/ideas`, ACTIVE)하거나 내용을 수정(`PATCH`)하면 서버가 커밋 뒤 **첫 평가를 자동으로 큐에 넣습니다**(`EVALUATION_AUTO_ON_SAVE`). 프론트는 "가능성을 분석하고 있어요" 로딩 화면에서 `GET /api/ideas/{id}`를 **몇 초 간격으로 폴링**하고, `evaluationStatus`가 `IDLE`이면 점수를 보여주고 `FAILED`면 `lastEvaluationErrorCode`로 안내합니다. **평가가 끝날 때까지(`QUEUED`/`RUNNING`) 그 아이디어는 수정할 수 없습니다**(`PATCH`가 `I005`). 저장 직후 자동 평가가 시작되면 로딩 화면 동안 수정 버튼을 비활성화하고, `I005`가 오면 "평가가 끝난 뒤 다시 시도해 주세요"로 안내하세요. 가중치 예약(`/weights`)과 확인 처리(`/check`)는 평가 중에도 됩니다. 수동으로 다시 돌리려면 `POST /api/ideas/{id}/evaluate`(즉시 `202`)를 호출하고 같은 방식으로 폴링합니다.
+- **평가는 비동기입니다 (프론트 흐름)**: “확인하고 평가하기”로 아이디어를 저장한 뒤 서버가 `ACTIVE`를 반환하면 프론트는 `POST /api/ideas/{id}/evaluate`로 바로 평가를 요청합니다(`202`). `HOLD`면 저장만 합니다. 프론트는 평가 대기·진행 중 `GET /api/ideas/{id}`로 상태를 조회하고, 실패 시 `lastEvaluationErrorCode`로 안내합니다. 평가 중에는 수정할 수 없으며(`I005`), 가중치 예약(`/weights`)과 확인 처리(`/check`)는 가능합니다. 서버 자동 평가를 켠 경우(`EVALUATION_AUTO_ON_SAVE=true`)에도 제목만 수정하면 평가 요청이 발생하지 않습니다.
   - `evaluationStatus`: `IDLE`(대기·완료) → `QUEUED`(대기열) → `RUNNING`(평가 중) → `IDLE`(완료, 점수·`hasNewChange` 갱신) 또는 `FAILED`(`lastEvaluationErrorCode`에 `G002` 등). `FAILED`는 다시 요청하면 재시도됩니다. 보류(HOLD) 아이디어와 평가 전 상태는 `IDLE`입니다.
   - 서버는 평가를 한 번에 하나씩만 돌리므로 대기열이 길면 `QUEUED`가 오래 갈 수 있고(수 분), 대기열이 가득 차면 요청이 `E004`로 거절됩니다. 서버 재시작으로 중단된 평가는 `FAILED`(`E005`)가 됩니다.
 - **시연용 버튼 흐름**: 서버를 `DEMO_API_ENABLED=true`로 띄운 뒤 화면의 "지금 조회·평가" 버튼이 `POST /api/demo/evaluations/run`(변화를 눈으로 보여주려면 `{"force": true}`)을 호출 → `202`를 받으면 `queued`의 아이디어마다 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링 → `evaluationStatus`가 `IDLE`이면 점수·`hasNewChange` 갱신 표시, `FAILED`면 에러 코드 안내. `D001`이면 버튼을 숨기고, `D002`는 잠시 뒤 다시 누르도록 안내합니다. **주의**: `force`는 호출 수가 많아(아이디어마다 최대 수십 회) Gemini 무료 한도를 빨리 소진합니다. 큐에 들어간 아이디어는 평가가 끝날 때까지 수정할 수 없습니다(`I005`).
@@ -208,11 +208,11 @@ cd backend && ./gradlew test
 | POST | `/api/auth/refresh` | ✕ | 리프레시 토큰으로 재발급 (회전: 사용한 토큰은 폐기, 바디 `refreshToken`) |
 | POST | `/api/auth/logout` | ✓ | 로그아웃 — 바디 `refreshToken` 폐기 (현재 기기만, 멱등). 액세스 토큰은 만료까지 유효 |
 | GET | `/api/users/me` | ✓ | 내 정보 |
-| POST | `/api/ideas/structure` | ✓ | 원문(`text`, 최대 5000자)을 AI로 **구조화만** 한다(저장·원문 보관 없음). 응답 `data`: `target`·`problem`·`solution`·`expectation`(근거 없으면 빈 문자열), `complete`, `missingFields`, `itCategory`·`keywords`(complete일 때만, 참고용). 고치지 않고 저장하면 서버가 이 종류·키워드를 재사용해 AI를 덜 호출. 쿨다운 `I006`, AI 바쁨 `E006`, Gemini 불가 `E001`, 응답 해석 불가 `E002` |
-| POST | `/api/ideas` | ✓ | 구조화된 아이디어 저장 — 4개 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
-| GET | `/api/ideas` | ✓ | 리더보드(목록 응답 `data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
-| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (상태 · 항목별 점수 · 가중치 · 최근 변화량 · `hasNewChange`) |
-| PATCH | `/api/ideas/{id}` | ✓ | 아이디어 수정 (보낸 항목만, 빈 문자열은 비움). 모두 채워지면 키워드 재추출. `keywords`: 생략=유지(출처가 AI면 재추출), `[]`=사용자 키워드 삭제 후 AI 재추출, 1~2개=교체. **평가가 대기(`QUEUED`)·진행(`RUNNING`) 중이면 `409 I005`로 거절** (`IDLE`·`FAILED`면 가능) |
+| POST | `/api/ideas/structure` | ✓ | 원문(`text`, 최대 5000자)의 미리보기. `title`(최대 60자), `target`·`problem`·`solution`·`expectation`, `complete`, `missingFields`, `itCategory`·`keywords`를 반환. 네 항목을 그대로 저장하면 서버가 종류·키워드를 재사용. 쿨다운 `I006`, AI 바쁨 `E006`, Gemini 불가 `E001`, 응답 해석 불가 `E002` |
+| POST | `/api/ideas` | ✓ | 구조화된 아이디어와 선택 필드 `title`(최대 60자) 저장. 네 항목이 모두 채워지면 `ACTIVE`, 비면 `HOLD`. 선택 필드 `keywords`(최대 2개)를 보내면 AI 키워드 추출 대신 사용 |
+| GET | `/api/ideas` | ✓ | 저장된 `title`을 포함한 리더보드 목록(`data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
+| GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (저장된 `title` · 상태 · 구조화 항목 · 점수 · 가중치 · 최근 변화량) |
+| PATCH | `/api/ideas/{id}` | ✓ | `{"title":"새 제목"}`으로 제목만 수정하면 AI 호출·소스 재등록·재평가가 발생하지 않음. 네 항목·검색 키워드 변경은 기존 평가 규칙 적용. `keywords`: 생략=유지, `[]`=AI 재추출, 1~2개=교체. 평가 대기·진행 중이면 `409 I005` |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순, 목록 응답 `data.items`) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순, 목록 응답 `data.items`) |
@@ -330,6 +330,8 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 
 스키마는 Flyway(`backend/src/main/resources/db/migration`)로 관리합니다. **스키마가 확정되기 전까지는 `V1__init.sql` 하나를 수정해서 쓰고**, 확정 후에 새 버전 파일을 추가합니다. V1이 바뀐 PR을 받으면 `docker compose down -v` 후 다시 실행해 DB를 새로 만들어 주세요.
 
+아이디어 제목 추가는 `ideas.title`(선택, 최대 60자)을 `V1__init.sql`에 반영합니다. 이미 V1을 적용한 로컬 DB는 기존 데이터를 보존할 필요가 있는지 확인한 뒤 초기화합니다.
+
 | 테이블 | 설명 |
 | --- | --- |
 | `users` | 사용자 |
@@ -354,6 +356,6 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 
 ### React 프론트엔드 실행
 
-`frontend/`에 React + TypeScript + Vite 앱이 있습니다. DB와 백엔드를 켠 뒤 `cd frontend && npm install && npm run dev`로 http://localhost:5173 에서 접속합니다. 구현 범위는 회원가입, 로그인, 키보드·음성 받아쓰기, 원문 자동 구조화(`POST /api/ideas/structure`)와 네 항목 확인 후 아이디어 저장, 평가 요청과 평가 중 화면, 리더보드(순위·변화 지표·스파크라인), 평가 상세(평가 결과·근거 문서·이력 그래프), 구조화 수정·가중치 예약·변화 알림, 로그아웃입니다. 팀 설정은 `EVALUATION_AUTO_ON_SAVE=false`라 서버는 저장만으로 평가하지 않습니다. 대신 프론트가 "확인하고 평가하기"로 네 칸이 다 찬 아이디어를 저장하면 바로 평가를 요청하고, 빈 칸이 있으면 보류로 저장합니다. 수정한 내용은 새벽 3시 배치 등 다음 평가에 반영됩니다. 폴더별 규칙은 [frontend/AGENTS.md](frontend/AGENTS.md)를 참고하세요.
+`frontend/`에 React + TypeScript + Vite 앱이 있습니다. DB와 백엔드를 켠 뒤 `cd frontend && npm install && npm run dev`로 http://localhost:5173 에서 접속합니다. 구현 범위는 회원가입, 로그인, 키보드·음성 받아쓰기, 원문 자동 구조화(`POST /api/ideas/structure`)와 추천 제목·네 항목 확인 후 아이디어 저장, 평가 요청과 평가 중 화면, 리더보드(순위·변화 지표·스파크라인), 평가 상세(평가 결과·근거 문서·이력 그래프), 제목·구조화 항목 수정·가중치 예약·변화 알림, 로그아웃입니다. 팀 설정은 `EVALUATION_AUTO_ON_SAVE=false`라 서버는 저장만으로 평가하지 않습니다. 대신 프론트가 "확인하고 평가하기"로 네 칸이 다 찬 아이디어를 저장하면 바로 평가를 요청하고, 빈 칸이 있으면 보류로 저장합니다. 수정한 내용은 새벽 3시 배치 등 다음 평가에 반영됩니다. 폴더별 규칙은 [frontend/AGENTS.md](frontend/AGENTS.md)를 참고하세요.
 
 평가 결과 화면은 `lastEvaluatedAt`이 없는 0점 상태를 미평가로 표시하며, `POST /api/ideas/{id}/evaluate` 요청과 상태 조회를 지원합니다.

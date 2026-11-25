@@ -42,7 +42,7 @@ class StructuringApiTest extends DemoTestSupport {
     @MockitoBean GeminiClient gemini;
     @MockitoBean IdeaAnalyzer analyzer;
 
-    private static final String AI = "{\"target\":\"개발자\",\"problem\":\"아이디어가 잊힌다\",\"solution\":\"구조화해 저장한다\","
+    private static final String AI = "{\"title\":\"아이디어 기록 도구\",\"target\":\"개발자\",\"problem\":\"아이디어가 잊힌다\",\"solution\":\"구조화해 저장한다\","
             + "\"expectation\":\"우선순위를 정한다\",\"itCategory\":\"AI_ML\",\"keywords\":[\"idea scoring\",\"startup validation\"]}";
 
     @BeforeEach
@@ -84,6 +84,7 @@ class StructuringApiTest extends DemoTestSupport {
         String token = signUpAndLogin("s@cue.com");
         structure(token, text("내 아이디어")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.complete").value(true))
+                .andExpect(jsonPath("$.data.title").value("아이디어 기록 도구"))
                 .andExpect(jsonPath("$.data.target").value("개발자"))
                 .andExpect(jsonPath("$.data.missingFields.length()").value(0))
                 .andExpect(jsonPath("$.data.itCategory").value("AI_ML"))
@@ -109,16 +110,17 @@ class StructuringApiTest extends DemoTestSupport {
     }
 
     @Test
-    void 구조화_결과를_고치지_않고_저장하면_키워드와_종류를_다시_추출하지_않는다() throws Exception {
+    void 구조화_결과에서_제목만_고쳐_저장하면_키워드와_종류를_다시_추출하지_않는다() throws Exception {
         String token = signUpAndLogin("r@cue.com");
         JsonNode s = mapper.readTree(structure(token, text("원문")).andReturn().getResponse().getContentAsString()).get("data");
 
-        String body = "{\"target\":\"" + s.get("target").asString() + "\",\"problem\":\"" + s.get("problem").asString()
+        String body = "{\"title\":\"나의 아이디어 노트\",\"target\":\"" + s.get("target").asString() + "\",\"problem\":\"" + s.get("problem").asString()
                 + "\",\"solution\":\"" + s.get("solution").asString() + "\",\"expectation\":\"" + s.get("expectation").asString() + "\"}";
         JsonNode idea = idea(token, createIdea(token, body));
 
         verify(analyzer, never()).analyze(any());
         verify(analyzer, never()).analyzeCategory(any());
+        assertEquals("나의 아이디어 노트", idea.get("title").asString());
         assertEquals("AI_ML", idea.get("itCategory").asString());
         assertEquals("idea scoring", idea.get("keywords").get(0).asString());
         assertEquals("AI", idea.get("keywordOrigin").asString());

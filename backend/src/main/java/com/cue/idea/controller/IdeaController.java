@@ -38,7 +38,7 @@ public class IdeaController {
     private final IdeaStructuringService structuringService;
 
     @Operation(summary = "아이디어 구조화(미리보기)",
-            description = "자유롭게 쓴 원문(최대 5000자)을 AI로 타깃·문제·해결·기대효과 4개 항목으로 정리해 돌려준다. **저장하지 않고 원문도 남기지 않는다.** "
+            description = "자유롭게 쓴 원문(최대 5000자)을 AI로 제목과 타깃·문제·해결·기대효과로 정리해 돌려준다. **저장하지 않고 원문도 남기지 않는다.** "
                     + "사용자가 결과를 확인·수정한 뒤 `POST /api/ideas`로 저장한다. "
                     + "원문에 근거가 없는 항목은 AI가 채우지 않고 빈 문자열로 두며, 하나라도 비면 `complete=false`(그대로 저장하면 HOLD)이고 `missingFields`에 비어 있는 항목이 담긴다. "
                     + "`complete=true`이면 IT 세부 종류(`itCategory`)와 영어 키워드 후보(`keywords`)도 함께 담기고, **내용을 고치지 않고 저장하면 서버가 이 결과를 다시 써서 저장 때 AI를 한 번 덜 호출한다**(고치면 평소처럼 다시 추출). "
@@ -53,7 +53,7 @@ public class IdeaController {
     }
 
     @Operation(summary = "아이디어 저장",
-            description = "프론트가 구조화하고 사용자가 확인한 아이디어를 저장한다. 문제·타깃·해결·기대효과가 **모두 채워지면 ACTIVE**(평가 대상이 되고 외부 자료 검색 설정을 만든다), "
+            description = "사용자가 확인한 제목(선택, 최대 60자)과 구조화 항목을 저장한다. 문제·타깃·해결·기대효과가 **모두 채워지면 ACTIVE**(평가 대상이 되고 외부 자료 검색 설정을 만든다), "
                     + "**하나라도 비면 HOLD**(보류, AI 호출·평가 없음)로 서버가 정한다. "
                     + "**키워드(`keywords`, 최대 2개·각 1~50자)를 보내면 AI 추출 없이 그 값을 쓰고(`keywordOrigin=USER`), 비어 있을 때만 AI가 추출한다(`keywordOrigin=AI`).** "
                     + "IT 세부 종류(`itCategory`: AI_ML·DEV_TOOLS_INFRA·WEB_APP_SERVICE·DATA_ANALYTICS)는 키워드와 무관하게 항상 AI가 판단하고, 대분류 `type`은 항상 IT다. "
@@ -68,7 +68,7 @@ public class IdeaController {
     }
 
     @Operation(summary = "아이디어 상세 조회",
-            description = "상태·구조화 항목·총점·항목별 점수/가중치(현재·예약)·최근 변화량·`hasNewChange`를 반환한다. "
+            description = "제목·상태·구조화 항목·총점·항목별 점수/가중치(현재·예약)·최근 변화량·`hasNewChange`를 반환한다. "
                     + "평가 진행 상황 폴링용으로 `evaluationStatus`(IDLE/QUEUED/RUNNING/FAILED)와 실패 시 `lastEvaluationErrorCode`를 함께 돌려준다.")
     @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED})
     @GetMapping("/{id}")
@@ -88,12 +88,12 @@ public class IdeaController {
         return CommonResponse.onSuccess(ideaService.reserveWeights(principal.id(), id, req));
     }
 
-    /** 아이디어 수정. 보낸 항목만 바꾸고(null은 유지, 빈 문자열은 비움), 모두 채워진 상태면 키워드를 다시 추출한다. */
     @Operation(summary = "아이디어 수정",
-            description = "보낸 항목만 수정한다(생략/null=유지, 빈 문자열=비움). 수정 뒤 4개 항목이 모두 채워져 있으면 ACTIVE가 되고 세부 종류(`itCategory`)를 항상 AI로 다시 판단하며, "
-                    + "하나라도 비면 HOLD가 된다. 키워드: `keywords` 생략=유지, **빈 배열=사용자 키워드를 지우고 AI가 다시 추출**, "
+            description = "보낸 항목만 수정한다(생략/null=유지). 제목만 수정하면 Gemini 호출·자료 수집 설정 변경·재평가 없이 제목을 저장한다. "
+                    + "구조화 항목은 빈 문자열로 비울 수 있고, 4개 항목이 모두 채워지면 ACTIVE, 하나라도 비면 HOLD가 된다. "
+                    + "키워드: `keywords` 생략=유지, **빈 배열=사용자 키워드를 지우고 AI가 다시 추출**, "
                     + "1개 이상=그 값으로 교체(AI 추출 없음, `keywordOrigin=USER`). 키워드 검증 실패(3개 이상·빈 문자열·50자 초과)는 `G004`. "
-                    + "내용이나 검색 키워드가 실제로 바뀐 ACTIVE 아이디어는 커밋 뒤 **첫 평가가 자동으로 다시 시작**된다. "
+                    + "내용이나 검색 키워드가 실제로 바뀐 ACTIVE 아이디어는 자료 수집 설정을 갱신하고, 자동 평가 설정이 켜져 있으면 커밋 뒤 **첫 평가를 다시 시작**한다. "
                     + "**평가가 대기(QUEUED)·진행(RUNNING) 중이면 수정할 수 없고 `I005`(409)**를 돌려준다(IDLE·FAILED면 가능).")
     @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED, ErrorCode.IDEA_EVALUATING})
     @PatchMapping("/{id}")

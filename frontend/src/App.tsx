@@ -54,7 +54,13 @@ type Overlay =
   | 'settings'
   | 'summary'
   | null
-const emptyFields: IdeaFields = { target: '', problem: '', solution: '', expectation: '' }
+const emptyFields: IdeaFields = {
+  title: '',
+  target: '',
+  problem: '',
+  solution: '',
+  expectation: '',
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>(authStore.get() ? 'home' : 'welcome')
@@ -136,6 +142,7 @@ export default function App() {
     try {
       const result = await structureIdea(text)
       setFields({
+        title: result.title ?? '',
         target: result.target,
         problem: result.problem,
         solution: result.solution,
@@ -221,8 +228,8 @@ export default function App() {
     setError('')
     try {
       const saved = await updateIdea(selected.id, next)
-      // 내용이 바뀐 ACTIVE 아이디어는 저장 직후 백엔드가 평가를 대기열에 넣지만 응답은 그 전 상태라 한 번 더 받는다
-      setSelected(await getIdea(saved.id).catch(() => saved))
+      const titleOnly = next.title !== undefined && Object.keys(next).length === 1
+      setSelected(titleOnly ? saved : await getIdea(saved.id).catch(() => saved))
       setOverlay(null)
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === 'I005') {

@@ -1,5 +1,5 @@
 import { tw } from '../tailwindStyles'
-import type { IdeaFields } from '../api/ideas'
+import { IDEA_TITLE_MAX_LENGTH, type IdeaFields } from '../api/ideas'
 import { Brand, Button, fieldLabels } from '../components/ui'
 export default function ReviewPage({
   raw,
@@ -31,6 +31,16 @@ export default function ReviewPage({
           비어 있는 항목: {empty.join(', ')}. 채워야 평가를 받을 수 있어요.
         </p>
       )}
+      <label className="mt-4 block text-sm font-semibold">
+        아이디어 제목
+        <input
+          className="mt-2 w-full rounded-xl border border-[#c9b8ff] px-3 py-2"
+          maxLength={IDEA_TITLE_MAX_LENGTH}
+          placeholder="짧은 제목을 입력해 주세요"
+          value={fields.title}
+          onChange={(event) => setFields({ ...fields, title: event.target.value })}
+        />
+      </label>
       <div className={tw('field-list')}>
         {fieldLabels.map(({ key, label, hint }, index) => (
           <label className={tw('field-card')} key={key}>
@@ -54,7 +64,7 @@ export default function ReviewPage({
         <Button disabled={busy} onClick={save}>
           {busy ? '저장 중…' : '확인하고 평가하기 →'}
         </Button>
-        <p className={tw('fine-print')}>빈 항목이 있으면 보류로 저장됩니다.</p>
+        <p className={tw('fine-print')}>구조화 네 항목 중 빈칸이 있으면 보류로 저장됩니다.</p>
       </div>
     </section>
   )

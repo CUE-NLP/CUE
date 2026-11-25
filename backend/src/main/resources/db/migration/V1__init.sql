@@ -15,6 +15,7 @@ CREATE TABLE ideas (
     type              VARCHAR(30)   NOT NULL,
     it_category       VARCHAR(30)   NOT NULL,
     status            VARCHAR(20)   NOT NULL,
+    title             VARCHAR(60),
     problem           TEXT,
     target            TEXT,
     solution          TEXT,
