@@ -141,7 +141,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - **호출 1번으로 구조화 + 종류·키워드 후보**: 응답 스키마에 `itCategory`·`keywords`를 같이 받는다(분류 기준·키워드 규칙은 `GeminiIdeaAnalyzer.SYSTEM_PROMPT`의 해당 구간을 그대로 잘라 써서 규칙이 갈라지지 않는다). 4칸이 다 찼을 때만 결과를 `AnalysisCache`(사용자 ID + 4개 항목 해시 키, TTL)에 넣고, `IdeaService.extractAndRegisterSources`가 같은 사용자·같은 내용이면 **AI를 다시 부르지 않고 재사용**한다(사용자 키워드가 있으면 종류만 재사용). 한 글자라도 고치면 해시가 달라져 평소처럼 다시 추출한다. 클라이언트가 보낸 값이 아니라 서버가 만든 AI 결과만 쓰므로 신뢰 문제가 없고, 폴백(임시 분석기) 결과는 넣지 않는다.
 - **같은 원문 캐시·쿨다운**: 같은 사용자·같은 원문(trim)은 `cue.structuring.cache-ttl-minutes`(기본 10) 동안 결과를 재사용해 AI를 부르지 않고 쿨다운도 쓰지 않는다. 새 원문은 사용자별 `cue.structuring.cooldown-seconds`(기본 3) 안에 다시 보내면 `I006`(429). Gemini 불가 `E001`은 쿨다운을 소비하지 않는다. 캐시·쿨다운은 인스턴스 메모리다(재시작·다중 인스턴스에서 공유 안 됨).
 - **두 레인** (`AiLane`): 사용자가 기다리는 호출(구조화, 저장 때 종류·키워드 추출)은 `INTERACTIVE`, 그 밖의 평가·트렌드 호출은 `BATCH`(기존 `generateJson(prompt, schema)`). `GeminiClient`가 레인마다 **속도 제한기**(`GeminiRateLimiter`, 순번 예약)를 따로 둔다 — 인터랙티브 `cue.gemini.interactive.min-interval-ms`(기본 2000), 배치 `cue.gemini.min-interval-ms`(기본 6500). 배치는 한도가 풀릴 때까지 기다리지만 **인터랙티브는 기다려야 하는 시간이 `max-wait-ms`(기본 5000)를 넘으면 슬롯을 잡지 않고 `E006`으로 바로 실패**해 평가 배치 뒤에 줄 서지 않는다.
-- **모델 분리**: 인터랙티브는 `cue.gemini.interactive.model`(기본 `gemini-2.5-flash-lite`, 비우면 기본 모델), 배치는 `cue.gemini.model`. 모델별로 분당·일일 한도가 따로 잡히므로 새벽 배치가 낮의 구조화 한도를 먹지 않는다(실제 한도는 키 수령 후 확인).
+- **모델 분리**: 인터랙티브는 `cue.gemini.interactive.model`(기본 `gemini-3.1-flash-lite`, 비우면 기본 모델), 배치는 `cue.gemini.model`. 두 모델이 같으면 한도를 같이 쓰고, 다르게 두면 모델별로 분당·일일 한도가 따로 잡혀 새벽 배치가 낮의 구조화 한도를 먹지 않는다. 폐기된 모델명은 기동 때가 아니라 호출 때 404(G002)로 드러나니, 모델을 바꿀 때는 두 설정을 같이 확인한다.
 - **429/503 재시도**: 레인별 횟수(`cue.gemini.interactive.max-retries` 기본 1, 배치 `cue.gemini.max-retries` 기본 2)만큼 지수 백오프(1초·2초·…, `Retry-After`가 있으면 그 값, 배치 최대 60초)로 재시도한다. 인터랙티브는 필요한 대기가 `max-wait-ms`를 넘으면 재시도하지 않는다. 끝내 실패하면 인터랙티브는 `E006`, 배치는 `G002`다. 그 밖의 HTTP 오류는 재시도 없이 `G002`.
 - **열린 결정**: 구조화 프롬프트는 Java 상수라 `docs/ai-prompts.md`·`PromptTemplatesTest` 대상이 아니다. Gemini Batch API·사용자별 일일 호출 상한·큐 영속화는 하지 않았다.
 
@@ -172,7 +172,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
   - **(글로벌 트렌드) 일괄 요약의 입력 크기**: 항목당 원문은 `SOURCE_BATCH_CONTENT_CHARS`(기본 4000자), 한 호출 합계는 `SOURCE_BATCH_TOTAL_CHARS`(기본 16000자)로 자른다(넘으면 항목당 길이를 균등하게 줄임, 최소 200자). 응답은 `{"items":[{"url","summary"}]}`이며 서버가 검증한다(입력에 있던 URL만·중복 제거·500자 제한, 빠진 항목은 건너뛰고 원래 조회한 짧은 요약 사용).
   - **근거 자료를 AI로 요약하지 않은 이유**: 항목 일괄 요약 1회 + 소스 요약 1회(source당 2회)가 최악 아이디어당 14회였고, 그중 **소스 요약은 저장만 하고 평가에 쓰이지 않았다**. 항목 요약도 "요약을 다시 평가"하는 이중 요약이라 정보가 깎인다. 무료 한도가 요청 수라서 입력을 늘리고(최대 30줄·항목당 발췌) 호출을 없앴다.
   - **원문 읽기 실패 처리(근거 자료)**: 항목을 버리지 않고 API가 준 짧은 설명만으로 남긴다. 원문을 못 읽어도 평가는 진행된다. API 설명이 이미 발췌 길이 이상이면(Semantic Scholar 초록 등) 원문을 다시 읽지 않는다(GitHub README 같은 익명 호출 한도 절약). 글로벌 트렌드는 일괄 호출이 실패한 provider를 그날 트렌드에서 뺀다(재사용 항목만 남기고 진행, 전부 비면 그날은 만들지 못함 → 다음 배치에서 재시도).
-  - 열어둔 설정: `SOURCE_TOP_N`, `SOURCE_TRENDING_DAYS`, `SOURCE_MAX_CONTENT_CHARS`, `SOURCE_EXCERPT_CHARS`, `SOURCE_BATCH_CONTENT_CHARS`, `SOURCE_BATCH_TOTAL_CHARS`, `SOURCE_SUMMARY_REUSE_DAYS`, `TREND_DAYS`, `TREND_TOP_N`, `TREND_MIN_REEVAL_DAYS`, `GEMINI_MIN_INTERVAL_MS`, `EVALUATION_DELAY_MS`. 병렬 호출은 구현하지 않았다(RPM 한도 때문에 순차가 안전).
+  - 열어둔 설정: `SOURCE_TOP_N`, `SOURCE_MAX_CONTENT_CHARS`, `SOURCE_EXCERPT_CHARS`, `SOURCE_BATCH_CONTENT_CHARS`, `SOURCE_BATCH_TOTAL_CHARS`, `SOURCE_SUMMARY_REUSE_DAYS`, `TREND_DAYS`, `TREND_TOP_N`, `TREND_MIN_REEVAL_DAYS`, `GEMINI_MIN_INTERVAL_MS`, `EVALUATION_DELAY_MS`. 병렬 호출은 구현하지 않았다(RPM 한도 때문에 순차가 안전).
   - 수동 `POST /evaluate`는 비동기라 요청은 즉시 끝난다(아래 "비동기 평가 실행"). 평가는 전체가 한 줄로 직렬 처리되므로 아이디어 N개가 한꺼번에 대기하면 마지막 아이디어는 호출 수 × 6.5초 × N만큼 늦게 끝난다. 그날 첫 평가가 트렌드 수집(약 45초)까지 떠안는다.
 - **Gemini 사용 불가**(비활성/키 없음): 배치는 로그만 남기고 통째로 건너뛰고, 아이디어 단위 호출은 아무것도 쓰지 않고 `E001`.
 - **파이프라인** (`IdeaEvaluationPipeline`) — 하루 평가는 서로 독립인 두 갈래다.
@@ -248,14 +248,14 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 
 | provider | 조회 정렬 (급상승 기준) | 원문 |
 | --- | --- | --- |
-| GITHUB | `q={kw} pushed:>{오늘−N일}` + `sort=stars` — 최근 N일 안에 활동한 저장소 중 인기순. (`created:>`만 쓰면 오래 유지되는 좋은 프로젝트의 활동을 놓치고 전체 stars 순은 거의 안 변하므로 pushed를 택함) | README (`/repos/{full_name}/readme`, raw 미디어 타입) |
+| GITHUB | `q={kw}` + `sort=stars` — **기간 제한 없이** 키워드와 맞는 저장소를 인기순으로 | README (`/repos/{full_name}/readme`, raw 미디어 타입) |
 | HUGGING_FACE | `sort=trendingScore` (허브의 최근 인기 점수) | 모델 카드 `/{id}/raw/main/README.md` (YAML 머리말 제외) |
-| STACK_EXCHANGE | `search/advanced`는 `hot`/`week` 정렬이 없어 `fromdate={오늘−N일}` + `sort=votes` — 최근 N일 안 생성된 질문 득표순 | 질문 본문 + 최고 득표 답변 본문 (`filter=withbody`, HTML→텍스트) |
-| SEMANTIC_SCHOLAR | Graph API `/graph/v1/paper/search`(`query`, `limit=top-n`, `year={올해-(papers-years-1)}-`, `fields=title,abstract,url,year,citationCount,publicationDate`)로 **최근 `cue.source.papers-years`년(기본 2) 논문**만 받아 **인용 수 내림차순**(같으면 제목순)으로 정리. 인용 수는 `metrics`(`citations=N`)로만 쓰고 해시에서 뺀다(해시는 url 정렬 후 제목·URL만 쓰므로 인용 수 순위가 바뀌어도 변경으로 잡히지 않는다) | 초록(abstract)을 그대로 원문으로 사용(PDF는 읽지 않음, 검색 응답에 이미 있어 추가 호출 없음, `summary`에 앞 1500자 저장). url이 없으면 `https://www.semanticscholar.org/paper/{paperId}`. API 키(`SEMANTIC_SCHOLAR_API_KEY`, `x-api-key` 헤더)는 선택이지만 **없으면 익명 공유 한도라 429가 잦다**(모두 `G002`) |
+| STACK_EXCHANGE | `search/advanced` + `sort=votes` — **기간 제한 없이** 키워드와 맞는 질문을 득표순으로 | 질문 본문 + 최고 득표 답변 본문 (`filter=withbody`, HTML→텍스트) |
+| SEMANTIC_SCHOLAR | Graph API `/graph/v1/paper/search`(`query`, `limit=top-n`, `fields=title,abstract,url,year,citationCount,publicationDate`)로 **기간 제한 없이** 논문을 받아 **인용 수 내림차순**(같으면 제목순)으로 정리. 인용 수는 `metrics`(`citations=N`)로만 쓰고 해시에서 뺀다(해시는 url 정렬 후 제목·URL만 쓰므로 인용 수 순위가 바뀌어도 변경으로 잡히지 않는다) | 초록(abstract)을 그대로 원문으로 사용(PDF는 읽지 않음, 검색 응답에 이미 있어 추가 호출 없음, `summary`에 앞 1500자 저장). url이 없으면 `https://www.semanticscholar.org/paper/{paperId}`. API 키(`SEMANTIC_SCHOLAR_API_KEY`, `x-api-key` 헤더)는 선택이지만 **없으면 익명 공유 한도라 429가 잦다**(모두 `G002`) |
 | WIKIPEDIA_PAGEVIEWS | 영어 위키 `w/api.php?action=query&list=search&srsearch={kw}&srlimit=top-n&srnamespace=0`로 문서를 찾고, 문서마다 Wikimedia REST pageviews(`per-article/en.wikipedia/all-access/user/{title}/daily/{start}/{end}`)의 **최근 `cue.source.pageviews-days`일(기본 30, 어제까지) 일별 조회수를 합산**해 `metrics`(`views_30d=N`). 조회수 호출이 실패·데이터 없음이면 그 문서의 metrics만 비운다. 조회수는 해시에서 뺀다(제목·URL·snippet만) | 문서 소개 `api/rest_v1/page/summary/{title}`의 `extract`. 요약은 검색 snippet(HTML 태그 제거). **User-Agent 필수**(Wikimedia 정책): `WIKIMEDIA_USER_AGENT`(기본은 프로젝트 식별용 일반 문자열, 개인 이메일 금지) |
-| HACKER_NEWS | Algolia `/search` + `tags=story` + `numericFilters=created_at_i>{오늘−N일}` (관련도 뒤에 points·댓글 반영) | 연결된 기사 URL 본문(`WebContentFetcher`), 외부 링크가 없으면 글 텍스트(`/api/v1/items/{id}`) |
+| HACKER_NEWS | Algolia `/search` + `tags=story` (**기간 제한 없이** 관련도 뒤에 points·댓글 반영) | 연결된 기사 URL 본문(`WebContentFetcher`), 외부 링크가 없으면 글 텍스트(`/api/v1/items/{id}`) |
 
-  N일은 `cue.source.trending-days`(기본 30). 점수·댓글 수·stars 등은 `metrics`로만 전달하고 해시에서는 뺀다.
+  **키워드 근거 조회는 기간 필터를 쓰지 않는다**(아이디어 평가는 조회·인기·관련도 지표를 보며, 틈새 주제는 최근 한 달에 글이 거의 없어 필터를 걸면 결과가 0건이 되어 위키백과만 근거로 남았다). 최근 N일 제한은 글로벌 트렌드(`TREND_DAYS`)에서만 쓴다. 점수·댓글 수·stars 등은 `metrics`로만 전달하고 해시에서는 뺀다.
 - **웹 원문 가져오기 안전장치** (`source/fetch`: `WebContentFetcher`, `UrlGuard`, `JdkTransport`, `HtmlText`): http/https만, 사용자정보(`user:pass@`) 거부, 호스트가 가리키는 **모든** IP가 공개 주소여야 함(루프백·사설·링크로컬·멀티캐스트·미지정·CGNAT 100.64/10·IPv6 ULA 차단), 자동 리다이렉트 끄고 직접 따라가며 **매 홉마다 재검사**(`cue.source.max-redirects` 기본 3), 연결·읽기 타임아웃, 응답 `fetch-max-bytes`(1MB) 상한, `text/*`·HTML만 허용, HTML은 jsoup(`org.jsoup:jsoup:1.18.3`)으로 script/style/nav 등을 제거하고 본문 텍스트만 추출, 글자 수는 `max-content-chars`(8000). 실패는 `S003`(차단)/`G002`로 던지고 호출하는 쪽이 그 항목만 건너뛴다. **한계**: 검사와 실제 연결 사이에 DNS 응답이 바뀌는 DNS rebinding은 완전히 막지 못한다. 외부 본문은 신뢰하지 않는 데이터이며 프롬프트의 '데이터로만 취급' 문구로 방어한다.
 - `SourceCheckService.check(sourceId)`: 조회 → `SourceHasher`(제목·URL만, url 정렬 후 SHA-256 hex) → `updateHash`로 `content_hash`·`checked_at` 갱신 → `SourceCheckResult`(`CHANGED`와 `UNCHANGED` 모두 이번 조회 항목을 담는다). `checkAll(ideaId)`는 한 source가 실패해도 계속하고 실패는 `FAILED` 결과(해시·시각 유지)로 담는다. 외부 오류(4xx/5xx·타임아웃·파싱 실패)는 `G002`, 없는 source `S001`, 미지원 provider `S002`.
 - 외부 HTTP 호출 중 DB 트랜잭션을 잡지 않으려고 이 서비스만 `@Transactional`을 쓰지 않는다 (저장은 `repository.save` 단위). 해시 입력에서 별점·갱신일 등 자주 변하는 값은 뺀다.
@@ -325,9 +325,8 @@ cd CUE/backend
 | `STACK_EXCHANGE_KEY` | 없음 | 선택. Stack Exchange API key (일일 쿼터 증가) |
 | `SEMANTIC_SCHOLAR_API_KEY` | 없음 | 선택. Semantic Scholar API 키(`x-api-key`). 없으면 익명 공유 한도라 429(`G002`)가 잦다 |
 | `WIKIMEDIA_USER_AGENT` | `CUE-idea-portfolio/1.0 (student project; non-commercial)` | Wikimedia API 필수 User-Agent. 프로젝트를 식별하는 일반 문자열로 두고 개인 이메일을 넣지 않는다 |
-| `SOURCE_PAPERS_YEARS` / `SOURCE_PAGEVIEWS_DAYS` | `2` / `30` | Semantic Scholar: 최근 N년(올해 포함) 논문만 / Wikipedia: 조회수를 합산할 최근 일수 |
+| `SOURCE_PAGEVIEWS_DAYS` | `30` | Wikipedia: 조회수를 합산할 최근 일수 |
 | `SOURCE_TOP_N` | `5` | source마다 읽고 요약할 상위 항목 수 |
-| `SOURCE_TRENDING_DAYS` | `30` | "급상승" 판단 기간(일) |
 | `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | (글로벌 트렌드) 원문 자르는 길이 / 같은 URL 요약 재사용 기간(0이면 항상 재요약) |
 | `SOURCE_EXCERPT_CHARS` | `800` | 키워드 근거 자료에서 항목당 평가 프롬프트에 넣는 원문 발췌 길이(글자, AI 요약 호출 없음) |
 | `GEMINI_MIN_INTERVAL_MS` | `6500` | 평가용 Gemini 호출 사이 최소 간격(무료 티어 RPM) |

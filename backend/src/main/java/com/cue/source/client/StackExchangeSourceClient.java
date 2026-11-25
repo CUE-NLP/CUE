@@ -39,7 +39,7 @@ public class StackExchangeSourceClient implements SourceClient {
             uri.path("/2.3/search/advanced")
                     .queryParam("q", "{q}").queryParam("site", "stackoverflow")
                     .queryParam("sort", "votes").queryParam("order", "desc")
-                    .queryParam("pagesize", settings.topN()).queryParam("fromdate", settings.cutoffEpochSecond());
+                    .queryParam("pagesize", settings.topN());
             if (apiKey != null && !apiKey.isBlank()) {
                 uri.queryParam("key", apiKey);
             }

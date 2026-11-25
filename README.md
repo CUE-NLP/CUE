@@ -168,14 +168,14 @@ cd backend && ./gradlew bootRun
 | `STACK_EXCHANGE_KEY` | 없음 | (선택) Stack Exchange API key |
 | `SEMANTIC_SCHOLAR_API_KEY` | 없음 | (선택) Semantic Scholar API 키. **없으면 익명 공유 한도가 낮아 429(`G002`)가 잦습니다** |
 | `WIKIMEDIA_USER_AGENT` | 프로젝트 식별용 일반 문자열 | Wikimedia API 필수 User-Agent (개인 이메일을 넣지 마세요) |
-| `SOURCE_PAPERS_YEARS` / `SOURCE_PAGEVIEWS_DAYS` | `2` / `30` | 논문은 최근 N년(올해 포함)만 / 위키 문서 조회수를 합산할 최근 일수 |
-| `SOURCE_TOP_N` / `SOURCE_TRENDING_DAYS` | `5` / `30` | source마다 읽고 요약할 상위 항목 수 / "급상승" 기간(일) |
+| `SOURCE_PAGEVIEWS_DAYS` | `30` | 위키 문서 조회수를 합산할 최근 일수 (키워드 근거 조회는 기간 제한 없이 인기·관련도 순) |
+| `SOURCE_TOP_N` | `5` | source마다 읽을 상위 항목 수 |
 | `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | (글로벌 트렌드) 원문을 자르는 길이 / 같은 URL 요약 재사용 기간(일) |
 | `SOURCE_EXCERPT_CHARS` | `800` | 키워드 근거 자료에서 항목당 평가 프롬프트에 넣는 원문 발췌 길이(AI 요약 호출 없음) |
 | `SOURCE_BATCH_CONTENT_CHARS` / `SOURCE_BATCH_TOTAL_CHARS` | `4000` / `16000` | 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자) |
 | `GEMINI_MIN_INTERVAL_MS` | `6500` | 평가용(배치 레인) Gemini 호출 사이 최소 간격(ms, 무료 티어 분당 한도용) |
 | `GEMINI_MAX_RETRIES` | `2` | 배치 호출이 429/503일 때 재시도 횟수 (지수 백오프, `Retry-After` 우선) |
-| `GEMINI_INTERACTIVE_MODEL` | `gemini-2.5-flash-lite` | 구조화·키워드 추출(인터랙티브 레인)에 쓸 가벼운 모델. 비우면 `GEMINI_MODEL`. 모델별 한도가 분리됨 |
+| `GEMINI_INTERACTIVE_MODEL` | `gemini-3.1-flash-lite` | 구조화·키워드 추출(인터랙티브 레인)에 쓸 모델. 비우면 `GEMINI_MODEL`. 기본 모델과 다르면 모델별로 한도(각 분당 15회·일일 500회)가 분리되고, 같으면 한도를 같이 씀 |
 | `GEMINI_INTERACTIVE_MIN_INTERVAL_MS` / `GEMINI_INTERACTIVE_MAX_WAIT_MS` / `GEMINI_INTERACTIVE_MAX_RETRIES` | `2000` / `5000` / `1` | 인터랙티브 호출 간격 / 속도 제한으로 기다릴 최대 시간(넘으면 `E006`) / 429·503 재시도 횟수 |
 | `STRUCTURING_COOLDOWN_SECONDS` | `3` | 같은 사용자의 구조화 요청 최소 간격(초, 넘기면 `I006`) |
 | `STRUCTURING_CACHE_TTL_MINUTES` / `STRUCTURING_CACHE_MAX_ENTRIES` | `10` / `500` | 같은 원문 결과·저장 때 재사용할 키워드·종류 추출 결과 캐시 유지 시간 / 최대 개수 |

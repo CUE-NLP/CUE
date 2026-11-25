@@ -43,7 +43,7 @@ class SourceClientTest {
         RestClient.Builder b = RestClient.builder().baseUrl("https://gh.test");
         MockRestServiceServer server = bind(b);
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://gh.test/search/repositories")))
-                .andExpect(request -> assertTrue(decodedQuery(request).contains("q=ai idea pushed:>2026-05-31"), decodedQuery(request)))
+                .andExpect(request -> assertTrue(decodedQuery(request).contains("q=ai idea") && !decodedQuery(request).contains("pushed:"), decodedQuery(request)))
                 .andExpect(queryParam("sort", "stars")).andExpect(queryParam("order", "desc"))
                 .andExpect(queryParam("per_page", "5"))
                 .andRespond(withSuccess("{\"items\":[{\"full_name\":\"a/b\",\"html_url\":\"https://github.com/a/b\",\"description\":null,"
@@ -67,7 +67,7 @@ class SourceClientTest {
     }
 
     @Test
-    void StackExchange는_최근_N일_질문을_votes_순으로_조회하고_gzip을_푼다() throws Exception {
+    void StackExchange는_기간_제한_없이_votes_순으로_조회하고_gzip을_푼다() throws Exception {
         RestClient.Builder b = RestClient.builder().baseUrl("https://se.test");
         MockRestServiceServer server = bind(b);
         String json = "{\"items\":[{\"title\":\"What&#39;s up?\",\"link\":\"https://so/questions/1/x\",\"tags\":[\"java\",\"spring\"],\"last_activity_date\":1767225600,\"score\":12,\"answer_count\":3}]}";
@@ -77,19 +77,19 @@ class SourceClientTest {
         }
         server.expect(requestTo(org.hamcrest.Matchers.containsString("key=k1")))
                 .andExpect(queryParam("sort", "votes")).andExpect(queryParam("pagesize", "5"))
-                .andExpect(queryParam("fromdate", String.valueOf(SETTINGS.cutoffEpochSecond())))
+                .andExpect(request -> assertTrue(!request.getURI().toString().contains("fromdate"))) // 기간 제한 없음
                 .andRespond(withSuccess(bos.toByteArray(), MediaType.APPLICATION_JSON));
         List<SourceItem> items = new StackExchangeSourceClient(b.build(), "k1", SETTINGS).search("spring");
         assertEquals(new SourceItem("What's up?", "https://so/questions/1/x", "java,spring", "2026-01-01", "votes=12, answers=3"), items.get(0));
     }
 
     @Test
-    void HackerNews는_최근_N일_스토리만_조회하고_외부_링크가_없으면_토론_페이지_URL을_쓴다() {
+    void HackerNews는_기간_제한_없이_조회하고_외부_링크가_없으면_토론_페이지_URL을_쓴다() {
         RestClient.Builder b = RestClient.builder().baseUrl("https://hn.test");
         MockRestServiceServer server = bind(b);
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://hn.test/api/v1/search?query=ai%20agent")))
                 .andExpect(queryParam("tags", "story"))
-                .andExpect(request -> assertTrue(decodedQuery(request).contains("numericFilters=created_at_i>" + SETTINGS.cutoffEpochSecond())))
+                .andExpect(request -> assertTrue(!decodedQuery(request).contains("numericFilters"), decodedQuery(request))) // 기간 제한 없음
                 .andExpect(queryParam("hitsPerPage", "5"))
                 .andRespond(withSuccess("{\"hits\":[{\"title\":\"Show HN: Agent\",\"url\":\"https://a.dev\",\"objectID\":\"1\",\"points\":9,\"num_comments\":4,\"created_at\":\"2026-05-06T07:08:09Z\"},"
                         + "{\"title\":\"Ask HN: Agents?\",\"url\":null,\"objectID\":\"42\"}]}", MediaType.APPLICATION_JSON));
@@ -250,15 +250,15 @@ class SourceClientTest {
             + "{\"paperId\":\"p3\",\"title\":\"No abstract\",\"abstract\":null,\"url\":\"https://www.semanticscholar.org/paper/p3\",\"year\":2026,\"citationCount\":50,\"publicationDate\":\"2026-01-01\"}]}";
 
     @Test
-    void SemanticScholar는_최근_연도_범위로_검색하고_인용_수_순으로_정리하며_키가_있으면_헤더를_보낸다() {
+    void SemanticScholar는_기간_제한_없이_검색하고_인용_수_순으로_정리하며_키가_있으면_헤더를_보낸다() {
         RestClient.Builder b = RestClient.builder().baseUrl("https://ss.test");
         MockRestServiceServer server = bind(b);
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://ss.test/graph/v1/paper/search?query=ai%20agent")))
-                .andExpect(queryParam("limit", "5")).andExpect(queryParam("year", "2025-")) // 2026 − (2−1)
+                .andExpect(queryParam("limit", "5")).andExpect(request -> assertTrue(!request.getURI().toString().contains("year="))) // 기간 제한 없음
                 .andExpect(queryParam("fields", "title,abstract,url,year,citationCount,publicationDate"))
                 .andExpect(header("x-api-key", "secret"))
                 .andRespond(withSuccess(PAPERS, MediaType.APPLICATION_JSON));
-        List<SourceItem> items = new SemanticScholarSourceClient(b.build(), "secret", SETTINGS, 2).search("ai agent");
+        List<SourceItem> items = new SemanticScholarSourceClient(b.build(), "secret", SETTINGS).search("ai agent");
 
         assertEquals(List.of("Highly cited", "No abstract", "Low cited"), items.stream().map(SourceItem::title).toList()); // 인용 수 내림차순
         // url이 없으면 paperId 기반, 발행일이 없으면 연도, 초록 공백 정리, metrics는 인용 수
@@ -268,13 +268,13 @@ class SourceClientTest {
     }
 
     @Test
-    void SemanticScholar는_키가_없으면_헤더를_생략하고_초록을_원문으로_쓰며_연도_기간은_설정을_따른다() {
+    void SemanticScholar는_키가_없으면_헤더를_생략하고_초록을_원문으로_쓴다() {
         RestClient.Builder b = RestClient.builder().baseUrl("https://ss.test");
         MockRestServiceServer server = bind(b);
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("https://ss.test/graph/v1/paper/search")))
-                .andExpect(headerDoesNotExist("x-api-key")).andExpect(queryParam("year", "2024-")) // 3년
+                .andExpect(headerDoesNotExist("x-api-key"))
                 .andRespond(withSuccess(PAPERS, MediaType.APPLICATION_JSON));
-        SemanticScholarSourceClient client = new SemanticScholarSourceClient(b.build(), "", SETTINGS, 3);
+        SemanticScholarSourceClient client = new SemanticScholarSourceClient(b.build(), "", SETTINGS);
         List<SourceItem> items = client.search("x");
         assertEquals("Short abstract.", client.fetchContent(items.get(2)));
         assertEquals("", client.fetchContent(items.get(1))); // 초록이 없는 논문은 원문이 없어 호출한 쪽이 건너뛴다
@@ -287,7 +287,7 @@ class SourceClientTest {
             RestClient.Builder b = RestClient.builder().baseUrl("https://ss.test");
             bind(b).expect(requestTo(org.hamcrest.Matchers.startsWith("https://ss.test/"))).andRespond(withStatus(status));
             assertEquals(ErrorCode.EXTERNAL_SERVER_ERROR,
-                    assertThrows(CustomException.class, () -> new SemanticScholarSourceClient(b.build(), "", SETTINGS, 2).search("x")).getErrorCode(), status.toString());
+                    assertThrows(CustomException.class, () -> new SemanticScholarSourceClient(b.build(), "", SETTINGS).search("x")).getErrorCode(), status.toString());
         }
     }
 

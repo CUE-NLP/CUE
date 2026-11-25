@@ -2,7 +2,6 @@ package com.cue.source.client;
 
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -10,8 +9,7 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Semantic Scholar 논문 검색 (Graph API {@code /graph/v1/paper/search}). 키워드로 검색하되 {@code year=올해-(N-1)-} 범위로 최근 논문만 받고
- * ({@code cue.source.papers-years}, 기본 2년), 받은 상위 N편을 <b>인용 수 내림차순</b>(같으면 제목순)으로 정리한다.
+ * Semantic Scholar 논문 검색 (Graph API {@code /graph/v1/paper/search}). 키워드로 <b>기간 제한 없이</b> 검색하고, 받은 상위 N편을 <b>인용 수 내림차순</b>(같으면 제목순)으로 정리한다.
  * 원문은 PDF를 읽지 않고 초록(abstract)을 쓴다: {@link SourceItem#summary()}에 초록 앞부분({@value #MAX_ABSTRACT_CHARS}자)을 담고 {@link #fetchContent}가 그대로 돌려준다.
  * 인용 수는 자주 변하므로 metrics로만 전달하고 해시에는 넣지 않는다(해시는 url 정렬 후 제목·URL만 쓰므로 인용 수 순위가 바뀌어도 변경으로 잡히지 않는다).
  * API 키는 선택이다({@code x-api-key} 헤더). 키가 없으면 익명 한도(공유 풀, 매우 낮음)라 429가 잦을 수 있고 모든 실패는 G002로 처리한다.
@@ -22,13 +20,11 @@ public class SemanticScholarSourceClient implements SourceClient {
     private final RestClient restClient;
     private final String apiKey;
     private final SearchSettings settings;
-    private final int papersYears;
 
-    public SemanticScholarSourceClient(RestClient restClient, String apiKey, SearchSettings settings, int papersYears) {
+    public SemanticScholarSourceClient(RestClient restClient, String apiKey, SearchSettings settings) {
         this.restClient = restClient;
         this.apiKey = apiKey;
         this.settings = settings;
-        this.papersYears = Math.max(1, papersYears);
     }
 
     @Override
@@ -38,11 +34,9 @@ public class SemanticScholarSourceClient implements SourceClient {
 
     @Override
     public List<SourceItem> search(String keyword) {
-        int fromYear = LocalDate.now(settings.clock()).getYear() - (papersYears - 1);
         var request = restClient.get().uri(uri -> uri.path("/graph/v1/paper/search")
                 .queryParam("query", "{q}")
                 .queryParam("limit", settings.topN())
-                .queryParam("year", fromYear + "-")
                 .queryParam("fields", "title,abstract,url,year,citationCount,publicationDate")
                 .build(keyword));
         if (apiKey != null && !apiKey.isBlank()) {

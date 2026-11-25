@@ -12,8 +12,8 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Hacker News 스토리 검색 (Algolia, 키 불필요) — 급상승 기준: 최근 N일 안의 스토리({@code numericFilters=created_at_i>…}).
- * {@code /search}는 관련도 뒤에 points·댓글 수를 반영하는 순위라 최근 글 중 반응이 큰 것이 위로 온다.
+ * Hacker News 스토리 검색 (Algolia, 키 불필요). 키워드 근거 조회는 <b>기간 제한 없이</b> 관련도 뒤에 points·댓글 수를 반영하는 순위({@code /search})로 본다.
+ * 글로벌 트렌드(키워드 없음)만 최근 N일 안의 스토리({@code numericFilters=created_at_i>…})로 제한한다.
  * 원문은 연결된 기사 URL 본문(안전장치가 있는 {@link WebContentFetcher}), 외부 링크가 없는 글(Ask HN 등)은 글 텍스트.
  * 점수(points)·댓글 수는 자주 변하므로 해시에는 넣지 않고 metrics로만 전달한다.
  */
@@ -36,21 +36,25 @@ public class HackerNewsSourceClient implements SourceClient {
 
     @Override
     public List<SourceItem> search(String keyword) {
-        return query(keyword, settings);
+        return query(keyword, settings, false);
     }
 
     /** 글로벌 트렌드: 키워드 없이 최근 N일 스토리를 points 순으로 (빈 질의 + 날짜 필터는 인기순으로 정렬된다). */
     @Override
     public List<SourceItem> trending(SearchSettings s) {
-        return query("", s);
+        return query("", s, true);
     }
 
-    private List<SourceItem> query(String keyword, SearchSettings settings) {
+    /** @param recentOnly true면 최근 N일 안의 글만(트렌드). 키워드 근거 조회는 기간을 두지 않고 관련도·points 순으로 본다. */
+    private List<SourceItem> query(String keyword, SearchSettings settings, boolean recentOnly) {
         JsonNode root = SourceClientSupport.getJson(restClient.get().uri(
-                uri -> uri.path("/api/v1/search")
-                        .queryParam("query", "{q}").queryParam("tags", "story")
-                        .queryParam("numericFilters", "created_at_i>" + settings.cutoffEpochSecond())
-                        .queryParam("hitsPerPage", settings.topN()).build(keyword)));
+                uri -> {
+                    var b = uri.path("/api/v1/search").queryParam("query", "{q}").queryParam("tags", "story");
+                    if (recentOnly) {
+                        b.queryParam("numericFilters", "created_at_i>" + settings.cutoffEpochSecond());
+                    }
+                    return b.queryParam("hitsPerPage", settings.topN()).build(keyword);
+                }));
         List<SourceItem> items = new ArrayList<>();
         for (JsonNode n : root.path("hits")) {
             String url = SourceClientSupport.text(n, "url");
