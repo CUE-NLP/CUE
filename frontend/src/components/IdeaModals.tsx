@@ -85,7 +85,7 @@ export function WeightsModal({
   const total = scoreTypes.reduce((sum, type) => sum + Number(weights[type] || 0), 0)
   return (
     <Modal title="평가 가중치 설정" close={close} className={tw('weights-sheet')}>
-      <h2>평가 가중치 설정</h2>
+      <h2 className="font-bold">평가 가중치 설정</h2>
       <p className={tw('subcopy')}>중요하게 보는 기준의 비중을 조절하세요.</p>
       <div className={tw('weight-fields')}>
         {scoreTypes.map((type) => (
@@ -146,7 +146,6 @@ export function EditModal({
       .filter(({ key }) => fields[key] !== original[key])
       .map(({ key }) => [key, fields[key]]),
   )
-  const hasContentChange = Object.keys(changed).length > 0
   const titleChanged = fields.title.trim() !== original.title.trim()
   if (titleChanged) changed.title = fields.title.trim()
   const hasChange = Object.keys(changed).length > 0
@@ -162,20 +161,19 @@ export function EditModal({
           text: '제목을 입력해 주세요.',
           tone: 'bg-[#fff6e8] text-[#b0620c]',
         }
-      : hasContentChange && hasEmpty
+      : hasEmpty
         ? {
             text: '비어 있는 항목이 있으면 보류 상태가 되고 평가가 멈춰요.',
             tone: 'bg-[#fff6e8] text-[#b0620c]',
           }
-        : hasContentChange
-          ? {
-              text: '저장한 내용은 다음 평가 때 점수에 반영돼요.',
-              tone: 'bg-[#f5f2ff] text-[#5b4bb7]',
-            }
-          : null
+        : // 저장해도 바로 평가하지 않는다 (팀 설정 EVALUATION_AUTO_ON_SAVE=false)
+          {
+            text: '수정한 내용은 다음 자동 평가 때 반영돼요.',
+            tone: 'bg-[#f5f2ff] text-[#5b4bb7]',
+          }
   return (
     <Modal title="구조화 항목 수정" close={close} className={tw('edit-sheet')}>
-      <h2>구조화 항목 수정</h2>
+      <h2 className="font-bold">구조화 항목 수정</h2>
       <p className={tw('subcopy')}>내용을 수정한 뒤 저장하세요.</p>
       <div className={tw('edit-fields')}>
         <label className="text-[15px]! text-[#090d3d]">
@@ -187,6 +185,9 @@ export function EditModal({
             value={fields.title}
             onChange={(event) => setFields((old) => ({ ...old, title: event.target.value }))}
           />
+          <span className="mt-1 block text-[12px] font-normal text-[#647096]">
+            제목은 점수에 영향이 없어요.
+          </span>
         </label>
         {fieldLabels.map(({ key, label }) => (
           <label key={key} className="text-[15px]! text-[#090d3d]">
@@ -388,14 +389,34 @@ export function SettingsModal({
     </Modal>
   )
 }
+// 마지막 글자에 받침이 있는지 (한글이 아니면 받침 없음으로 본다)
+const hasFinalConsonant = (word: string) => {
+  const code = word.charCodeAt(word.length - 1) - 0xac00
+  return code >= 0 && code <= 11171 && code % 28 !== 0
+}
+// 요약 API가 없어 AI 없이 만든 한 줄 소개: "{타깃}을 위한 {제목}이에요."
+function summaryText(idea: Idea) {
+  const target = idea.target?.trim().replace(/[.。]+$/, '')
+  const title = idea.title?.trim()
+  if (target && title)
+    return `${target}${hasFinalConsonant(target) ? '을' : '를'} 위한 ${title}${
+      hasFinalConsonant(title) ? '이에요' : '예요'
+    }.`
+  return idea.solution || idea.problem || '아이디어의 내용을 확인해 보세요.'
+}
 export function SummaryModal({ idea, close }: { idea: Idea; close: () => void }) {
   return (
-    <Modal title="포트폴리오 카드 요약" close={close} className={tw('summary-sheet')}>
-      <h2>{ideaTitle(idea)}</h2>
+    // 가운데 카드: 손잡이·× 없이 제목, 점수, 타깃+제목 한 줄 소개, 닫기만 둔다
+    <Modal
+      title="포트폴리오 카드 요약"
+      close={close}
+      className={`${tw('summary-sheet')} pt-7! rounded-3xl! [&>.sheet-handle]:hidden [&>.sheet-close]:hidden`}
+    >
+      <h2 className="font-bold">{ideaTitle(idea)}</h2>
       <strong className={tw('summary-score')}>
         {idea.lastEvaluatedAt ? `${scoreText(idea.totalScore)}점` : '평가 전'}
       </strong>
-      <p className={tw('subcopy')}>{idea.problem || '아이디어의 내용을 확인해 보세요.'}</p>
+      <p className={tw('subcopy')}>{summaryText(idea)}</p>
       <Button secondary onClick={close}>
         닫기
       </Button>
