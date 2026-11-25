@@ -67,7 +67,9 @@ export default function DetailPage({
     [evaluations, setEvaluations] = useState<Evaluation[]>([]),
     [loading, setLoading] = useState(false),
     // 잠깐 강조할 대상 ("round-시점" 또는 "sources-평가시각"). 2초 뒤 해제
-    [highlight, setHighlight] = useState<string | null>(null)
+    [highlight, setHighlight] = useState<string | null>(null),
+    // 재평가에서 점수가 그대로인 지표 목록을 펼쳤는지
+    [showUnchanged, setShowUnchanged] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!highlight) return
@@ -80,6 +82,7 @@ export default function DetailPage({
   useEffect(() => {
     let active = true
     setLoading(true)
+    setShowUnchanged(false)
     Promise.all([getIdeaHistory(idea.id), getEvaluations(idea.id)])
       .then(([h, e]) => {
         if (active) {
@@ -150,7 +153,15 @@ export default function DetailPage({
   const latestReferences = latestRound.flatMap((item) =>
     item.references.map((reference, index) => ({ reference, item, key: `${item.id}-${index}` })),
   )
-  const unchangedCount = scoreTypes.length - new Set(latestRound.map((item) => item.scoreType)).size
+  // 이번 회차에 바뀌지 않은 지표: 현재 점수와, 그 지표가 마지막으로 바뀐 평가의 판단 근거
+  const unchangedMetrics = scoreTypes
+    .filter((type) => !latestRound.some((item) => item.scoreType === type))
+    .map((type) => ({
+      type,
+      score: idea.scores?.find((score) => score.type === type)?.score,
+      summary: sortedEvaluations.find((item) => item.scoreType === type)?.evidenceSummary,
+    }))
+  const unchangedCount = unchangedMetrics.length
   const weights = idea.scores?.map((score) => score.weightPercent) ?? []
   const topScore = idea.scores?.reduce<(typeof idea.scores)[number] | undefined>(
     (top, score) => (!top || score.weightPercent > top.weightPercent ? score : top),
@@ -316,9 +327,28 @@ export default function DetailPage({
                     </>
                   )}
                   {!firstEvaluation && unchangedCount > 0 && (
-                    <div className="mt-3 text-[11px] text-[#647096]">
-                      ⓘ 나머지 {unchangedCount}개 지표는 유지됐어요.
-                    </div>
+                    <>
+                      <button
+                        type="button"
+                        className="mt-3 flex items-center gap-1 text-[11px] text-[#647096]"
+                        aria-expanded={showUnchanged}
+                        onClick={() => setShowUnchanged((open) => !open)}
+                      >
+                        ⓘ 나머지 {unchangedCount}개 지표는 유지됐어요.
+                        <span className="font-bold text-[#6938ff]">
+                          {showUnchanged ? '접기 ▴' : '보기 ▾'}
+                        </span>
+                      </button>
+                      {showUnchanged &&
+                        unchangedMetrics.map(({ type, score, summary }) => (
+                          <div className={tw('delta-explanation')} key={type}>
+                            <strong className="block text-[16px] text-[#090d3d]">
+                              {scoreLabels[type]} {score == null ? '—' : scoreText(score)}
+                            </strong>
+                            <p>{summary || '이전 평가의 판단 근거가 없어요.'}</p>
+                          </div>
+                        ))}
+                    </>
                   )}
                 </>
               ) : (
