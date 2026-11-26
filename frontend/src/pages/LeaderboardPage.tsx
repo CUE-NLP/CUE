@@ -1,6 +1,7 @@
 import { tw } from '../tailwindStyles'
 import { useEffect, useState } from 'react'
-import { getIdeaHistory, getIdeas, type Idea } from '../api/ideas'
+import { ApiError } from '../api/client'
+import { getIdeaHistory, getIdeas, runDemoEvaluation, type Idea } from '../api/ideas'
 import {
   BottomNav,
   Brand,
@@ -82,7 +83,13 @@ export default function LeaderboardPage({
     [busy, setBusy] = useState(false),
     [newest, setNewest] = useState<string | undefined>(),
     // 스파크라인용 총점 이력. 마지막 평가 시각이 같으면 다시 부르지 않는다
-    [histories, setHistories] = useState<Record<number, { at: string; totals: number[] }>>({})
+    [histories, setHistories] = useState<Record<number, { at: string; totals: number[] }>>({}),
+    // "지금 확인": 요청 중(starting), 큐에 들어간 아이디어 id(checking), 결과 안내(checkNote)
+    [starting, setStarting] = useState(false),
+    [checking, setChecking] = useState<number[] | null>(null),
+    [checkNote, setCheckNote] = useState(''),
+    [demoOff, setDemoOff] = useState(false),
+    [reload, setReload] = useState(0)
   useEffect(() => {
     let active = true
     setBusy(true)
@@ -110,7 +117,63 @@ export default function LeaderboardPage({
     return () => {
       active = false
     }
-  }, [filter, view])
+  }, [filter, view, reload])
+  // 큐에 넣은 아이디어가 모두 끝날 때까지 3초마다 목록을 다시 받는다
+  useEffect(() => {
+    if (!checking) return
+    const timer = setInterval(() => {
+      getIdeas('ACTIVE')
+        .then((result) => {
+          const mine = (result.items || []).filter((idea) => checking.includes(idea.id))
+          setReload((count) => count + 1)
+          if (
+            mine.some(
+              (idea) => idea.evaluationStatus === 'QUEUED' || idea.evaluationStatus === 'RUNNING',
+            )
+          )
+            return
+          const failed = mine.filter((idea) => idea.evaluationStatus === 'FAILED').length
+          setChecking(null)
+          setCheckNote(
+            failed ? `확인을 마쳤어요. ${failed}개는 평가하지 못했어요.` : '확인을 마쳤어요.',
+          )
+        })
+        .catch((error) => {
+          setChecking(null)
+          onError(error)
+        })
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [checking])
+  const checkNow = () => {
+    if (starting || checking) return
+    setCheckNote('')
+    setStarting(true)
+    runDemoEvaluation()
+      .then(({ queued, skipped }) => {
+        // 이미 평가 중인 아이디어도 끝날 때까지 같이 기다린다 (대기열이 가득 찬 것은 제외)
+        const ids = [
+          ...queued,
+          ...skipped.filter((item) => item.reason !== 'QUEUE_FULL').map((item) => item.ideaId),
+        ]
+        if (!ids.length) {
+          setCheckNote('확인할 아이디어가 없어요.')
+          return
+        }
+        setChecking(ids)
+        setReload((count) => count + 1)
+      })
+      .catch((error) => {
+        if (error instanceof ApiError && error.code === 'D002')
+          setCheckNote('방금 확인했어요. 30초 뒤에 다시 눌러 주세요.')
+        else if (error instanceof ApiError && error.code === 'D001') {
+          // 서버에서 시연 API가 꺼져 있으면 버튼을 숨긴다
+          setDemoOff(true)
+          setCheckNote('지금은 바로 확인 기능이 꺼져 있어요.')
+        } else onError(error)
+      })
+      .finally(() => setStarting(false))
+  }
   useEffect(() => {
     let active = true
     const targets = ideas.filter(
@@ -158,10 +221,42 @@ export default function LeaderboardPage({
           </button>
         </div>
       </div>
-      <div className={tw('refresh-note')}>
-        ◷ &nbsp;24시간마다 자동 확인{' '}
-        <span>{newest ? `최근 확인 ${dateTimeText(newest)}` : '첫 평가를 기다리는 중'}</span>
+      <div className={`${tw('refresh-note')} gap-2`}>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[11px]! text-[#51517a]!">◷ &nbsp;24시간마다 자동 확인</span>
+          <span>{newest ? `최근 확인 ${dateTimeText(newest)}` : '첫 평가를 기다리는 중'}</span>
+        </div>
+        {!demoOff && (
+          <button
+            type="button"
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#8a6cff] px-3 py-1.5 text-[11px] font-bold text-white shadow-[0_2px_8px_rgba(138,108,255,0.22)] transition hover:bg-[#7a58ff] active:scale-95 disabled:bg-[#b5a3ff] disabled:shadow-none"
+            onClick={checkNow}
+            disabled={starting || Boolean(checking)}
+          >
+            <svg
+              className={starting || checking ? 'animate-spin' : undefined}
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+              <path d="M20 4v7h-7" />
+            </svg>
+            {starting || checking ? '확인하는 중…' : '지금 확인'}
+          </button>
+        )}
       </div>
+      {checkNote && (
+        <p className="mt-1 text-right text-[11px] text-[#647096]" role="status">
+          {checkNote}
+        </p>
+      )}
       <div className={tw('filters')}>
         {(
           [

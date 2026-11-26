@@ -75,3 +75,11 @@ export const getIdeaHistory = (id: number) =>
   request<{ items: IdeaHistory[]; count: number }>(`/api/ideas/${id}/history`)
 export const getEvaluations = (id: number) =>
   request<{ items: Evaluation[]; count: number }>(`/api/ideas/${id}/evaluations`)
+// 내 ACTIVE 아이디어 전부를 지금 확인·평가하도록 큐에 넣는다 (시연·수동 평가용, 202)
+export type DemoRunResult = {
+  queued: number[]
+  skipped: { ideaId: number; reason: 'ALREADY_QUEUED' | 'ALREADY_RUNNING' | 'QUEUE_FULL' }[]
+  trendRefreshed: boolean
+}
+export const runDemoEvaluation = (force = false) =>
+  request<DemoRunResult>('/api/demo/evaluations/run', 'POST', { force })
