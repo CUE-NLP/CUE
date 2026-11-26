@@ -16,6 +16,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /** 프롬프트 파일, docs/ai-prompts.md의 플레이스홀더 표, JSON 예시가 서로 맞는지 검증한다. */
@@ -59,6 +60,22 @@ class PromptTemplatesTest {
         assertThat(blocks).hasSizeGreaterThanOrEqualTo(7);
         for (String block : blocks) {
             assertThat(objectMapper.readTree(block).isObject()).as(block).isTrue();
+        }
+    }
+
+    @Test
+    void 초기_평가_프롬프트와_문서의_예시는_기준별_출처_URL_배열을_포함한다() throws IOException {
+        String prompt = read(new ClassPathResource("prompts/initial-evaluation.txt"));
+        String promptExample = prompt.lines().filter(line -> line.startsWith("{\"scores\":")).findFirst().orElseThrow();
+        String documentation = Files.readString(docPath(), StandardCharsets.UTF_8);
+        String documentedExample = jsonBlocks(documentation).stream()
+                .filter(block -> objectMapper.readTree(block).has("scores")).findFirst().orElseThrow();
+
+        assertThat(prompt).contains("referenceUrls에는", "인용할 자료가 없으면");
+        for (String example : List.of(promptExample, documentedExample)) {
+            JsonNode scores = objectMapper.readTree(example).path("scores");
+            assertThat(scores.size()).isEqualTo(4);
+            assertThat(scores.valueStream().allMatch(score -> score.path("referenceUrls").isArray())).isTrue();
         }
     }
 

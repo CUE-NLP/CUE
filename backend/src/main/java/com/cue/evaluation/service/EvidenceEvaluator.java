@@ -68,7 +68,7 @@ public class EvidenceEvaluator {
                                     "score", Map.of("type", "NUMBER"),
                                     "evidenceSummary", Map.of("type", "STRING"),
                                     "referenceUrls", REFERENCE_URLS),
-                            "required", List.of("type", "score", "evidenceSummary")))),
+                            "required", List.of("type", "score", "evidenceSummary", "referenceUrls")))),
             "required", List.of("scores"));
 
     private final GeminiClient gemini;
