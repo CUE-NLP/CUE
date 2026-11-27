@@ -2,6 +2,7 @@ package com.cue.source.service;
 
 import com.cue.source.dto.SourceCheckResult;
 import com.cue.source.dto.SourceItem;
+import com.cue.source.entity.ApiProvider;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -15,7 +16,7 @@ public final class SourceTextFormat {
             "type", "OBJECT",
             "properties", Map.of("summary", Map.of("type", "STRING")),
             "required", List.of("summary"));
-    static final int MAX_SUMMARY_CHARS = 300;
+    public static final int MAX_SUMMARY_CHARS = 300;
     static final int MAX_TITLE_CHARS = 120;
     /** 프롬프트에 넣는 자료 항목 최대 개수 (토큰 절약). */
     public static final int MAX_ITEMS = 15;
@@ -25,7 +26,7 @@ public final class SourceTextFormat {
     public static final int EVIDENCE_MAX_SUMMARY_CHARS = 2000;
 
     /**
-     * 자료 목록 텍스트. 프롬프트의 {@code {{items}}}/{@code {{newItems}}} 자리에 들어간다.
+     * 요약 프롬프트에 넣는 자료 목록 텍스트.
      * 한 줄에 한 건: {@code [PROVIDER] 제목 | URL | 날짜 | 지표 | 요약} (없는 값은 "-"). 항목당 길이와 전체 개수에 상한이 있다.
      */
     public static String formatSources(List<SourceCheckResult> sources) {
@@ -41,12 +42,16 @@ public final class SourceTextFormat {
                 if (lines.size() >= maxItems) {
                     break outer;
                 }
-                lines.add("[" + r.provider() + "] " + field(item.title(), MAX_TITLE_CHARS) + " | " + field(item.url(), 300)
-                        + " | " + field(item.publishedAt(), 10) + " | " + field(item.metrics(), 60)
-                        + " | " + field(item.summary(), maxSummaryChars));
+                lines.add(formatItem(r.provider(), item, maxSummaryChars));
             }
         }
         return String.join("\n", lines);
+    }
+
+    public static String formatItem(ApiProvider provider, SourceItem item, int maxSummaryChars) {
+        return "[" + provider + "] " + field(item.title(), MAX_TITLE_CHARS) + " | " + field(item.url(), 300)
+                + " | " + field(item.publishedAt(), 10) + " | " + field(item.metrics(), 60)
+                + " | " + field(item.summary(), maxSummaryChars);
     }
 
     /** 원문 없이 제목과 URL만 적는 한 줄 ({@code 제목 | URL}). */

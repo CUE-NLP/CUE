@@ -30,7 +30,7 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 
 ## 환각 방지 규칙
 1. 근거는 입력으로 제공된 아이디어·자료 목록(TREND는 트렌드 요약·트렌드 항목)으로 한정. 없는 사실·수치·URL 생성 금지.
-2. `highlights`, `referenceUrls`의 URL/제목은 입력 `items`/`newItems`/`trendItems`에서 그대로 복사. 서버는 입력에 없는 URL이 오면 해당 항목을 버린다.
+2. 평가의 `referenceIds`에는 이번 요청에서 각 자료 줄 첫 열에 표시한 정수 ID만 사용한다. 서버는 해당 ID를 원본 URL·제목·제공처로 연결하고, 목록에 없는 ID와 중복 URL을 제외한다.
 3. 영향 없음·근거 부족은 `changes`에서 제외(변화 0은 쓰지 않음). 변화량 ±10 제한.
 4. 자료가 비면 요약은 빈 값, 평가는 중간 점수 + 불확실성 문장.
 
@@ -71,14 +71,14 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 | `{{problem}}` | 아이디어 문제 |
 | `{{solution}}` | 아이디어 해결 |
 | `{{expectation}}` | 아이디어 기대효과 |
-| `{{items}}` | 아이디어 관련 수집 자료 목록. 줄마다 `[PROVIDER] 제목 \| URL \| 날짜 \| 지표 \| 발췌`(발췌 = API 설명 + 정리한 원문 앞부분, 항목당 `cue.source.excerpt-chars`, 최대 30줄) |
+| `{{items}}` | 아이디어 관련 수집 자료 목록. 줄마다 `ID \| [PROVIDER] 제목 \| URL \| 날짜 \| 지표 \| 발췌`(발췌 = API 설명 + 정리한 원문 앞부분, 항목당 `cue.source.excerpt-chars`, 최대 30줄) |
 
 출력 스키마와 예시:
 ```json
-{"scores":{"PROBLEM_IMPORTANCE":{"score":72,"evidenceSummary":"관련 저장소의 사용 사례에서 타깃이 반복적으로 겪는 불편을 확인했어요.","referenceUrls":["https://github.com/example/llm-runtime"]},"MARKET_DEMAND":{"score":55,"evidenceSummary":"수요를 직접 보여주는 자료가 부족해 보수적으로 평가했어요.","referenceUrls":[]},"MARKET_DIFFERENTIATION":{"score":48,"evidenceSummary":"수집 자료의 오픈소스와 비교해 차별점이 더 필요해 보여요.","referenceUrls":["https://github.com/example/llm-runtime"]},"TECH_FEASIBILITY":{"score":80,"evidenceSummary":"자료에 나온 공개 모델과 도구를 활용해 구현할 수 있어요.","referenceUrls":["https://github.com/example/llm-runtime"]}}}
+{"scores":{"PROBLEM_IMPORTANCE":{"score":72,"evidenceSummary":"관련 저장소의 사용 사례에서 타깃이 반복적으로 겪는 불편을 확인했어요.","referenceIds":[1]},"MARKET_DEMAND":{"score":55,"evidenceSummary":"수요를 직접 보여주는 자료가 부족해 보수적으로 평가했어요.","referenceIds":[]},"MARKET_DIFFERENTIATION":{"score":48,"evidenceSummary":"수집 자료의 오픈소스와 비교해 차별점이 더 필요해 보여요.","referenceIds":[1]},"TECH_FEASIBILITY":{"score":80,"evidenceSummary":"자료에 나온 공개 모델과 도구를 활용해 구현할 수 있어요.","referenceIds":[1]}}}
 ```
-- `scores` 객체는 네 기준을 각각 필수 키로 갖는다. 서버는 네 기준의 숫자 점수, 비어 있지 않은 판단 근거, URL 배열을 검사한다. 계약에 맞지 않으면 `E002`로 처리하고 첫 평가를 완료하지 않는다.
-- 각 기준의 `referenceUrls` 배열은 필수다. 실제로 인용한 `{{items}}`의 URL을 그대로 넣고, 인용한 자료가 없으면 빈 배열을 반환한다. 서버는 입력에 없거나 중복된 URL을 제외한다.
+- `scores` 객체는 네 기준을 각각 필수 키로 갖는다. 서버는 네 기준의 숫자 점수, 비어 있지 않은 판단 근거, 정수 ID 배열을 검사한다. 계약에 맞지 않으면 `E002`로 처리하고 첫 평가를 완료하지 않는다.
+- 각 기준의 `referenceIds` 배열은 필수다. 실제로 인용한 `{{items}}`의 ID를 넣고, 인용한 자료가 없으면 빈 배열을 반환한다.
 
 ### re-evaluation.txt
 목적: 일일·수동 재평가. 점수에 반영해 둔 항목(`sources.evaluated_items`)과 이번 조회를 URL로 비교해 **추가되거나 삭제된 항목이 있을 때** 호출한다. 현재 점수에서 출발해 새로 추가된 자료를 더하고 삭제된 자료를 빼서 기준별 변화량을 제안한다. 그대로인 자료는 다시 보내지 않고 기존 평가 내역으로 대신한다. `evidenceSummary`는 **사용자에게 그대로 노출**되므로 친절·간결한 한국어로 쓴다.
@@ -96,13 +96,13 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 
 출력 스키마와 예시:
 ```json
-{"changes":[{"type":"MARKET_DEMAND","difference":4,"evidenceSummary":"관련 저장소의 관심이 최근 크게 늘어 수요가 커지고 있어요.","referenceUrls":["https://github.com/example/llm-runtime"]}]}
+{"changes":[{"type":"MARKET_DEMAND","difference":4,"evidenceSummary":"관련 저장소의 관심이 최근 크게 늘어 수요가 커지고 있어요.","referenceIds":[1]}]}
 ```
 영향이 없을 때:
 ```json
 {"changes":[]}
 ```
-- `difference`는 -10~10 정수(0 제외), 기준당 최대 1회, `referenceUrls`는 필수 배열이며 `{{newItems}}`의 URL만(그 밖은 서버가 버린다).
+- `difference`는 -10~10 정수(0 제외), 기준당 최대 1회, `referenceIds`는 필수 정수 배열이며 `{{newItems}}`의 ID만 인용할 수 있다. 삭제된 자료와 기존 이력은 판단 맥락으로 쓰인다.
 
 ### trend-evaluation.txt
 목적: 5번째 평가 기준 **TREND(트렌디함)**. 아이디어 4항목을 그날의 **글로벌 트렌드**(아이디어와 무관, 하루 1회 수집)에 대입해 "지금 뜨는 흐름과 얼마나 맞닿아 있는지"만 판단한다. 한 프롬프트가 두 모드를 가른다: `{{currentTrendScore}}`가 `없음 (첫 평가)`이면 **첫 평가**(`score` 0~100), 숫자이면 **재평가**(`difference` -10~10, 영향 없으면 0). 서버가 모드에 맞는 필드만 읽고 범위·클램프를 다시 적용한다.
@@ -115,17 +115,17 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 | `{{expectation}}` | 아이디어 기대효과 |
 | `{{currentTrendScore}}` | 현재 TREND 점수. 첫 평가면 `없음 (첫 평가)` |
 | `{{trendSummary}}` | 그날의 최종 트렌드 요약 (`trends.summary`) |
-| `{{trendItems}}` | 트렌드 상위 항목 줄 목록 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 항목 요약` (최대 15건) |
+| `{{trendItems}}` | 트렌드 상위 항목 줄 목록 `ID \| [PROVIDER] 제목 \| URL \| 날짜 \| 지표 \| 항목 요약` (최대 15건) |
 
 출력 스키마와 예시:
 ```json
-{"score":65,"evidenceSummary":"에이전트 도구와 소형 모델 흐름과 맞닿아 있어 트렌디한 편이에요.","referenceUrls":["https://news.ycombinator.com/item?id=1"]}
+{"score":65,"evidenceSummary":"에이전트 도구와 소형 모델 흐름과 맞닿아 있어 트렌디한 편이에요.","referenceIds":[1]}
 ```
 재평가 예시:
 ```json
-{"difference":3,"evidenceSummary":"이번 주 에이전트 관련 저장소가 더 늘어 흐름과의 접점이 커졌어요.","referenceUrls":[]}
+{"difference":3,"evidenceSummary":"이번 주 에이전트 관련 저장소가 더 늘어 흐름과의 접점이 커졌어요.","referenceIds":[]}
 ```
-- 서버 검증: 점수 0~100 정수(첫 평가는 현재 점수와의 차이로 기록), 재평가 변화량 ±10 클램프, 근거 요약 300자 제한, `referenceUrls`는 `{{trendItems}}`의 URL만(그 밖은 버림). 이 평가의 `evaluations.trend_id`가 그날 `trends` 행을 가리킨다.
+- 서버 검증: 점수 0~100 정수(첫 평가는 현재 점수와의 차이로 기록), 재평가 변화량 ±10 클램프, 근거 요약 300자 제한, `referenceIds`는 `{{trendItems}}`의 ID만 인용한다(인용할 자료가 없으면 빈 배열). 이 평가의 `evaluations.trend_id`가 그날 `trends` 행을 가리킨다.
 - 같은 트렌드로 이미 평가한 아이디어는 호출하지 않는다(`ideas.last_trend_id`). 아이디어 내용이 바뀌면 `last_trend_id`가 비워져 첫 평가부터 다시 한다.
 
 ## 무료 티어 운용 팁
@@ -144,5 +144,5 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 - 점수 앵커 구간(5단계, 20점 단위)과 "자료 빈약 시 40~60" 기준이 적절한지 팀 확정 필요.
 - Gemini 모델 선택(예: flash 계열)과 무료 티어 한도(RPM/일일 요청/토큰) — API 키 수령 후 확인해 호출 간격·상위 N개를 정한다.
 - 변화량 제한(±10)과 하루 반영 정책, 자료 항목 개수·스니펫 길이 상한.
-- ~~`{{items}}`, `{{currentScores}}`의 직렬화 형식~~ — 확정: `{{items}}`/`{{newItems}}`는 줄 단위 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(상위 항목, 근거 자료는 최대 30줄), `{{currentScores}}`는 `TYPE: 점수` 줄 단위. 구현: `SourceTextFormat.formatSources`, `EvidenceEvaluator`.
+- ~~`{{items}}`, `{{currentScores}}`의 직렬화 형식~~ — 확정: `{{items}}`/`{{newItems}}`는 줄 단위 `ID | [PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(상위 항목, 근거 자료는 최대 30줄), `{{currentScores}}`는 `TYPE: 점수` 줄 단위. 구현: `EvaluationReferences`, `EvidenceEvaluator`.
 - 영어 자료(GitHub 등)를 한국어로 요약할 때 고유명사 표기 규칙.

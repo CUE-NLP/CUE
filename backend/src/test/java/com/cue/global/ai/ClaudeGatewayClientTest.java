@@ -86,13 +86,13 @@ class ClaudeGatewayClientTest {
     @Test
     void 학교_게이트웨이에_Claude_형식의_스키마를_보내고_텍스트_JSON을_선택한다() {
         Map<String, Object> score = Map.of("type", "OBJECT",
-                "properties", Map.of("referenceUrls", Map.of("type", "ARRAY", "items", Map.of("type", "STRING"))),
-                "required", List.of("referenceUrls"));
+                "properties", Map.of("referenceIds", Map.of("type", "ARRAY", "items", Map.of("type", "INTEGER"))),
+                "required", List.of("referenceIds"));
         Map<String, Object> schema = Map.of("type", "OBJECT",
                 "properties", Map.of("scores", Map.of("type", "ARRAY", "maxItems", 4, "items", score)),
                 "required", List.of("scores"));
         String scoreJson = """
-                {"scores":[{"referenceUrls":["https://example.test"]}]}
+                {"scores":[{"referenceIds":[1]}]}
                 """;
         String prefix = "$.output_config.format.schema";
 
@@ -109,8 +109,8 @@ class ClaudeGatewayClientTest {
                 .andExpect(jsonPath(prefix + ".additionalProperties").value(false))
                 .andExpect(jsonPath(prefix + ".properties.scores.maxItems").doesNotExist())
                 .andExpect(jsonPath(prefix + ".properties.scores.items.additionalProperties").value(false))
-                .andExpect(jsonPath(prefix + ".properties.scores.items.required[0]").value("referenceUrls"))
-                .andExpect(jsonPath(prefix + ".properties.scores.items.properties.referenceUrls.items.type").value("string"))
+                .andExpect(jsonPath(prefix + ".properties.scores.items.required[0]").value("referenceIds"))
+                .andExpect(jsonPath(prefix + ".properties.scores.items.properties.referenceIds.items.type").value("integer"))
                 .andRespond(withSuccess("""
                         {"stop_reason":"end_turn","content":[
                           {"type":"thinking"},
@@ -121,7 +121,7 @@ class ClaudeGatewayClientTest {
 
         String response = client.send("규칙", "아이디어", schema);
         String text = client.responseText(mapper.readTree(response)).asString();
-        assertEquals("https://example.test", mapper.readTree(text).at("/scores/0/referenceUrls/0").asString());
+        assertEquals(1, mapper.readTree(text).at("/scores/0/referenceIds/0").asInt());
         assertEquals(4, mapper.valueToTree(schema).at("/properties/scores/maxItems").asInt());
         server.verify();
     }

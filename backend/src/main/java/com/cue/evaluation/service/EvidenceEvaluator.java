@@ -11,7 +11,6 @@ import com.cue.global.error.ErrorCode;
 import com.cue.score.entity.ScoreType;
 import com.cue.source.dto.EvaluatedItem;
 import com.cue.source.dto.SourceCheckResult;
-import com.cue.source.dto.SourceItem;
 import com.cue.source.service.SourceTextFormat;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -35,8 +34,8 @@ import tools.jackson.databind.JsonNode;
  * 전체 평가는 {@code items}(조회한 근거 자료 전부), 재평가는 {@code currentScores}(현재 점수 "TYPE: 점수" 줄바꿈 목록),
  * {@code pastEvaluations}(기존 평가 내역), {@code newItems}(새로 추가된 자료), {@code removedItems}(삭제된 자료). 비면 "(… 없음)".
  * <ul>
- *   <li>re-evaluation: {@code {"changes":[{"type","difference","evidenceSummary","referenceUrls":[]}]}} — 기준당 ±{@value #MAX_DIFFERENCE}로 서버에서 다시 제한</li>
- *   <li>initial-evaluation: {@code {"scores":{"PROBLEM_IMPORTANCE":{"score","evidenceSummary","referenceUrls":[]}, ...}}} — 4개 기준을 검사한 뒤 현재 점수와의 차이로 기록</li>
+ *   <li>re-evaluation: {@code {"changes":[{"type","difference","evidenceSummary","referenceIds":[]}]}} — 기준당 ±{@value #MAX_DIFFERENCE}로 서버에서 다시 제한</li>
+ *   <li>initial-evaluation: {@code {"scores":{"PROBLEM_IMPORTANCE":{"score","evidenceSummary","referenceIds":[]}, ...}}} — 4개 기준을 검사한 뒤 현재 점수와의 차이로 기록</li>
  * </ul>
  */
 @Component
@@ -50,7 +49,6 @@ public class EvidenceEvaluator {
     private static final String NO_SUMMARY = "AI가 근거 요약을 제공하지 않았습니다.";
 
     private static final List<String> TYPE_NAMES = ScoreType.EVIDENCE_TYPES.stream().map(Enum::name).toList();
-    private static final Map<String, Object> REFERENCE_URLS = Map.of("type", "ARRAY", "items", Map.of("type", "STRING"));
 
     static final Map<String, Object> RE_EVALUATION_SCHEMA = Map.of(
             "type", "OBJECT",
@@ -60,8 +58,8 @@ public class EvidenceEvaluator {
                                     "type", Map.of("type", "STRING", "enum", TYPE_NAMES),
                                     "difference", Map.of("type", "NUMBER"),
                                     "evidenceSummary", Map.of("type", "STRING"),
-                                    "referenceUrls", REFERENCE_URLS),
-                            "required", List.of("type", "difference", "evidenceSummary", "referenceUrls")))),
+                                    "referenceIds", EvaluationReferences.IDS_SCHEMA),
+                            "required", List.of("type", "difference", "evidenceSummary", "referenceIds")))),
             "required", List.of("changes"));
 
     private static final Map<String, Object> INITIAL_SCORE_SCHEMA = Map.of(
@@ -69,8 +67,8 @@ public class EvidenceEvaluator {
             "properties", Map.of(
                     "score", Map.of("type", "NUMBER"),
                     "evidenceSummary", Map.of("type", "STRING"),
-                    "referenceUrls", REFERENCE_URLS),
-            "required", List.of("score", "evidenceSummary", "referenceUrls"));
+                    "referenceIds", EvaluationReferences.IDS_SCHEMA),
+            "required", List.of("score", "evidenceSummary", "referenceIds"));
 
     static final Map<String, Object> INITIAL_EVALUATION_SCHEMA = Map.of(
             "type", "OBJECT",
@@ -99,7 +97,9 @@ public class EvidenceEvaluator {
         }
         vars.put("currentScores", scores.toString().strip());
         vars.put("pastEvaluations", historyLines(history, removed));
-        vars.put("newItems", itemLines(added, "(새로 추가된 자료 없음)"));
+        var referenceItems = EvaluationReferences.from(added, SourceTextFormat.EVIDENCE_MAX_ITEMS,
+                SourceTextFormat.EVIDENCE_MAX_SUMMARY_CHARS);
+        vars.put("newItems", referenceItems.linesOr("(새로 추가된 자료 없음)"));
         vars.put("removedItems", removed.isEmpty() ? "(삭제된 자료 없음)" : removed.stream()
                 .limit(SourceTextFormat.EVIDENCE_MAX_ITEMS)
                 .map(i -> SourceTextFormat.reference(i.title(), i.url())).collect(Collectors.joining("\n")));
@@ -109,7 +109,6 @@ public class EvidenceEvaluator {
             throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
         }
         Map<ScoreType, ScoreChange> out = new LinkedHashMap<>();
-        Map<String, SourceCheckResult> byUrl = indexByUrl(added);
         for (JsonNode n : changes) {
             ScoreType type = parseType(n.path("type").asString(null));
             BigDecimal diff = number(n.path("difference"));
@@ -118,7 +117,7 @@ public class EvidenceEvaluator {
             }
             diff = clamp(diff, MAX_DIFFERENCE.negate(), MAX_DIFFERENCE);
             if (diff.signum() != 0 && !n.path("evidenceSummary").asString("").isBlank()) {
-                out.put(type, toChange(type, diff, n, byUrl));
+                out.put(type, toChange(type, diff, n, referenceItems));
             }
         }
         return List.copyOf(out.values());
@@ -127,27 +126,28 @@ public class EvidenceEvaluator {
     /** 아이디어 내용 전체를 보고 기준별 0~100 점수를 받아, 현재 점수와의 차이를 {@link ScoreChange}로 돌려준다. */
     public List<ScoreChange> initialEvaluate(IdeaSnapshot idea, List<SourceCheckResult> evidence) {
         Map<String, String> vars = ideaVariables(idea);
-        vars.put("items", itemLines(evidence, "(수집된 자료 없음)"));
+        var referenceItems = EvaluationReferences.from(evidence, SourceTextFormat.EVIDENCE_MAX_ITEMS,
+                SourceTextFormat.EVIDENCE_MAX_SUMMARY_CHARS);
+        vars.put("items", referenceItems.linesOr("(수집된 자료 없음)"));
         JsonNode result = gemini.generateJson(prompts.render("initial-evaluation", vars), INITIAL_EVALUATION_SCHEMA);
         JsonNode scores = result.path("scores");
         if (!scores.isObject() || scores.size() != ScoreType.EVIDENCE_TYPES.size()) {
             throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
         }
         List<ScoreChange> out = new ArrayList<>();
-        Map<String, SourceCheckResult> byUrl = indexByUrl(evidence);
         for (ScoreType type : ScoreType.EVIDENCE_TYPES) {
             JsonNode n = scores.path(type.name());
             BigDecimal score = number(n.path("score"));
             JsonNode summary = n.path("evidenceSummary");
-            JsonNode references = n.path("referenceUrls");
+            JsonNode references = n.path("referenceIds");
             if (score == null || !summary.isString() || summary.asString().isBlank()
-                    || !references.isArray() || !references.valueStream().allMatch(JsonNode::isString)) {
+                    || !references.isArray() || !references.valueStream().allMatch(JsonNode::isIntegralNumber)) {
                 throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
             }
             BigDecimal current = idea.scores().getOrDefault(type, BigDecimal.ZERO);
             BigDecimal diff = clamp(score, BigDecimal.ZERO, MAX_SCORE).subtract(current);
             if (diff.signum() != 0) {
-                out.add(toChange(type, diff, n, byUrl));
+                out.add(toChange(type, diff, n, referenceItems));
             }
         }
         return List.copyOf(out);
@@ -160,12 +160,6 @@ public class EvidenceEvaluator {
         vars.put("solution", nullToEmpty(idea.solution()));
         vars.put("expectation", nullToEmpty(idea.expectation()));
         return vars;
-    }
-
-    private static String itemLines(List<SourceCheckResult> sources, String emptyText) {
-        String lines = SourceTextFormat.formatSources(sources, SourceTextFormat.EVIDENCE_MAX_ITEMS,
-                SourceTextFormat.EVIDENCE_MAX_SUMMARY_CHARS);
-        return lines.isEmpty() ? emptyText : lines;
     }
 
     /** 평가 한 건을 한 줄로 쓰고 그 아래에 근거 자료를 붙인다. 이번에 삭제된 자료는 표시해 근거에서 빼게 한다. */
@@ -189,39 +183,13 @@ public class EvidenceEvaluator {
         return String.join("\n", lines);
     }
 
-    static ScoreChange toChange(ScoreType type, BigDecimal diff, JsonNode n, Map<String, SourceCheckResult> byUrl) {
+    static ScoreChange toChange(ScoreType type, BigDecimal diff, JsonNode n, EvaluationReferences referenceItems) {
         String summary = n.path("evidenceSummary").asString("").trim();
-        List<ReferenceInput> refs = new ArrayList<>();
-        Set<String> seen = new java.util.HashSet<>();
-        for (JsonNode u : n.path("referenceUrls")) {
-            String url = u.asString("").trim();
-            if (url.isEmpty() || !seen.add(url)) {
-                continue;
-            }
-            SourceCheckResult from = byUrl.get(url);
-            if (from == null) {
-                continue; // 입력 자료에 없는 URL은 환각일 수 있어 버린다
-            }
-            refs.add(new ReferenceInput(url, titleOf(from, url), from.provider()));
-        }
         if (summary.length() > MAX_SUMMARY_CHARS) {
             summary = summary.substring(0, MAX_SUMMARY_CHARS - 1) + "…";
         }
-        return new ScoreChange(type, diff, summary.isEmpty() ? NO_SUMMARY : summary, refs);
-    }
-
-    static Map<String, SourceCheckResult> indexByUrl(List<SourceCheckResult> sources) {
-        Map<String, SourceCheckResult> map = new HashMap<>();
-        for (SourceCheckResult r : sources) {
-            for (SourceItem item : r.items()) {
-                map.putIfAbsent(item.url(), r);
-            }
-        }
-        return map;
-    }
-
-    private static String titleOf(SourceCheckResult r, String url) {
-        return r.items().stream().filter(i -> url.equals(i.url())).map(SourceItem::title).findFirst().orElse(null);
+        return new ScoreChange(type, diff, summary.isEmpty() ? NO_SUMMARY : summary,
+                referenceItems.resolve(n.path("referenceIds")));
     }
 
     private static ScoreType parseType(String value) {

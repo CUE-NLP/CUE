@@ -64,16 +64,16 @@ class DailyEvaluationFlowTest {
             + "\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}";
     private static final String INITIAL = """
             {"scores":{
-              "PROBLEM_IMPORTANCE":{"score":70,"evidenceSummary":"문제가 크다","referenceUrls":[]},
-              "MARKET_DEMAND":{"score":60,"evidenceSummary":"수요가 있다","referenceUrls":[]},
-              "MARKET_DIFFERENTIATION":{"score":40,"evidenceSummary":"경쟁이 많다","referenceUrls":[]},
-              "TECH_FEASIBILITY":{"score":80,"evidenceSummary":"구현 가능","referenceUrls":[]}
+              "PROBLEM_IMPORTANCE":{"score":70,"evidenceSummary":"문제가 크다","referenceIds":[]},
+              "MARKET_DEMAND":{"score":60,"evidenceSummary":"수요가 있다","referenceIds":[]},
+              "MARKET_DIFFERENTIATION":{"score":40,"evidenceSummary":"경쟁이 많다","referenceIds":[]},
+              "TECH_FEASIBILITY":{"score":80,"evidenceSummary":"구현 가능","referenceIds":[]}
             }}
             """;
 
     /** TREND 평가 응답 (첫 평가는 score, 재평가는 difference를 읽는다). */
     private static final String TREND_REPLY = "{\"score\":65,\"difference\":35,\"evidenceSummary\":\"에이전트 흐름과 맞닿아 있다\","
-            + "\"referenceUrls\":[\"https://news.ycombinator.com/item?id=1\",\"https://not-in-trend.test/x\"]}";
+            + "\"referenceIds\":[1,99]}";
     private String trendReply = TREND_REPLY;
 
     /** trends에 실제 행을 넣고 그 행을 가리키는 스냅샷을 만든다 (evaluations.trend_id FK 때문에 실제 행이 필요하다). */
@@ -101,7 +101,7 @@ class DailyEvaluationFlowTest {
             if (props.containsKey("difference")) return mapper.readTree(trendReply);
             if (props.containsKey("changes")) return mapper.readTree(
                     "{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":35,\"evidenceSummary\":\"관심이 급증했다\","
-                            + "\"referenceUrls\":[\"https://github.com/a/b\"]},"
+                            + "\"referenceIds\":[1]},"
                             + "{\"type\":\"TECH_FEASIBILITY\",\"difference\":-3,\"evidenceSummary\":\"성숙도 하락\"}]}");
             return mapper.readTree("{\"summary\":\"에이전트 도구가 늘고 있다\"}");
         });

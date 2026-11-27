@@ -7,7 +7,7 @@
 3. 자료가 빈약하거나 비어 있으면 극단적인 점수를 피하고 40~60점 근처로 보수적으로 주며, evidenceSummary에 불확실성을 명시하세요.
 4. scores 객체에 PROBLEM_IMPORTANCE, MARKET_DEMAND, MARKET_DIFFERENTIATION, TECH_FEASIBILITY 네 키를 모두 포함합니다. 평가에는 실제 입력 자료를 사용하고, 예시 값은 복사하지 마세요.
 5. evidenceSummary는 사용자에게 그대로 보여질 한국어 1~3문장입니다. 친절하고 간결하게, 점수를 준 이유를 구체적으로 쓰세요.
-6. 각 기준의 referenceUrls에는 점수와 근거 요약에 실제로 사용한 자료의 URL을 [자료 목록]의 URL 열에서 그대로 복사해 넣습니다. 입력에 없는 URL은 쓰지 마세요. 인용할 자료가 없으면 빈 배열을 반환하세요.
+6. referenceIds에는 점수 판단에 실제로 사용한 자료의 ID만 [자료 목록] 각 줄의 첫 열에서 골라 정수로 넣습니다. URL을 쓰거나 입력에 없는 ID를 만들지 마세요. 인용할 자료가 없으면 빈 배열을 반환하세요.
 7. 출력은 JSON 객체 하나만 허용합니다. 마크다운 코드블록, 설명, 머리말을 붙이지 마세요.
 
 [점수 앵커]
@@ -20,7 +20,7 @@
 - TECH_FEASIBILITY (기술적 실현 가능성): 현재 기술과 오픈소스·도구로 구현 가능한가? 핵심 위험 요소(데이터, 비용, 정확도 등)는 무엇인가?
 
 [출력 형식]
-{"scores":{"PROBLEM_IMPORTANCE":{"score":72,"evidenceSummary":"자료에서 반복되는 불편을 확인했습니다.","referenceUrls":["자료 목록에 있던 URL"]},"MARKET_DEMAND":{"score":55,"evidenceSummary":"수요를 직접 보여주는 자료가 부족합니다.","referenceUrls":[]},"MARKET_DIFFERENTIATION":{"score":48,"evidenceSummary":"비슷한 대안이 있어 차별화가 필요합니다.","referenceUrls":[]},"TECH_FEASIBILITY":{"score":80,"evidenceSummary":"공개 도구로 구현할 수 있습니다.","referenceUrls":[]}}}
+{"scores":{"PROBLEM_IMPORTANCE":{"score":72,"evidenceSummary":"자료에서 반복되는 불편을 확인했습니다.","referenceIds":[1]},"MARKET_DEMAND":{"score":55,"evidenceSummary":"수요를 직접 보여주는 자료가 부족합니다.","referenceIds":[]},"MARKET_DIFFERENTIATION":{"score":48,"evidenceSummary":"비슷한 대안이 있어 차별화가 필요합니다.","referenceIds":[]},"TECH_FEASIBILITY":{"score":80,"evidenceSummary":"공개 도구로 구현할 수 있습니다.","referenceIds":[]}}}
 (score는 0~100 정수입니다.)
 
 [아이디어]

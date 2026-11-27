@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -118,12 +119,12 @@ class FirstEvaluationEvidenceTest {
                 "insert into trends (summary, providers, content_hash) values ('요약', 'HACKER_NEWS', 'h') returning id", Long.class);
         when(globalTrend.today()).thenReturn(new TrendSnapshot(trendId, "요약", LocalDateTime.now(), List.of()));
         when(sourceExcerpt.excerpt(any())).thenAnswer(inv -> inv.getArgument(0));
-        // 초기 평가: 프롬프트에 들어온 첫 자료 URL을 근거로 인용한다 (입력에 없던 URL은 서버가 버린다)
+        // 초기 평가: 프롬프트에 들어온 첫 자료 URL을 근거로 인용한다 (입력에 없던 ID는 서버가 버린다)
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             String prompt = inv.getArgument(0);
             Map<String, Object> schema = inv.getArgument(1);
             if (mapper.valueToTree(schema).at("/properties/difference").isObject()) { // TREND: prompts에는 근거 평가만 담는다
-                return mapper.readTree("{\"score\":50,\"evidenceSummary\":\"흐름과 맞닿아 있다\",\"referenceUrls\":[]}");
+                return mapper.readTree("{\"score\":50,\"evidenceSummary\":\"흐름과 맞닿아 있다\",\"referenceIds\":[]}");
             }
             if (mapper.valueToTree(schema).at("/properties/changes").isObject()) { // 재평가
                 prompts.add(prompt);
@@ -131,27 +132,25 @@ class FirstEvaluationEvidenceTest {
                     throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
                 }
                 return mapper.readTree("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":4,"
-                        + "\"evidenceSummary\":\"새 저장소가 나타났어요.\",\"referenceUrls\":[\"https://fake.test/repo_f\"]}]}");
+                        + "\"evidenceSummary\":\"새 저장소가 나타났어요.\",\"referenceIds\":[1]}]}");
             }
             JsonNode required = mapper.valueToTree(schema).at("/properties/scores/properties/PROBLEM_IMPORTANCE/required");
-            assertTrue(required.valueStream().anyMatch(field -> field.asString().equals("referenceUrls")),
-                    "Gemini 초기 평가 응답에 referenceUrls 배열을 요구해야 한다");
+            assertTrue(required.valueStream().anyMatch(field -> field.asString().equals("referenceIds")),
+                    "Gemini 초기 평가 응답에 referenceIds 배열을 요구해야 한다");
             prompts.add(prompt);
             if (incompleteInitialResponse) {
                 return mapper.readTree("""
-                        {"scores":{"PROBLEM_IMPORTANCE":{"score":0,"evidenceSummary":"","referenceUrls":[]}}}
+                        {"scores":{"PROBLEM_IMPORTANCE":{"score":0,"evidenceSummary":"","referenceIds":[]}}}
                         """);
             }
-            Matcher m = Pattern.compile("https://fake\\.test/\\w+").matcher(prompt);
-            String cited = m.find() ? m.group() : "";
             return mapper.readTree("""
                     {"scores":{
-                      "PROBLEM_IMPORTANCE":{"score":70,"evidenceSummary":"문제가 크다","referenceUrls":["%s","https://not-in-input.test"]},
-                      "MARKET_DEMAND":{"score":60,"evidenceSummary":"수요가 있다","referenceUrls":[]},
-                      "MARKET_DIFFERENTIATION":{"score":40,"evidenceSummary":"경쟁이 많다","referenceUrls":[]},
-                      "TECH_FEASIBILITY":{"score":80,"evidenceSummary":"구현 가능","referenceUrls":[]}
+                      "PROBLEM_IMPORTANCE":{"score":70,"evidenceSummary":"문제가 크다","referenceIds":[1,1,99]},
+                      "MARKET_DEMAND":{"score":60,"evidenceSummary":"수요가 있다","referenceIds":[]},
+                      "MARKET_DIFFERENTIATION":{"score":40,"evidenceSummary":"경쟁이 많다","referenceIds":[]},
+                      "TECH_FEASIBILITY":{"score":80,"evidenceSummary":"구현 가능","referenceIds":[]}
                     }}
-                    """.formatted(cited));
+                    """);
         });
     }
 
@@ -181,9 +180,13 @@ class FirstEvaluationEvidenceTest {
 
         List<String> references = jdbc.queryForList("select r.url from evaluation_references r join evaluations e on e.id = r.evaluation_id "
                 + "join scores s on s.id = e.score_id where s.idea_id = ?", String.class, id);
-        Matcher cited = Pattern.compile("https://fake\\.test/\\w+").matcher(evaluationPrompt);
+        Matcher cited = Pattern.compile("(?m)^1 \\| \\[[A-Z_]+\\] [^\\n|]+ \\| (https://fake\\.test/\\w+)")
+                .matcher(evaluationPrompt);
         assertTrue(cited.find());
-        assertEquals(List.of(cited.group()), references);
+        assertEquals(List.of(cited.group(1)), references);
+        mvc.perform(get("/api/ideas/" + id + "/evaluations").header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[*].references[*].url", org.hamcrest.Matchers.contains(cited.group(1))));
 
         // 해시도 기록돼 두 번째 조회부터는 변경 없음이다
         assertEquals(0, jdbc.queryForObject("select count(*) from sources where idea_id = ? and content_hash is null", Integer.class, id));

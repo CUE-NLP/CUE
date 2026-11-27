@@ -46,7 +46,7 @@ class TrendEvaluatorTest {
 
     @Test
     void 첫_평가는_score를_현재_점수와의_차이로_바꾸고_범위를_0에서_100으로_제한한다() {
-        respond("{\"score\":65,\"evidenceSummary\":\"흐름과 맞닿음\",\"referenceUrls\":[\"https://github.com/a/b\"]}");
+        respond("{\"score\":65,\"evidenceSummary\":\"흐름과 맞닿음\",\"referenceIds\":[1]}");
         List<ScoreChange> changes = evaluator.evaluate(idea("0", null), TREND);
         assertEquals(1, changes.size());
         ScoreChange c = changes.get(0);
@@ -87,7 +87,7 @@ class TrendEvaluatorTest {
     @Test
     void 근거_URL은_트렌드_항목에_있는_것만_남기고_근거_요약은_300자로_자른다() {
         respond("{\"score\":70,\"evidenceSummary\":\"" + "가".repeat(400) + "\","
-                + "\"referenceUrls\":[\"https://github.com/a/b\",\"https://github.com/a/b\",\"https://made-up.test/x\"]}");
+                + "\"referenceIds\":[1,1,99]}");
         ScoreChange c = evaluator.evaluate(idea("0", null), TREND).get(0);
         assertEquals(1, c.references().size());
         assertEquals(300, c.evidenceSummary().length());

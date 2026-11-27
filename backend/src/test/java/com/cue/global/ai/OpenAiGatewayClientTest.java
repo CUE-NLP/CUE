@@ -29,13 +29,14 @@ class OpenAiGatewayClientTest {
     void Bearer_인증과_엄격한_스키마를_보내고_출력_메시지에_있는_JSON을_가져온다() {
         Map<String, Object> schema = Map.of("type", "OBJECT",
                 "properties", Map.of("evidenceSummary", Map.of("type", "STRING"),
-                        "score", Map.of("type", "NUMBER")),
-                "required", List.of("evidenceSummary"));
+                        "score", Map.of("type", "NUMBER"),
+                        "referenceIds", Map.of("type", "ARRAY", "items", Map.of("type", "INTEGER"))),
+                "required", List.of("evidenceSummary", "referenceIds"));
         String format = "$.text.format";
         String response = """
                 {"status":"completed","output":[{"type":"reasoning"},
                   {"type":"message","content":[{"type":"output_text","text":%s}]}]}
-                """.formatted(mapper.writeValueAsString("{\"evidenceSummary\":\"평가 근거\",\"score\":null}"));
+                """.formatted(mapper.writeValueAsString("{\"evidenceSummary\":\"평가 근거\",\"score\":null,\"referenceIds\":[1]}"));
         server.expect(requestTo(BASE_URL + "/responses/"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header("Authorization", "Bearer fixture-key"))
@@ -47,7 +48,8 @@ class OpenAiGatewayClientTest {
                 .andExpect(jsonPath(format + ".type").value("json_schema"))
                 .andExpect(jsonPath(format + ".strict").value(true))
                 .andExpect(jsonPath(format + ".schema.additionalProperties").value(false))
-                .andExpect(jsonPath(format + ".schema.required.length()").value(2))
+                .andExpect(jsonPath(format + ".schema.required.length()").value(3))
+                .andExpect(jsonPath(format + ".schema.properties.referenceIds.items.type").value("integer"))
                 .andExpect(jsonPath(format + ".schema.properties.score.anyOf[1].type").value("null"))
                 .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
 
@@ -55,6 +57,7 @@ class OpenAiGatewayClientTest {
         var content = mapper.readTree(client.responseText(mapper.readTree(raw)).asString());
         assertEquals("평가 근거", content.path("evidenceSummary").asString());
         assertFalse(content.path("score").isNumber());
+        assertEquals(1, content.at("/referenceIds/0").asInt());
         server.verify();
     }
 
