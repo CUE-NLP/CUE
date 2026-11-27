@@ -8,6 +8,7 @@ import com.cue.user.entity.User;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -86,6 +87,10 @@ public class Idea {
     /** true면 다음 평가에서 자료 변화와 무관하게 Gemini 전체(초기) 평가를 한 번 한다. 등록·내용 수정 시 켜지고 평가 완료 시 꺼진다. */
     @Column(name = "needs_full_evaluation", nullable = false)
     private boolean needsFullEvaluation = true;
+
+    /** 평가를 마지막으로 끝까지 마친 날짜. 점수가 안 바뀌었어도 기록한다. */
+    @Column(name = "evaluated_on")
+    private LocalDate evaluatedOn;
 
     /** 이 아이디어의 TREND 점수를 마지막으로 평가한 글로벌 트렌드 id. null이면 TREND 첫 평가 전 (내용이 바뀌면 다시 null). */
     @Column(name = "last_trend_id")
@@ -171,6 +176,16 @@ public class Idea {
     public void markContentChanged() {
         needsFullEvaluation = true;
         lastTrendId = null;
+    }
+
+    /** 평가는 하루에 한 번이다: {@code today}에 이미 마쳤으면 true. 내용·키워드가 바뀌어 전체 평가가 필요하면 같은 날에도 다시 평가한다. */
+    public boolean dailyEvaluationDone(LocalDate today) {
+        return !needsFullEvaluation && today.equals(evaluatedOn);
+    }
+
+    /** {@code date}의 평가를 끝까지 마쳤음을 기록한다. */
+    public void completeDailyEvaluation(LocalDate date) {
+        evaluatedOn = date;
     }
 
     /** 전체(초기) 평가를 끝냈음을 기록한다. */

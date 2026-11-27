@@ -54,7 +54,7 @@ class DemoApiDisabledTest extends DemoTestSupport {
         mvc.perform(post("/api/demo/evaluations/run").header("Authorization", a))
                 .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("D001"));
         assertEquals("IDLE", idea(a, id).get("evaluationStatus").asString());
-        verify(globalTrend, never()).refresh(anyBoolean());
+        verify(globalTrend, never()).refresh();
     }
 
     @Test

@@ -94,7 +94,7 @@ public class GlobalTrendService {
             return null;
         }
         try {
-            TrendSnapshot snapshot = collect(today, false).snapshot();
+            TrendSnapshot snapshot = collect(today).snapshot();
             cached = snapshot;
             cachedOn = today;
             failedAt = null;
@@ -117,18 +117,18 @@ public class GlobalTrendService {
     }
 
     /**
-     * 트렌드를 지금 다시 수집·요약한다 (시연용 수동 실행). {@code force=false}면 오늘 이미 있을 때 아무것도 하지 않는다(하루 1회·해시 규칙 그대로).
-     * {@code force=true}면 오늘 캐시와 "해시가 같으면 재사용" 규칙을 무시하고 새 행으로 다시 만든다(같은 URL 항목 요약 재사용은 유지). 실패하면 로그만 남긴다.
+     * 오늘 트렌드가 아직 없으면 지금 만든다 (시연용 수동 실행). 오늘 이미 있으면 아무것도 하지 않는다(하루 1회·해시 규칙 그대로).
+     * 직전 수집이 실패해 {@link #RETRY_AFTER} 안이어도 다시 시도하며, 실패하면 로그만 남긴다.
      *
      * @return 새 트렌드 행을 만들었으면 true
      */
-    public synchronized boolean refresh(boolean force) {
+    public synchronized boolean refresh() {
         LocalDate today = LocalDate.now();
-        if (!force && cached != null && today.equals(cachedOn)) {
+        if (cached != null && today.equals(cachedOn)) {
             return false;
         }
         try {
-            Collected c = collect(today, force);
+            Collected c = collect(today);
             cached = c.snapshot();
             cachedOn = today;
             failedAt = null;
@@ -142,9 +142,9 @@ public class GlobalTrendService {
 
     private record Collected(TrendSnapshot snapshot, boolean created) {}
 
-    private Collected collect(LocalDate today, boolean force) {
+    private Collected collect(LocalDate today) {
         Optional<Trend> latest = tx.execute(s -> trends.findFirstByOrderByIdDesc());
-        if (!force && latest.isPresent() && latest.get().getCreatedAt().toLocalDate().equals(today)) {
+        if (latest.isPresent() && latest.get().getCreatedAt().toLocalDate().equals(today)) {
             return new Collected(load(latest.get().getId()), false); // 오늘 이미 만들어 둠 (앱 재시작 등)
         }
 
@@ -165,7 +165,7 @@ public class GlobalTrendService {
         }
 
         String hash = SourceHasher.hash(found.values().stream().flatMap(List::stream).toList());
-        if (!force && latest.isPresent() && latest.get().getContentHash().equals(hash)) {
+        if (latest.isPresent() && latest.get().getContentHash().equals(hash)) {
             log.info("글로벌 트렌드 상위 항목이 어제와 같아 기존 트렌드를 그대로 씁니다 trendId={}", latest.get().getId());
             return new Collected(load(latest.get().getId()), false);
         }

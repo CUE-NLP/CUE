@@ -25,7 +25,7 @@ public final class SourceTextFormat {
     public static final int EVIDENCE_MAX_SUMMARY_CHARS = 2000;
 
     /**
-     * 자료 목록 텍스트. 프롬프트의 {@code {{items}}}/{@code {{changedItems}}} 자리에 들어간다.
+     * 자료 목록 텍스트. 프롬프트의 {@code {{items}}}/{@code {{newItems}}} 자리에 들어간다.
      * 한 줄에 한 건: {@code [PROVIDER] 제목 | URL | 날짜 | 지표 | 요약} (없는 값은 "-"). 항목당 길이와 전체 개수에 상한이 있다.
      */
     public static String formatSources(List<SourceCheckResult> sources) {
@@ -47,6 +47,11 @@ public final class SourceTextFormat {
             }
         }
         return String.join("\n", lines);
+    }
+
+    /** 원문 없이 제목과 URL만 적는 한 줄 ({@code 제목 | URL}). */
+    public static String reference(String title, String url) {
+        return field(title, MAX_TITLE_CHARS) + " | " + field(url, 300);
     }
 
     private static String field(String value, int max) {

@@ -41,9 +41,9 @@ trend/        entity (Trend, TrendItem) / repository / service (GlobalTrendServi
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
 
 ## DB (Flyway, `src/main/resources/db/migration`)
-- 마이그레이션은 **`V1__init.sql` 하나뿐**이다 (users, ideas, scores, refresh_tokens, trends, trend_items, evaluations, evaluation_references, idea_score_histories, sources).
-- **스키마가 확정되기 전(개발 중)에는 `V1__init.sql`을 직접 수정한다.** Flyway 이력 관리(`V2__...` 추가)는 스키마가 확정되는 마지막 단계에 시작한다. 그래서 V1이 바뀌면 이미 V1을 적용한 로컬 DB는 체크섬 불일치로 기동이 실패하니, **`docker compose down -v` 후 다시 실행**해 DB를 새로 만든다 (PR 설명에 적는다).
-- `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 V1도 같은 PR에서 고친다.
+- 마이그레이션은 **`V1__init.sql`(스키마 확정본)** 으로 시작한다 (users, ideas, scores, refresh_tokens, trends, trend_items, evaluations, evaluation_references, idea_score_histories, sources). **V1은 고정이며 수정하지 않는다.** 이후 변경은 `V2__*.sql`부터 새 파일로 추가한다. 현재 `V2__daily_evaluation_and_evaluated_items.sql`(`ideas.evaluated_on`, `sources.evaluated_items` 추가)까지 있다.
+- **스키마는 2026-11-24에 확정했다. 이미 머지된 마이그레이션 파일(`V1__init.sql` 포함)은 절대 수정하지 않는다.** 수정하면 이미 적용한 DB가 Flyway 체크섬 불일치로 기동에 실패한다. 스키마를 바꿀 때는 `V{n}__설명.sql`(n = 마지막 버전 + 1) 새 파일을 같은 PR에 추가한다. 새 마이그레이션은 기존 데이터를 지키며 자동 적용되므로 팀원이 DB를 초기화할 필요가 없다. 지금의 `V1__init.sql`과 다른 예전 V1으로 만든 로컬 DB만 `docker compose down -v` 후 한 번 새로 만든다(데이터가 지워지니 먼저 `flyway_schema_history`의 V1 체크섬을 확인한다. 지금 V1은 `449303195`).
+- `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 새 `V{n}__*.sql`을 같은 PR에 추가한다.
 
 ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea_score_histories, scores 1:N evaluations, trends 1:N trend_items, trends 0..1:N evaluations(TREND 평가만 연결), trends 0..1:N ideas(`last_trend_id`), evaluations 1:N evaluation_references, evaluations 0..1:N sources.
 - `ideas`: `type`(대분류 `IdeaType`, 현재 `IT` 하나뿐이며 IT 고정 — IT 외 분야는 나중에 `IdeaType`을 확장), `it_category`(IT 세부 종류 `ItCategory`, varchar30 NOT NULL, 기본 `DEV_TOOLS_INFRA`; 검색 API 조합을 결정, `ItCategory.searchProviders()`), `status`(`ACTIVE`/`HOLD`), `keywords`(TEXT, 줄바꿈 구분, 최대 2개)·`keyword_origin`(`USER`/`AI`, varchar20; 키워드가 없으면 둘 다 null), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각), `needs_full_evaluation`(전체 평가 필요 플래그, 아래 "일일 재평가" 참고), `evaluation_status`(IDLE/QUEUED/RUNNING/FAILED)·`evaluation_started_at`·`evaluation_finished_at`·`last_evaluation_error_code`(비동기 평가 상태, 아래 "비동기 평가 실행"), `last_trend_id`(TREND를 마지막으로 평가한 글로벌 트렌드 `trends.id`. null이면 TREND 첫 평가 전이고, 내용·키워드가 바뀐 수정에서도 null로 돌아가 첫 평가부터 다시 한다. 같은 트렌드면 TREND 평가를 다시 하지 않는 근거).
@@ -51,7 +51,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `evaluations`: **항목(score) 단위** 평가 이력. 점수가 바뀔 때만 생성. `difference`(변화량), `score_after`(변경 후 점수), `weight`(평가 당시 가중치), `evidence_summary`(근거 요약), `created_at`(재평가 날짜), nullable `trend_id`(TREND 평가가 근거로 쓴 그날의 글로벌 트렌드, `trends`. 키워드 근거 4개 기준 평가는 항상 null).
 - `evaluation_references`: 평가 근거 출처 URL (평가 1 : N).
 - `idea_score_histories`: 평가 시점의 **총점 스냅샷**(`total_score`, `total_difference`, `evaluated_at`). 점수 이력 차트용. 가중치가 바뀌어도 당시 총점을 보존하려고 변화량 누적 대신 스냅샷으로 저장한다.
-- `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash`로 변경 감지 + `checked_at`(수집 확인 시각). 항목·소스 요약은 저장하지 않는다(근거 자료는 AI 요약 없이 원문 발췌를 평가에 직접 넣는다).
+- `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash`로 변경 감지 + `checked_at`(수집 확인 시각) + `evaluated_items`(점수에 반영한 항목의 url·title JSON). 항목·소스 요약은 저장하지 않는다(근거 자료는 AI 요약 없이 원문 발췌를 평가에 직접 넣는다).
 - `trends`: **글로벌 트렌드 1행/일**(아이디어·키워드와 무관). `summary`(최종 요약), `providers`(쉼표 목록), `content_hash`(상위 항목 제목·URL의 `SourceHasher` 해시), `created_at`. 상위 항목이 어제와 같으면 새 행을 만들지 않고 기존 행을 쓴다. `trend_items`: 상위 항목과 항목 요약(원문 저장 안 함, 같은 URL은 `summary-reuse-days` 안이면 재사용).
 - 외부 API는 6종(`ApiProvider`): 키워드 근거용 검색 조합은 IT 세부 종류(`ItCategory`)가 정하고, 글로벌 트렌드용 고정 3개는 `ApiProvider.TREND_PROVIDERS` = Hacker News · GitHub · Hugging Face(Semantic Scholar 제외).
 
@@ -78,8 +78,8 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 외부 자료(S): `S001` source 없음 / `S002` 미지원 provider / `S003` 허용되지 않는 URL(SSRF 차단).
 - 시연(D): `D001` 시연 API 꺼짐(403) / `D002` 시연 실행 쿨다운(429).
 - 아이디어(I): `I005` 평가가 대기·진행 중인 아이디어는 수정 불가(409) / `I006` 구조화 요청이 너무 잦음(429).
-- 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E004` 평가 대기열 가득(503) / `E005` 재시작으로 평가 중단(503, `FAILED` 상태의 `last_evaluation_error_code`로만 노출) / `E006` AI가 바쁨(503, 인터랙티브 레인이 한도·429/503으로 호출하지 못함 — 구조화는 사용자가 직접 입력하게 안내). AI 통신 실패 자체는 `G002`. (`E003`은 비동기 전환으로 없앴다: 이미 진행 중이면 에러 없이 현재 상태를 돌려준다.)
-- 코드 번호를 새로 만들기 전에 열려 있는 PR 브랜치의 `ErrorCode`도 확인해 번호가 겹치지 않게 한다 (예: 외부 자료 수집의 `S001·S002`). 현재 G001~G007, A001~A010, U001~U002, I001~I006, S001~S003, D001~D002, E001·E002·E004·E005·E006.
+- 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E004` 평가 대기열 가득(503) / `E005` 재시작으로 평가 중단(503, `FAILED` 상태의 `last_evaluation_error_code`로만 노출) / `E006` AI가 바쁨(503, 인터랙티브 레인이 한도·429/503으로 호출하지 못함 — 구조화는 사용자가 직접 입력하게 안내) / `E007` 오늘 이미 평가함(409, 평가는 아이디어마다 하루 한 번). AI 통신 실패 자체는 `G002`. (`E003`은 비동기 전환으로 없앴다: 이미 진행 중이면 에러 없이 현재 상태를 돌려준다.)
+- 코드 번호를 새로 만들기 전에 열려 있는 PR 브랜치의 `ErrorCode`도 확인해 번호가 겹치지 않게 한다 (예: 외부 자료 수집의 `S001·S002`). 현재 G001~G007, A001~A010, U001~U002, I001~I006, S001~S003, D001~D002, E001·E002·E004·E005·E006·E007.
 - **범용 예외로 새지 않게 한다**: 실패 경로는 `IllegalArgumentException`/`IllegalStateException`/메시지 없는 던지기 대신 `CustomException(ErrorCode)`로 던진다. 프레임워크 예외(`HttpMediaTypeNotSupportedException` 등)는 `GlobalExceptionHandler`에서 코드로 매핑한다. 새 ErrorCode를 만들면 `GlobalExceptionHandler`/서비스에서 실제로 쓰이는지, Swagger(`@ApiErrors`)에 나열됐는지 확인한다.
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
 - 리프레시 토큰 실패: 무효 `A008` / 만료 `A009` / 재사용 `A010`. 액세스 토큰 만료는 `A004` 유지(프론트 재발급 트리거). 재발급 흐름은 README의 프론트 연동 섹션에 순서도로 정리했다.
@@ -153,16 +153,17 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - AI 키워드 프롬프트 규칙: 영어 검색어 1~2개, 각 1~3단어, 아이디어 전체를 대표(한 항목에 치우치지 않음), 너무 일반적이지 않게. 한글이 섞여 오면 경고 로그만 남기고 그대로 쓴다.
 ### 일일 재평가 (`evaluation`)
 - **진입점**: 스케줄러 `EvaluationScheduler`(`@Scheduled`, 기본 `0 0 3 * * *` Asia/Seoul) → `DailyEvaluationBatch.runAll()` → ACTIVE 아이디어 id마다 `EvaluationQueueService.executeBatch(id)` → `IdeaEvaluationPipeline.evaluate(id)`. 수동 `POST /api/ideas/{id}/evaluate`와 저장 직후 자동 평가는 `EvaluationQueueService.submit`으로 큐에 넣어 같은 평가 실행을 탄다. HOLD는 대상에서 제외(수동은 `I004`).
+- **하루 한 번**: 평가는 아이디어마다 날짜(서버 기준 `LocalDate`)당 한 번이고, 자료 조회도 그때만 한다. 끝까지 마친 평가는 점수가 안 바뀌어도 `ideas.evaluated_on`에 날짜를 남긴다. 같은 날 다시 오면 수동 요청은 `E007`, 파이프라인(배치·자동·시연)은 자료 조회·가중치 적용 없이 `NO_CHANGE`다. 예외: ① 내용·키워드가 바뀌어 `needs_full_evaluation`이 켜지면 같은 날에도 전체 평가를 한다 ② 실패한 평가(A·B 중 하나라도)는 기록하지 않아 다시 요청할 수 있다 ③ 첫 TREND 평가 전인데 그날 트렌드를 만들지 못했으면 기록하지 않는다.
 - **아이디어 단위 격리**: 배치는 아이디어마다 try/catch로 로그만 남기고 계속한다. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 `IdeaEvaluationPipeline`는 `@Transactional`을 쓰지 않고 `TransactionTemplate`/`EvaluationRecorder`의 짧은 트랜잭션으로 저장한다. 아이디어 사이에는 `cue.evaluation.delay-ms`(기본 15초)만큼 쉰다(Gemini를 쓰지 않은 `NO_CHANGE`는 쉬지 않음). Gemini 호출 수는 아래 "호출량" 참고.
 - **호출량과 무료 티어 대응** — 무료 티어의 병목은 토큰(분당 250K)이 아니라 **요청 수**(Flash-Lite 분당 15회·일일 500회)다. 그래서 **키워드 근거 자료는 AI로 요약하지 않는다**: `SourceExcerptService`가 API 설명 + 원문 앞부분(`TextExcerpt`가 마크다운·HTML·배지·언어 목록을 걷어 냄, 항목당 `SOURCE_EXCERPT_CHARS` 기본 800자)을 만들어 평가 프롬프트에 직접 넣고, 아이디어 하나를 **평가 호출 1회**로 끝낸다(발췌는 저장하지 않는다). 글로벌 트렌드만 provider 항목을 **한 번의 일괄 호출**로 요약한다.
   - **B. 글로벌 트렌드(하루 1회 고정, 아이디어 수와 무관)**: 모든 provider의 항목을 **한 번의 일괄 요약**(`trend-item-summary-batch`) + 항목 요약 줄들로 **최종 요약 1회**(`global-trend-summary`) = **2회/일**(해시가 같으면 0회, 이전 요약을 전부 재사용하면 최종 요약 1회만). 예전의 provider별 요약 단계는 어디에도 쓰이지 않아 없앴다(`trend_sources` 제거). `TREND_TOP_N`은 호출 수가 아니라 일괄 호출의 입력 크기에만 영향을 준다.
   - **TREND 평가(아이디어당)**: 첫 평가는 바로 1회. 재평가는 **하루에 한 번**, 트렌드가 갱신돼 **새 트렌드 행이 만들어졌을 때만** 1회 — 상위 항목이 어제와 같으면 기존 트렌드 행을 그대로 써서 호출이 없다. `TREND_MIN_REEVAL_DAYS`(기본 1)는 마지막 TREND 평가에 쓴 트렌드와 최소 이만큼 떨어진 날짜의 트렌드여야 한다는 하한이다(같은 날 시연 `force` 등으로 만든 새 트렌드는 건너뜀, 0이면 평가). 간격 안이면 호출도 완료 표시(`last_trend_id`)도 하지 않는다.
-  - **A. 키워드 근거(아이디어당)**: 아이디어 세부 종류가 정하는 **provider 3개** × 키워드 **최대 2개** = **source 최대 6개**(조합은 PR #4의 세부 종류 enum이 결정: AI_ML = Hugging Face·Semantic Scholar·GitHub, DEV_TOOLS_INFRA = GitHub·Stack Exchange·Hacker News, WEB_APP_SERVICE = Hacker News·Stack Exchange·Wikipedia Pageviews, DATA_ANALYTICS = GitHub·Hugging Face·Semantic Scholar). 전체 평가는 성공한 모든 조회 결과로, 일반 재평가는 변경된 결과만으로 **1회** 평가한다(source 요약 호출 없음). 변경도 전체 평가 플래그도 없으면 0회.
+  - **A. 키워드 근거(아이디어당)**: 아이디어 세부 종류가 정하는 **provider 3개** × 키워드 **최대 2개** = **source 최대 6개**(조합은 PR #4의 세부 종류 enum이 결정: AI_ML = Hugging Face·Semantic Scholar·GitHub, DEV_TOOLS_INFRA = GitHub·Stack Exchange·Hacker News, WEB_APP_SERVICE = Hacker News·Stack Exchange·Wikipedia Pageviews, DATA_ANALYTICS = GitHub·Hugging Face·Semantic Scholar). 전체 평가는 성공한 모든 조회 결과로, 일반 재평가는 기존 평가 내역 + 추가·삭제된 항목으로 **1회** 평가한다(source 요약 호출 없음). 추가·삭제 항목도 전체 평가 플래그도 없으면 0회.
 
 | 상황 | 호출 수 |
 | --- | --- |
 | 글로벌 트렌드(하루 1회, 아이디어 수와 무관) | 일괄 1 + 최종 1 = **2회/일** (해시 같으면 0) |
-| 아이디어 1개, 근거 source 몇 개가 변경 | 근거 평가 **1회** (source 수와 무관) |
+| 아이디어 1개, 근거 항목이 추가·삭제됨 | 근거 평가 **1회** (source 수와 무관) |
 | 위 + TREND 평가 | 1 + 1 = **최악 2회/아이디어** |
 | 새 트렌드만 있음 | 1회 (TREND) |
 | 변경도 새 트렌드도 없음 | 0회 |
@@ -181,24 +182,26 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 배치/수동 → [아이디어 루프 전 1회] GlobalTrendService.today()  (키워드 없음, 하루 1회, 해시 같으면 재사용)
              │
              └─ 아이디어마다 IdeaEvaluationPipeline.evaluate(id)
-                 ① 대상 확인(I001/I004)·Gemini 확인(E001) → ② 새 턴(예약 가중치 적용, 총점 바뀌면 이력 스냅샷만)
-                 ③ 트렌드 확보(today) · source 조회(checkAll, 해시 변경 감지)
-                 ④ runA = 변경된 source 있음 or needs_full_evaluation / runB = 트렌드 있음 and last_trend_id ≠ 오늘 트렌드
+                 ① 대상 확인(I001/I004)·Gemini 확인(E001) → 오늘 이미 마쳤으면 여기서 NO_CHANGE
+                 ② 새 턴(예약 가중치 적용, 총점 바뀌면 이력 스냅샷만)
+                 ③ 트렌드 확보(today) · source 조회(checkAll) · 반영해 둔 항목과 비교
+                 ④ runA = 추가·삭제된 항목 있음 or needs_full_evaluation / runB = 트렌드 있음 and last_trend_id ≠ 오늘 트렌드
                     둘 다 아니면 NO_CHANGE (평가·이력·날짜 갱신 없음)
-                 ⑤ A: 전체 평가는 성공한 모든 source, 일반 재평가는 변경된 source만 선택 → 원문 발췌 → 근거 4개 기준 평가 1회 (trend_id 없음)
+                 ⑤ A: 전체 평가는 성공한 모든 source, 재평가는 새 항목만 → 원문 발췌 → 근거 4개 기준 평가 1회 (trend_id 없음)
                     B: TrendEvaluator — 4항목 + 오늘 트렌드 → TREND 첫 평가(0~100)/재평가(±10) (trend_id = 오늘 트렌드)
                  ⑥ 성공한 쪽의 결과를 한 트랜잭션(recordResults)으로 저장: 총점 재계산·이력 1행·last_evaluated_at은 합쳐서 한 번
 ```
 
   - **독립 실패**: A와 B를 각자 try로 실행한다. 한 쪽이 실패해도 다른 쪽 결과는 저장하고(그 뒤 실패 예외를 던진다 → 배치는 failed로 센다), 실패한 쪽은 다음 실행에서 다시 한다: A는 source 해시를 되돌리고 `needs_full_evaluation`을 유지, B는 `last_trend_id`를 갱신하지 않는다. 둘 다 실패하면 둘 다 재시도 대상이다.
   - 변경 감지 이전의 `SourceCheckService.checkAll`은 Gemini를 쓰지 않는다. 트렌드를 만들지 못한 날(`today()`가 null)은 B만 건너뛰고 A는 정상 진행하며, 30분 안에는 수집을 다시 시도하지 않는다.
-  - A의 항목 하나가 원문 읽기에서 실패하면 그 항목은 API 설명만으로 남기고(위 "원문 읽기 실패 처리") 평가는 진행한다. 재평가에 넘기는 `changedItems`는 새로 읽은 상위 N개의 **원문 발췌**(`SourceExcerptService`, 항목당 `SOURCE_EXCERPT_CHARS`, 평가 프롬프트 최대 30줄)다.
+  - A의 항목 하나가 원문 읽기에서 실패하면 그 항목은 API 설명만으로 남기고(위 "원문 읽기 실패 처리") 평가는 진행한다. 재평가에 넘기는 것은 기준별 최근 평가 3건(`pastEvaluations`), 새로 추가된 항목의 **원문 발췌**(`newItems`, 항목당 `SOURCE_EXCERPT_CHARS`, 최대 30줄), 삭제된 항목의 제목·URL(`removedItems`)이다. 그대로인 항목은 다시 읽지도 보내지도 않는다.
+  - **추가·삭제 판정**(`EvidenceChanges`): `sources.evaluated_items`(점수에 마지막으로 반영한 `url`·`title` JSON)와 이번 조회를 **아이디어 전체 단위의 URL**로 비교한다. 다른 키워드·provider에 남아 있으면 삭제가 아니고, 순위·제목·지표만 바뀌면 평가하지 않는다. 조회에 실패한 source의 항목은 남아 있는 것으로 본다. 반영 기록은 근거 평가가 성공하면 `recordResults`와 같은 트랜잭션에서 바뀌고, 실패하면 그대로라 다음에 같은 차이를 다시 평가한다. 기록이 없는 source는 해시가 같으면 이미 반영한 것으로, 다르면 전부 새 항목으로 본다(시연 `force`가 기록을 지우는 이유).
   - B에서 점수가 안 바뀌어도(차이 0) 그 트렌드로 평가했다는 표시(`last_trend_id`)는 남겨 같은 트렌드로 다시 호출하지 않는다.
 - **AI 응답 서버 검증** (호출은 `responseMimeType=application/json`+`responseSchema`로 형식 강제). 공통: 변화량·점수는 정수로 반올림 / 근거 요약 300자(`MAX_SUMMARY_CHARS`) 초과는 `…`로 자름 / `referenceUrls`는 **입력으로 준 자료의 URL만** 남김(그 밖은 버림) / 0~100 제한은 `Score.applyDifference`.
-  - 키워드 근거 4개 기준(`EvidenceEvaluator`): type이 근거 4개 enum이 아니면(TREND 포함) 버림, 같은 type 중복 버림 / 재평가는 기준당 ±10(`MAX_DIFFERENCE`) 클램프, 0이면 버림, 근거 요약이 비면 그 항목 버림(초기 평가는 점수를 살리려고 빈 요약에 기본 문구) / 초기 평가는 점수를 0~100으로 제한해 현재 점수와의 차이로 기록(±10 미적용). 프롬프트의 `{{items}}`/`{{changedItems}}`는 한 줄에 한 건 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(없는 값 `-`, 제목 120자·요약 300자 상한, 전체 15건 상한, `SourceTextFormat`)이다.
+  - 키워드 근거 4개 기준(`EvidenceEvaluator`): type이 근거 4개 enum이 아니면(TREND 포함) 버림, 같은 type 중복 버림 / 재평가는 기준당 ±10(`MAX_DIFFERENCE`) 클램프, 0이면 버림, 근거 요약이 비면 그 항목 버림(초기 평가는 점수를 살리려고 빈 요약에 기본 문구) / 초기 평가는 점수를 0~100으로 제한해 현재 점수와의 차이로 기록(±10 미적용). 프롬프트의 `{{items}}`/`{{newItems}}`는 한 줄에 한 건 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(없는 값 `-`, 제목 120자·요약 300자 상한, 전체 30건 상한, `SourceTextFormat`)이다.
   - TREND(`TrendEvaluator`): 첫 평가(`last_trend_id`가 null)는 `score`만 읽어 0~100으로 제한하고 현재 점수와의 차이로 기록, 재평가는 `difference`만 읽어 ±10 클램프(0이거나 근거 요약이 비면 변화 없음). 모드에 맞지 않는 필드는 무시한다. 근거 URL은 그날 트렌드 항목의 URL만.
 - **첫 평가 / 전체 평가**: 두 갈래 각각 플래그가 있다. 근거 4개 기준은 `ideas.needs_full_evaluation`, TREND는 `ideas.last_trend_id`가 null인지다. 새 아이디어와 **4항목 내용이 실제로 바뀐 수정**(`Idea.edit`)에서 둘 다 "첫 평가 필요"로 돌아간다. 근거 쪽은 **해시가 같은 소스도 포함해 조회에 성공한 모든 소스의 상위 항목**으로 `initial-evaluation`(기준별 0~100)을 한 번 수행한다. 기존 아이디어를 근거와 함께 다시 평가할 때는 이 플래그만 켜고 수동 평가나 배치를 실행하면 된다. TREND 쪽은 `last_trend_id`가 null이고 오늘 트렌드가 있으면 `trend-evaluation` 첫 평가를 한다. 기록 규칙은 같다: 점수 → `현재 점수와의 차이`로 바꿔 `recordResults`에 넘기므로 점수가 바뀐 기준마다 `Evaluation` 행(첫 평가는 `difference = 점수`, `score_after = 점수`)이 생기고 총점 이력 스냅샷 1행과 `last_evaluated_at`이 갱신된다. 점수가 하나도 안 바뀌면(수정 후 같은 점수) 아무것도 기록하지 않지만 완료 표시는 남긴다. 실패하면 표시를 남기지 않아 다음 배치에서 재시도한다(HOLD인 동안은 평가 안 됨).
-- **프롬프트 계약**: `prompts/{initial-evaluation,re-evaluation,trend-item-summary-batch,global-trend-summary,trend-evaluation}.txt`. 플레이스홀더·출력 JSON은 `docs/ai-prompts.md`가 정본이다. 코드가 채우는 값: `items`(trend-item-summary-batch), `items`(global-trend-summary; 항목 요약 줄들), `target/problem/solution/expectation/items`(initial — 4개 기준만, items = 항목당 원문 발췌), `…/currentScores/changedItems`(re — 4개 기준만), `target/problem/solution/expectation/currentTrendScore/trendSummary/trendItems`(trend-evaluation). 출력 스키마는 `responseSchema`로 강제한다.
+- **프롬프트 계약**: `prompts/{initial-evaluation,re-evaluation,trend-item-summary-batch,global-trend-summary,trend-evaluation}.txt`. 플레이스홀더·출력 JSON은 `docs/ai-prompts.md`가 정본이다. 코드가 채우는 값: `items`(trend-item-summary-batch), `items`(global-trend-summary; 항목 요약 줄들), `target/problem/solution/expectation/items`(initial — 4개 기준만, items = 항목당 원문 발췌), `…/currentScores/pastEvaluations/newItems/removedItems`(re — 4개 기준만), `target/problem/solution/expectation/currentTrendScore/trendSummary/trendItems`(trend-evaluation). 출력 스키마는 `responseSchema`로 강제한다.
 - 첫 평가·전체 평가의 응답에는 기준별 `referenceUrls` 배열이 필수다. 실제로 인용한 입력 URL을 담고, 인용한 자료가 없으면 빈 배열을 반환한다. 서버는 수집 자료에 없는 URL을 버린다.
 - Gemini 평가 호출은 응답이 길어 `GEMINI_TIMEOUT_SECONDS` 기본 10초가 빠듯할 수 있다. 시간 초과가 잦으면 30 이상으로 올린다.
 
@@ -232,8 +235,8 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 ### 시연용 API (`demo`, `POST /api/demo/evaluations/run`)
 - **목적**: 화면 버튼으로 "지금 조회·평가"를 수동 실행하는 시연용. 인증 정책은 그대로(미인증 `A006`). 요청 본문은 선택 `{"force": boolean}`(기본 false).
 - **안전장치**: `cue.demo.enabled`(`DEMO_API_ENABLED`, **기본 false**)가 꺼져 있으면 `D001`(403 — 기존 규칙에서 권한 없음 `A002`가 403이라 맞췄다). 켜져 있어도 대상은 **로그인 사용자 본인의 ACTIVE 아이디어뿐**이다(다른 사용자·HOLD는 제외, 무료 한도 보호). 사용자별 쿨다운 `cue.demo.cooldown-seconds`(기본 30초)는 메모리 맵으로 단순하게 구현했고 안에 다시 누르면 `D002`(429). 검증에 실패(E001·E004)한 요청은 쿨다운을 소비하지 않는다. **경고**: 이 API는 평가 호출을 대량으로 만들 수 있어(특히 `force`) Gemini 무료 한도를 소진시킬 수 있다. 시연 때만 켜고 운영에서는 끈다.
-- **동작**: ① Gemini 불가 `E001` ② 트렌드 갱신이 필요하면(`force` 이거나 오늘 트렌드가 아직 없음) `EvaluationQueueService.submitTrendRefresh(force)`로 **같은 단일 실행기·전역 락에 먼저** 넣는다(그래서 이후 평가는 새 트렌드를 쓰고, 응답은 기다리지 않는다; `trendRefreshed`는 "큐에 넣었는지") ③ 본인 ACTIVE 아이디어마다: 이미 `QUEUED`/`RUNNING`이면 `skipped`(`ALREADY_QUEUED`/`ALREADY_RUNNING`, 멱등), 아니면 `EvaluationQueueService.submit`(기존 조건부 UPDATE 상태 전이 재사용)으로 큐에 넣는다. 대기열이 가득 차 하나도 넣지 못하면 `E004`, 일부만 못 넣으면 `skipped`에 `QUEUE_FULL`.
-- **`force=true`**: `GlobalTrendService.refresh(true)`가 하루 1회·해시 같으면 재사용 규칙을 무시하고 새 트렌드 행으로 다시 수집·요약한다(같은 URL 항목 요약 재사용은 유지해 호출을 아낀다). 각 아이디어의 모든 source 해시를 `FORCED-REFRESH`(실제 SHA-256 hex가 될 수 없는 값)로 바꿔 **큐에 넣기 전에** 저장하므로 다음 조회에서 "변경 감지됨"이 되어 자료를 다시 읽고 평가한다. 해시를 `null`로 비우면 "첫 조회는 기준만 기록"이라 변경으로 안 잡혀서 이 방식을 택했다. 평가가 실패하면 기존 규칙대로 해시를 직전 값(`FORCED-REFRESH`)으로 되돌려 다음에도 변경으로 감지된다.
+- **동작**: ① Gemini 불가 `E001` ② 오늘 트렌드가 아직 없으면 `EvaluationQueueService.submitTrendRefresh()`로 **같은 단일 실행기·전역 락에 먼저** 넣는다(그래서 이후 평가는 새 트렌드를 쓰고, 응답은 기다리지 않는다; `trendRefreshed`는 "큐에 넣었는지") ③ 본인 ACTIVE 아이디어마다: 이미 `QUEUED`/`RUNNING`이면 `skipped`(`ALREADY_QUEUED`/`ALREADY_RUNNING`, 멱등), 오늘 이미 평가했으면 `skipped`(`ALREADY_EVALUATED_TODAY`), 아니면 `EvaluationQueueService.submit`(기존 조건부 UPDATE 상태 전이 재사용)으로 큐에 넣는다. 대기열이 가득 차 하나도 넣지 못하면 `E004`, 일부만 못 넣으면 `skipped`에 `QUEUE_FULL`.
+- **`force=true`**: **하루 한 번 제한은 그대로**다(오늘 평가한 아이디어는 건너뛰고 트렌드도 다시 수집하지 않는다). 오늘 아직 평가하지 않은 아이디어의 모든 source 해시를 `FORCED-REFRESH`(실제 SHA-256 hex가 될 수 없는 값)로 바꾸고 반영 기록(`evaluated_items`)을 지워 **큐에 넣기 전에** 저장하므로, 조회한 자료 전부가 새 자료로 평가된다. 평가가 실패하면 해시는 직전 값(`FORCED-REFRESH`)으로 되돌아가고 반영 기록은 빈 채라 다음에도 전부 새 자료로 본다.
 - **수정 차단과의 관계**: 큐에 들어간 아이디어는 `QUEUED`→`RUNNING`→끝날 때까지 `PATCH`가 `I005`로 거절된다(앞의 "평가 중 수정 차단"). 시연 실행 직후 해당 화면에서 수정 버튼을 비활성화해야 한다.
 - **한계**: 쿨다운은 인스턴스 메모리라 재시작·다중 인스턴스에서는 공유되지 않는다(시연용이라 단순하게 둠).
 
@@ -244,7 +247,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `GET /api/ideas?status=ACTIVE|HOLD&sort=TOTAL|RECENT_RISE`. 기본은 `ACTIVE` + `TOTAL`(총점순). `RECENT_RISE`는 `last_difference` 내림차순(없으면 뒤). 보류 탭은 `status=HOLD`.
 
 ### 외부 자료 변경 감지
-- **변경 감지 = `content_hash` 비교**: `Source.updateHash(newHash)`가 이전 해시와 다르면 true. **첫 조회(이전 해시 없음)도 `CHANGED`로 항목을 돌려준다**(해시를 기록하면서). 첫 조회를 "변경 없음"으로 처리하면 첫 평가에 외부 자료가 하나도 들어가지 않아 근거 문서가 0개가 된다. 해시는 바뀌지 않는 값인 **제목·URL만** 쓰고 url 기준으로 정렬한 뒤 계산한다(`SourceHasher`: 요약·지표·날짜·순위는 넣지 않아 순위만 바뀌거나 요약만 바뀐 것은 변경이 아니다). 변경이 감지되면 새 항목만 가려내지 않고 **상위 N개를 전부 다시 읽고 다시 요약해 덮어쓴다**(직전 URL diff 방식은 폐기). 변경이 있을 때만 재평가를 트리거한다.
+- **변경 감지 = `content_hash` 비교**: `Source.updateHash(newHash)`가 이전 해시와 다르면 true. **첫 조회(이전 해시 없음)도 `CHANGED`로 항목을 돌려준다**(해시를 기록하면서). 첫 조회를 "변경 없음"으로 처리하면 첫 평가에 외부 자료가 하나도 들어가지 않아 근거 문서가 0개가 된다. 해시는 바뀌지 않는 값인 **제목·URL만** 쓰고 url 기준으로 정렬한 뒤 계산한다(`SourceHasher`: 요약·지표·날짜·순위는 넣지 않아 순위만 바뀌거나 요약만 바뀐 것은 변경이 아니다). 일반 재평가는 해시 변경이 아니라 반영해 둔 항목과 비교한 **URL 추가·삭제**가 있을 때 실행하고, 새 항목만 읽는다(위 "추가·삭제 판정").
 - `SourceClient`(provider당 구현체 1개, 빈으로 등록하면 자동 인식)는 두 가지를 한다: `search(keyword)`로 상위 `cue.source.top-n`(기본 5)개를 `SourceItem(title,url,summary,publishedAt,metrics)`로 반환, `fetchContent(item)`으로 항목의 **원문**을 텍스트로 읽는다(기본 구현은 빈 문자열).
 
 | provider | 조회 정렬 (급상승 기준) | 원문 |
@@ -280,7 +283,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순, `data.items`) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량·근거 요약·출처, 최신순, `data.items`) |
 | POST | `/api/demo/evaluations/run` | ✓ | 시연용 "지금 조회·평가" (`cue.demo.enabled`, 아래 "시연용 API"). 응답 `{queued, skipped, trendRefreshed}`, 202 |
-| POST | `/api/ideas/{id}/evaluate` | ✓ | 평가 비동기 요청 — 즉시 **202**. 본인만(`I002`), HOLD `I004`, Gemini 불가 `E001`, 대기열 가득 `E004`는 동기 검사. 응답 `{status: QUEUED|RUNNING, idea}`(이미 진행 중이면 멱등). 결과는 `GET /api/ideas/{id}`의 `evaluationStatus` 폴링 |
+| POST | `/api/ideas/{id}/evaluate` | ✓ | 평가 비동기 요청 — 즉시 **202**. 본인만(`I002`), HOLD `I004`, 오늘 이미 평가함 `E007`, Gemini 불가 `E001`, 대기열 가득 `E004`는 동기 검사. 응답 `{status: QUEUED|RUNNING, idea}`(이미 진행 중이면 멱등). 결과는 `GET /api/ideas/{id}`의 `evaluationStatus` 폴링 |
 
 Swagger: `/swagger-ui.html` (Authorize 버튼에 accessToken 입력), OpenAPI JSON: `/v3/api-docs`, 헬스체크: `/actuator/health`.
 
@@ -307,7 +310,7 @@ cd CUE/backend
 | --- | --- |
 | 호스트/포트 | `localhost:5433` (로컬 PostgreSQL이 5432를 써도 충돌하지 않게 5433으로 매핑) |
 | DB / 계정 / 비밀번호 | `cue` / `cue` / `cue` |
-| 초기화 | `docker compose down -v` 후 다시 실행 (Flyway가 스키마를 새로 만든다). **`V1__init.sql`이 바뀐 PR을 받았을 때도 필요하다.** |
+| 초기화 | `docker compose down -v` 후 다시 실행 (Flyway가 스키마를 새로 만든다). 지금의 V1과 다른 예전 V1으로 만든 로컬 DB는 한 번 필요하다. 확정 후의 `V2__*.sql` 이상은 자동 적용되므로 초기화가 필요 없다. |
 
 5433도 이미 쓰는 중이면 `DB_PORT=원하는포트`로 compose를 띄우고 `DB_URL`의 포트를 맞춘다. DB 컨테이너는 헬스체크(`pg_isready`)가 있고 타임존은 `Asia/Seoul`이다.
 
@@ -346,9 +349,9 @@ cd CUE/backend
 - 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 토큰(위 선택 값)과 Gemini 등 키는 이 표에 변수 이름만 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
 
 ### 협업 시 주의
-- **`V1__init.sql` 충돌**: 개발 중에는 모두가 이 한 파일을 고치므로 충돌이 잦다. 스키마 변경 PR은 작게 유지하고 머지 전에 `main`을 반영한다. 스키마 확정 후에는 이 파일을 고정하고 `V2__*.sql`부터 추가한다.
-- 엔티티를 바꾸면 `V1__init.sql`도 같은 PR에 넣는다 (`ddl-auto: validate`라서 어긋나면 서버가 안 뜬다).
-- 에러 코드(`ErrorCode`)와 `V1__init.sql`은 충돌이 잦은 파일이다. PR을 작게 유지하고 자주 `main`을 반영한다.
+- **마이그레이션 번호 충돌**: 여러 PR이 같은 `V2__` 번호를 만들 수 있다. 스키마 변경 PR은 작게 유지하고 머지 전에 `main`을 반영해 번호를 "마지막 버전 + 1"로 맞춘다. 이미 머지된 파일은 고치지 않는다.
+- 엔티티를 바꾸면 새 `V{n}__*.sql`도 같은 PR에 넣는다 (`ddl-auto: validate`라서 어긋나면 서버가 안 뜬다).
+- 에러 코드(`ErrorCode`)와 마이그레이션 번호는 충돌이 잦다. PR을 작게 유지하고 자주 `main`을 반영한다.
 - 통합 테스트는 Docker가 켜져 있어야 통과한다.
 - 프론트 연동: CORS는 설정돼 있다. 프론트 주소가 기본값(5173/3000)이 아니면 `CORS_ALLOWED_ORIGINS`에 추가한다.
 
@@ -375,10 +378,10 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - 코드 변경 시 테스트를 함께 추가/수정하고 `cd backend && ./gradlew test`를 통과시킨 뒤 알린다.
 - 새 API/DTO/에러 코드는 위 "Swagger 작성 규칙"을 지키고, `ApiAuthPolicyTest.protectedEndpoints()`에 엔드포인트를 추가한다.
 - 동작이 바뀌면 루트 `README.md`의 Backend 섹션과 이 문서를 함께 갱신한다.
-- 스키마 변경은 확정 전까지 `V1__init.sql`을 수정하고 PR에 "DB 초기화 필요"를 적는다. 확정 후에는 새 버전 파일만 추가한다.
+- 스키마 변경은 `V1__init.sql`을 수정하지 않고 새 `V{n}__*.sql` 파일로만 추가한다. 이미 머지된 마이그레이션 파일은 고치지 않는다.
 
 ## 미구현·TODO
-- 평가 호출 보호: 수동 `POST /api/ideas/{id}/evaluate`는 대기열 상한(`E004`)만 있고 사용자별 호출 횟수 제한이 없어 Gemini 무료 티어를 소진시킬 수 있다(사용자당 쿨다운/일일 횟수 제한 필요 여부는 **열린 결정**). 429 응답 재시도/백오프도 아직 없다(실패하면 다음 배치로 넘김).
+- 평가 호출 보호: 평가는 아이디어마다 하루 한 번(`E007`)이다. 다만 내용·키워드를 고치면 같은 날 다시 평가할 수 있고 사용자별 아이디어 수·수정 횟수 제한은 없다(**열린 결정**). 429 응답 재시도/백오프도 아직 없다(실패하면 다음 배치로 넘김).
 - 글로벌 트렌드 열린 결정: ① 트렌드가 매일 조금씩 바뀌어 거의 매일 아이디어 수만큼 TREND 호출이 생기던 문제는 하루 1회 재평가(`TREND_MIN_REEVAL_DAYS`, 기본 1: 같은 날 중복 트렌드 방지, 트렌드 내용이 어제와 같으면 호출 없음)로 정리했다. 남은 후보: 아이디어 약 10개를 한 호출로 묶어 점수를 받기(배치 전용 사전 단계, 호출 N → N/10), 요약 유사도 임계값 ② 트렌드 provider 3개·정렬 기준·`days=7`은 제안값이라 팀 확정 필요 ③ (해결됨) 근거 4개 기준 평가는 항목·소스 요약 없이 원문 발췌를 직접 넣는다 ④ 트렌드 API(`GET /api/trends/latest` 등)를 프론트에 노출할지 — 아직 컨트롤러 없음.
 - `GeminiIdeaAnalyzer`가 `GeminiClient`와 HTTP 호출 코드를 중복한다(공통화 가능). 분석기는 `GEMINI_MIN_INTERVAL_MS` 적용 대상이 아니다.
 - **열린 결정**: 트렌드 provider 3개·정렬 기준은 제안값이다. 해시에 넣는 필드(제목·URL)와 상위 N건 수는 평가 정책과 함께 재검토. 점수 앵커·±10 한도·자료 개수 상한은 `docs/ai-prompts.md` "열린 결정" 참고. IT 외 분야를 추가할 때 `IdeaType`을 확장한다.

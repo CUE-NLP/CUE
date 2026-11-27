@@ -11,6 +11,7 @@ import com.cue.idea.repository.IdeaRepository;
 import com.cue.source.repository.SourceRepository;
 import com.cue.trend.service.GlobalTrendService;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,8 +25,9 @@ import org.springframework.stereotype.Service;
  * 필요하면 글로벌 트렌드 수집도 같은 큐 맨 앞에 넣는다(다른 사용자 아이디어는 건드리지 않는다). 상태 전이는 수동 평가·배치와 같은 조건부 UPDATE를 쓰고,
  * 큐에 들어간 아이디어는 끝날 때까지 수정할 수 없다(I005). 평가 동안 트랜잭션을 잡지 않는다.
  *
- * <p>{@code force=true}면 트렌드 하루 1회·해시 캐시를 무시하고 다시 수집하고, 각 아이디어의 source 해시를 실제 해시와 다른 값으로 바꿔
- * 다음 조회에서 "변경 감지됨"이 되게 한다(자료를 다시 읽고 평가한다). 호출 수가 많아 Gemini 무료 한도를 쉽게 소진하므로 시연용으로만 켠다.
+ * <p>하루 한 번 제한은 시연에도 적용한다: 오늘 이미 평가한 아이디어는 건너뛰고({@code ALREADY_EVALUATED_TODAY}), 트렌드는 오늘 것이 없을 때만 만든다.
+ * {@code force=true}면 오늘 아직 평가하지 않은 아이디어의 source 해시를 바꾸고 반영 기록을 지워, 조회한 자료 전부를 새 자료로 다시 읽고 평가한다.
+ * 호출 수가 많아 Gemini 무료 한도를 쉽게 소진하므로 시연용으로만 켠다.
  */
 @Slf4j
 @Service
@@ -66,9 +68,9 @@ public class DemoEvaluationService {
         List<Long> ideaIds = ideas.findIdsByUserIdAndStatus(userId, IdeaStatus.ACTIVE); // HOLD 제외, 본인 것만
 
         // 트렌드를 먼저 큐에 넣어 이후 평가가 새 트렌드를 쓰게 한다
-        boolean trendRefreshed = force || !globalTrend.isCurrent();
+        boolean trendRefreshed = !globalTrend.isCurrent();
         if (trendRefreshed) {
-            jobs.submitTrendRefresh(force);
+            jobs.submitTrendRefresh();
         }
 
         List<Long> queued = new ArrayList<>();
@@ -78,6 +80,11 @@ public class DemoEvaluationService {
             EvaluationStatus current = ideas.findEvaluationStatus(id).orElse(EvaluationStatus.IDLE);
             if (current == EvaluationStatus.QUEUED || current == EvaluationStatus.RUNNING) {
                 skipped.add(new DemoRunResponse.Skipped(id, current == EvaluationStatus.QUEUED ? "ALREADY_QUEUED" : "ALREADY_RUNNING"));
+                continue;
+            }
+            LocalDate today = LocalDate.now();
+            if (ideas.findById(id).map(i -> i.dailyEvaluationDone(today)).orElse(false)) {
+                skipped.add(new DemoRunResponse.Skipped(id, "ALREADY_EVALUATED_TODAY"));
                 continue;
             }
             if (force) {

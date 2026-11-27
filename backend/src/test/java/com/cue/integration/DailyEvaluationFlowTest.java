@@ -124,6 +124,7 @@ class DailyEvaluationFlowTest {
 
     /** 파이프라인을 직접(동기로) 실행하고 {status, changed, idea} 형태로 돌려준다. 비동기 API는 AsyncEvaluationFlowTest에서 본다. */
     private tools.jackson.databind.JsonNode evaluate(String token, long id) throws Exception {
+        nextDay();
         var run = dailyEvaluation.evaluate(id);
         var out = mapper.createObjectNode();
         out.put("status", run.status().name());
@@ -133,7 +134,13 @@ class DailyEvaluationFlowTest {
         return out;
     }
 
+    /** 지난 평가를 하루 전 일로 만든다 (평가는 아이디어마다 하루에 한 번). */
+    private void nextDay() {
+        jdbc.update("update ideas set evaluated_on = evaluated_on - 1");
+    }
+
     private com.cue.global.error.ErrorCode evaluateFailure(long id) {
+        nextDay();
         return assertThrows(com.cue.global.error.CustomException.class, () -> dailyEvaluation.evaluate(id)).getErrorCode();
     }
 
@@ -209,6 +216,43 @@ class DailyEvaluationFlowTest {
         assertNotNull(jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
         assertEquals(5, evaluationCount(id));
         assertFalse(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id));
+    }
+
+    // ===== 하루 한 번 =====
+
+    @Test
+    void 같은_날에는_배치가_자료_조회도_평가도_다시_하지_않고_다음_날_다시_평가한다() throws Exception {
+        String token = signUpAndLogin("once@cue.com");
+        long id = createIdea(token, FULL);
+        batch.runAll();
+        clearInvocations(sourceCheck, gemini);
+        when(sourceCheck.checkAll(id)).thenReturn(List.of(changed()));
+
+        batch.runAll();
+
+        verify(sourceCheck, never()).checkAll(anyLong());
+        verify(gemini, never()).generateJson(anyString(), anyMap());
+
+        nextDay();
+        batch.runAll();
+        verify(sourceCheck).checkAll(id);
+        verify(gemini).generateJson(anyString(), anyMap());
+    }
+
+    @Test
+    void 첫_TREND_평가를_못_한_날은_마친_것으로_치지_않아_같은_날_다시_평가할_수_있다() throws Exception {
+        String token = signUpAndLogin("notrend@cue.com");
+        long id = createIdea(token, FULL);
+        TrendSnapshot trend = globalTrend.today();
+        when(globalTrend.today()).thenReturn(null);
+        dailyEvaluation.evaluate(id);
+        assertNull(jdbc.queryForObject("select evaluated_on from ideas where id = ?", java.sql.Date.class, id));
+
+        when(globalTrend.today()).thenReturn(trend);
+        dailyEvaluation.evaluate(id);
+
+        assertNotNull(jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
+        assertNotNull(jdbc.queryForObject("select evaluated_on from ideas where id = ?", java.sql.Date.class, id));
     }
 
     // ===== 자료 변화 → 재평가 =====

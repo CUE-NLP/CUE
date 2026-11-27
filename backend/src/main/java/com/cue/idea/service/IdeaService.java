@@ -25,6 +25,7 @@ import com.cue.source.entity.Source;
 import com.cue.source.repository.SourceRepository;
 import com.cue.user.repository.UserRepository;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -138,11 +139,15 @@ public class IdeaService {
         return toResponse(findOwned(userId, ideaId));
     }
 
-    /** 평가 가능한지 확인한다: 없으면 I001, 남의 것이면 I002, 보류면 I004. */
+    /** 평가를 요청할 수 있는지 확인한다: 없으면 I001, 남의 것이면 I002, 보류면 I004, 오늘 이미 평가했으면 E007. */
     @Transactional(readOnly = true)
     public void assertEvaluable(Long userId, Long ideaId) {
-        if (!findOwned(userId, ideaId).isActive()) {
+        Idea idea = findOwned(userId, ideaId);
+        if (!idea.isActive()) {
             throw new CustomException(ErrorCode.IDEA_NOT_ACTIVE);
+        }
+        if (idea.dailyEvaluationDone(LocalDate.now())) {
+            throw new CustomException(ErrorCode.EVALUATION_ALREADY_DONE_TODAY);
         }
     }
 
