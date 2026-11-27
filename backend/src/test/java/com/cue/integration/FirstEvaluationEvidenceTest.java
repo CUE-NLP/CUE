@@ -12,6 +12,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.cue.evaluation.service.IdeaEvaluationPipeline;
 import com.cue.global.ai.GeminiClient;
+import com.cue.global.error.CustomException;
+import com.cue.global.error.ErrorCode;
 import com.cue.source.client.SourceClient;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
@@ -22,6 +24,7 @@ import com.cue.trend.service.GlobalTrendService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeEach;
@@ -60,7 +63,10 @@ class FirstEvaluationEvidenceTest {
     @ServiceConnection
     static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17");
 
-    /** 모든 provider가 항목 1개를 돌려주는 가짜 외부 API로 실제 SourceCheckService를 만든다. */
+    /** GitHub 검색 결과를 테스트에서 바꾸기 위한 값. 비어 있으면 기본 항목 1개. */
+    private static final List<String> githubNames = new CopyOnWriteArrayList<>();
+
+    /** provider마다 항목을 돌려주는 가짜 외부 API로 실제 SourceCheckService를 만든다. */
     @TestConfiguration
     static class FakeSources {
         @Bean
@@ -71,6 +77,10 @@ class FirstEvaluationEvidenceTest {
                 clients.add(new SourceClient() {
                     public ApiProvider provider() { return provider; }
                     public List<SourceItem> search(String keyword) {
+                        if (provider == ApiProvider.GITHUB && !githubNames.isEmpty()) {
+                            return githubNames.stream().map(n -> new SourceItem("저장소 " + n, "https://fake.test/repo_" + n, "설명 " + n))
+                                    .toList();
+                        }
                         return List.of(new SourceItem("자료 " + provider, "https://fake.test/" + provider, "설명 " + provider));
                     }
                 });
@@ -87,12 +97,16 @@ class FirstEvaluationEvidenceTest {
     @MockitoBean GlobalTrendService globalTrend;
     @MockitoBean SourceExcerptService sourceExcerpt;
 
-    private final List<String> prompts = new ArrayList<>();
+    private final List<String> prompts = new CopyOnWriteArrayList<>();
+    private volatile boolean reEvaluationFails;
+    private String token;
 
     @BeforeEach
     void setUp() {
         jdbc.execute("TRUNCATE users, trends RESTART IDENTITY CASCADE");
         prompts.clear();
+        githubNames.clear();
+        reEvaluationFails = false;
         when(gemini.available()).thenReturn(true);
         when(globalTrend.today()).thenReturn(null); // TREND 갈래는 건너뛴다
         when(sourceExcerpt.excerpt(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -100,6 +114,14 @@ class FirstEvaluationEvidenceTest {
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             String prompt = inv.getArgument(0);
             Map<String, Object> schema = inv.getArgument(1);
+            if (mapper.valueToTree(schema).at("/properties/changes").isObject()) { // 재평가
+                prompts.add(prompt);
+                if (reEvaluationFails) {
+                    throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+                }
+                return mapper.readTree("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":4,"
+                        + "\"evidenceSummary\":\"새 저장소가 나타났어요.\",\"referenceUrls\":[\"https://fake.test/repo_f\"]}]}");
+            }
             JsonNode required = mapper.valueToTree(schema).at("/properties/scores/items/required");
             assertTrue(required.valueStream().anyMatch(field -> field.asString().equals("referenceUrls")),
                     "Gemini 초기 평가 응답에 referenceUrls 배열을 요구해야 한다");
@@ -121,7 +143,7 @@ class FirstEvaluationEvidenceTest {
         String login = mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"first@cue.com\",\"password\":\"password123\"}"))
                 .andReturn().getResponse().getContentAsString();
-        String token = "Bearer " + mapper.readTree(login).get("data").get("accessToken").asString();
+        token = "Bearer " + mapper.readTree(login).get("data").get("accessToken").asString();
         String res = mvc.perform(post("/api/ideas").header("Authorization", token).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\",\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}"))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
@@ -136,7 +158,7 @@ class FirstEvaluationEvidenceTest {
         pipeline.evaluate(id);
 
         String evaluationPrompt = prompts.stream().filter(p -> p.contains("[자료 목록]")).findFirst().orElseThrow();
-        assertFalse(evaluationPrompt.contains("(변경된 자료 없음)"), "첫 평가에 외부 자료가 하나도 들어가지 않았다");
+        assertFalse(evaluationPrompt.contains("(수집된 자료 없음)"), "첫 평가에 외부 자료가 하나도 들어가지 않았다");
         assertTrue(evaluationPrompt.contains("https://fake.test/"), "조회한 자료의 URL이 프롬프트에 없다");
 
         List<String> references = jdbc.queryForList("select r.url from evaluation_references r join evaluations e on e.id = r.evaluation_id "
@@ -150,5 +172,72 @@ class FirstEvaluationEvidenceTest {
         prompts.clear();
         assertEquals("NO_CHANGE", pipeline.evaluate(id).status().name());
         assertTrue(prompts.isEmpty());
+    }
+
+    @Test
+    void 수동_재평가는_기존_평가_내역과_추가_삭제된_항목만_보내고_성공해야_반영_기록을_바꾼다() throws Exception {
+        githubNames.addAll(List.of("a", "b", "c", "d", "e"));
+        long id = createIdea();
+        evaluateManually(id); // 첫(전체) 평가: 자료 전부
+        assertEquals(1, prompts.size());
+        for (String name : githubNames) {
+            assertTrue(prompts.get(0).contains("https://fake.test/repo_" + name));
+        }
+        String recorded = recordedItems(id);
+        assertTrue(recorded.contains("repo_d") && recorded.contains("repo_e"));
+
+        // 상위 5개 중 2개 교체. AI가 실패하면 반영 기록은 그대로다
+        githubNames.clear();
+        githubNames.addAll(List.of("a", "b", "c", "f", "g"));
+        reEvaluationFails = true;
+        prompts.clear();
+        evaluateManually(id);
+        assertEquals("FAILED", evaluationStatus(id));
+        assertEquals(recorded, recordedItems(id));
+
+        // 다시 요청하면 같은 추가·삭제가 평가된다
+        reEvaluationFails = false;
+        prompts.clear();
+        evaluateManually(id);
+        assertEquals("IDLE", evaluationStatus(id));
+        assertEquals(1, prompts.size());
+        String prompt = prompts.get(0);
+        String history = prompt.substring(prompt.lastIndexOf("[기존 평가 내역]"), prompt.lastIndexOf("[새로 추가된 자료]"));
+        String added = prompt.substring(prompt.lastIndexOf("[새로 추가된 자료]"), prompt.lastIndexOf("[삭제된 자료]"));
+        String removed = prompt.substring(prompt.lastIndexOf("[삭제된 자료]"));
+        assertTrue(history.contains("문제가 크다"), "첫 평가의 근거 요약이 재평가에 들어가야 한다");
+        assertTrue(added.contains("repo_f") && added.contains("repo_g"));
+        assertTrue(removed.contains("repo_d") && removed.contains("repo_e"));
+        for (String kept : List.of("repo_a", "repo_b", "repo_c")) {
+            assertFalse(added.contains(kept) || removed.contains(kept), kept);
+        }
+        assertTrue(recordedItems(id).contains("repo_g") && !recordedItems(id).contains("repo_d"));
+        assertEquals(1, jdbc.queryForObject("select count(*) from evaluation_references where url = 'https://fake.test/repo_f'",
+                Integer.class));
+
+        // 더 바뀐 것이 없으면 AI를 부르지 않는다
+        prompts.clear();
+        evaluateManually(id);
+        assertEquals("IDLE", evaluationStatus(id));
+        assertTrue(prompts.isEmpty());
+    }
+
+    /** POST /api/ideas/{id}/evaluate를 호출하고 비동기 평가가 끝날 때까지 기다린다 (최대 10초). */
+    private void evaluateManually(long id) throws Exception {
+        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token)).andExpect(status().isAccepted());
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (List.of("QUEUED", "RUNNING").contains(evaluationStatus(id))) {
+            assertTrue(System.currentTimeMillis() < deadline, "평가가 끝나지 않음");
+            Thread.sleep(25);
+        }
+    }
+
+    private String evaluationStatus(long id) {
+        return jdbc.queryForObject("select evaluation_status from ideas where id = ?", String.class, id);
+    }
+
+    private String recordedItems(long id) {
+        return jdbc.queryForObject("select string_agg(evaluated_items, ',' order by id) from sources "
+                + "where idea_id = ? and provider = 'GITHUB'", String.class, id);
     }
 }

@@ -51,7 +51,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `evaluations`: **항목(score) 단위** 평가 이력. 점수가 바뀔 때만 생성. `difference`(변화량), `score_after`(변경 후 점수), `weight`(평가 당시 가중치), `evidence_summary`(근거 요약), `created_at`(재평가 날짜), nullable `trend_id`(TREND 평가가 근거로 쓴 그날의 글로벌 트렌드, `trends`. 키워드 근거 4개 기준 평가는 항상 null).
 - `evaluation_references`: 평가 근거 출처 URL (평가 1 : N).
 - `idea_score_histories`: 평가 시점의 **총점 스냅샷**(`total_score`, `total_difference`, `evaluated_at`). 점수 이력 차트용. 가중치가 바뀌어도 당시 총점을 보존하려고 변화량 누적 대신 스냅샷으로 저장한다.
-- `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash`로 변경 감지 + `checked_at`(수집 확인 시각). 항목·소스 요약은 저장하지 않는다(근거 자료는 AI 요약 없이 원문 발췌를 평가에 직접 넣는다).
+- `sources`: 아이디어별 수집 설정(provider × keyword) + `content_hash`로 변경 감지 + `checked_at`(수집 확인 시각) + `evaluated_items`(점수에 반영한 항목의 url·title JSON). 항목·소스 요약은 저장하지 않는다(근거 자료는 AI 요약 없이 원문 발췌를 평가에 직접 넣는다).
 - `trends`: **글로벌 트렌드 1행/일**(아이디어·키워드와 무관). `summary`(최종 요약), `providers`(쉼표 목록), `content_hash`(상위 항목 제목·URL의 `SourceHasher` 해시), `created_at`. 상위 항목이 어제와 같으면 새 행을 만들지 않고 기존 행을 쓴다. `trend_items`: 상위 항목과 항목 요약(원문 저장 안 함, 같은 URL은 `summary-reuse-days` 안이면 재사용).
 - 외부 API는 6종(`ApiProvider`): 키워드 근거용 검색 조합은 IT 세부 종류(`ItCategory`)가 정하고, 글로벌 트렌드용 고정 3개는 `ApiProvider.TREND_PROVIDERS` = Hacker News · GitHub · Hugging Face(Semantic Scholar 제외).
 
@@ -157,12 +157,12 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - **호출량과 무료 티어 대응** — 무료 티어의 병목은 토큰(분당 250K)이 아니라 **요청 수**(Flash-Lite 분당 15회·일일 500회)다. 그래서 **키워드 근거 자료는 AI로 요약하지 않는다**: `SourceExcerptService`가 API 설명 + 원문 앞부분(`TextExcerpt`가 마크다운·HTML·배지·언어 목록을 걷어 냄, 항목당 `SOURCE_EXCERPT_CHARS` 기본 800자)을 만들어 평가 프롬프트에 직접 넣고, 아이디어 하나를 **평가 호출 1회**로 끝낸다(발췌는 저장하지 않는다). 글로벌 트렌드만 provider 항목을 **한 번의 일괄 호출**로 요약한다.
   - **B. 글로벌 트렌드(하루 1회 고정, 아이디어 수와 무관)**: 모든 provider의 항목을 **한 번의 일괄 요약**(`trend-item-summary-batch`) + 항목 요약 줄들로 **최종 요약 1회**(`global-trend-summary`) = **2회/일**(해시가 같으면 0회, 이전 요약을 전부 재사용하면 최종 요약 1회만). 예전의 provider별 요약 단계는 어디에도 쓰이지 않아 없앴다(`trend_sources` 제거). `TREND_TOP_N`은 호출 수가 아니라 일괄 호출의 입력 크기에만 영향을 준다.
   - **TREND 평가(아이디어당)**: 첫 평가는 바로 1회. 재평가는 **하루에 한 번**, 트렌드가 갱신돼 **새 트렌드 행이 만들어졌을 때만** 1회 — 상위 항목이 어제와 같으면 기존 트렌드 행을 그대로 써서 호출이 없다. `TREND_MIN_REEVAL_DAYS`(기본 1)는 마지막 TREND 평가에 쓴 트렌드와 최소 이만큼 떨어진 날짜의 트렌드여야 한다는 하한이다(같은 날 시연 `force` 등으로 만든 새 트렌드는 건너뜀, 0이면 평가). 간격 안이면 호출도 완료 표시(`last_trend_id`)도 하지 않는다.
-  - **A. 키워드 근거(아이디어당)**: 아이디어 세부 종류가 정하는 **provider 3개** × 키워드 **최대 2개** = **source 최대 6개**(조합은 PR #4의 세부 종류 enum이 결정: AI_ML = Hugging Face·Semantic Scholar·GitHub, DEV_TOOLS_INFRA = GitHub·Stack Exchange·Hacker News, WEB_APP_SERVICE = Hacker News·Stack Exchange·Wikipedia Pageviews, DATA_ANALYTICS = GitHub·Hugging Face·Semantic Scholar). 전체 평가는 성공한 모든 조회 결과로, 일반 재평가는 변경된 결과만으로 **1회** 평가한다(source 요약 호출 없음). 변경도 전체 평가 플래그도 없으면 0회.
+  - **A. 키워드 근거(아이디어당)**: 아이디어 세부 종류가 정하는 **provider 3개** × 키워드 **최대 2개** = **source 최대 6개**(조합은 PR #4의 세부 종류 enum이 결정: AI_ML = Hugging Face·Semantic Scholar·GitHub, DEV_TOOLS_INFRA = GitHub·Stack Exchange·Hacker News, WEB_APP_SERVICE = Hacker News·Stack Exchange·Wikipedia Pageviews, DATA_ANALYTICS = GitHub·Hugging Face·Semantic Scholar). 전체 평가는 성공한 모든 조회 결과로, 일반 재평가는 기존 평가 내역 + 추가·삭제된 항목으로 **1회** 평가한다(source 요약 호출 없음). 추가·삭제 항목도 전체 평가 플래그도 없으면 0회.
 
 | 상황 | 호출 수 |
 | --- | --- |
 | 글로벌 트렌드(하루 1회, 아이디어 수와 무관) | 일괄 1 + 최종 1 = **2회/일** (해시 같으면 0) |
-| 아이디어 1개, 근거 source 몇 개가 변경 | 근거 평가 **1회** (source 수와 무관) |
+| 아이디어 1개, 근거 항목이 추가·삭제됨 | 근거 평가 **1회** (source 수와 무관) |
 | 위 + TREND 평가 | 1 + 1 = **최악 2회/아이디어** |
 | 새 트렌드만 있음 | 1회 (TREND) |
 | 변경도 새 트렌드도 없음 | 0회 |
@@ -183,22 +183,23 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
              └─ 아이디어마다 IdeaEvaluationPipeline.evaluate(id)
                  ① 대상 확인(I001/I004)·Gemini 확인(E001) → ② 새 턴(예약 가중치 적용, 총점 바뀌면 이력 스냅샷만)
                  ③ 트렌드 확보(today) · source 조회(checkAll, 해시 변경 감지)
-                 ④ runA = 변경된 source 있음 or needs_full_evaluation / runB = 트렌드 있음 and last_trend_id ≠ 오늘 트렌드
+                 ④ runA = 추가·삭제된 항목 있음 or needs_full_evaluation / runB = 트렌드 있음 and last_trend_id ≠ 오늘 트렌드
                     둘 다 아니면 NO_CHANGE (평가·이력·날짜 갱신 없음)
-                 ⑤ A: 전체 평가는 성공한 모든 source, 일반 재평가는 변경된 source만 선택 → 원문 발췌 → 근거 4개 기준 평가 1회 (trend_id 없음)
+                 ⑤ A: 전체 평가는 성공한 모든 source, 재평가는 새 항목만 → 원문 발췌 → 근거 4개 기준 평가 1회 (trend_id 없음)
                     B: TrendEvaluator — 4항목 + 오늘 트렌드 → TREND 첫 평가(0~100)/재평가(±10) (trend_id = 오늘 트렌드)
                  ⑥ 성공한 쪽의 결과를 한 트랜잭션(recordResults)으로 저장: 총점 재계산·이력 1행·last_evaluated_at은 합쳐서 한 번
 ```
 
   - **독립 실패**: A와 B를 각자 try로 실행한다. 한 쪽이 실패해도 다른 쪽 결과는 저장하고(그 뒤 실패 예외를 던진다 → 배치는 failed로 센다), 실패한 쪽은 다음 실행에서 다시 한다: A는 source 해시를 되돌리고 `needs_full_evaluation`을 유지, B는 `last_trend_id`를 갱신하지 않는다. 둘 다 실패하면 둘 다 재시도 대상이다.
   - 변경 감지 이전의 `SourceCheckService.checkAll`은 Gemini를 쓰지 않는다. 트렌드를 만들지 못한 날(`today()`가 null)은 B만 건너뛰고 A는 정상 진행하며, 30분 안에는 수집을 다시 시도하지 않는다.
-  - A의 항목 하나가 원문 읽기에서 실패하면 그 항목은 API 설명만으로 남기고(위 "원문 읽기 실패 처리") 평가는 진행한다. 재평가에 넘기는 `changedItems`는 새로 읽은 상위 N개의 **원문 발췌**(`SourceExcerptService`, 항목당 `SOURCE_EXCERPT_CHARS`, 평가 프롬프트 최대 30줄)다.
+  - A의 항목 하나가 원문 읽기에서 실패하면 그 항목은 API 설명만으로 남기고(위 "원문 읽기 실패 처리") 평가는 진행한다. 재평가에 넘기는 것은 기준별 최근 평가 3건(`pastEvaluations`), 새로 추가된 항목의 **원문 발췌**(`newItems`, 항목당 `SOURCE_EXCERPT_CHARS`, 최대 30줄), 삭제된 항목의 제목·URL(`removedItems`)이다. 그대로인 항목은 다시 읽지도 보내지도 않는다.
+  - **추가·삭제 판정**(`EvidenceChanges`): `sources.evaluated_items`(점수에 마지막으로 반영한 `url`·`title` JSON)와 이번 조회를 **아이디어 전체 단위의 URL**로 비교한다. 다른 키워드·provider에 남아 있으면 삭제가 아니고, 순위·제목·지표만 바뀌면 평가하지 않는다. 조회에 실패한 source의 항목은 남아 있는 것으로 본다. 반영 기록은 근거 평가가 성공하면 `recordResults`와 같은 트랜잭션에서 바뀌고, 실패하면 그대로라 다음에 같은 차이를 다시 평가한다. 기록이 없는 source는 해시가 같으면 이미 반영한 것으로, 다르면 전부 새 항목으로 본다(시연 `force`가 기록을 지우는 이유).
   - B에서 점수가 안 바뀌어도(차이 0) 그 트렌드로 평가했다는 표시(`last_trend_id`)는 남겨 같은 트렌드로 다시 호출하지 않는다.
 - **AI 응답 서버 검증** (호출은 `responseMimeType=application/json`+`responseSchema`로 형식 강제). 공통: 변화량·점수는 정수로 반올림 / 근거 요약 300자(`MAX_SUMMARY_CHARS`) 초과는 `…`로 자름 / `referenceUrls`는 **입력으로 준 자료의 URL만** 남김(그 밖은 버림) / 0~100 제한은 `Score.applyDifference`.
-  - 키워드 근거 4개 기준(`EvidenceEvaluator`): type이 근거 4개 enum이 아니면(TREND 포함) 버림, 같은 type 중복 버림 / 재평가는 기준당 ±10(`MAX_DIFFERENCE`) 클램프, 0이면 버림, 근거 요약이 비면 그 항목 버림(초기 평가는 점수를 살리려고 빈 요약에 기본 문구) / 초기 평가는 점수를 0~100으로 제한해 현재 점수와의 차이로 기록(±10 미적용). 프롬프트의 `{{items}}`/`{{changedItems}}`는 한 줄에 한 건 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(없는 값 `-`, 제목 120자·요약 300자 상한, 전체 15건 상한, `SourceTextFormat`)이다.
+  - 키워드 근거 4개 기준(`EvidenceEvaluator`): type이 근거 4개 enum이 아니면(TREND 포함) 버림, 같은 type 중복 버림 / 재평가는 기준당 ±10(`MAX_DIFFERENCE`) 클램프, 0이면 버림, 근거 요약이 비면 그 항목 버림(초기 평가는 점수를 살리려고 빈 요약에 기본 문구) / 초기 평가는 점수를 0~100으로 제한해 현재 점수와의 차이로 기록(±10 미적용). 프롬프트의 `{{items}}`/`{{newItems}}`는 한 줄에 한 건 `[PROVIDER] 제목 | URL | 날짜 | 지표 | 요약`(없는 값 `-`, 제목 120자·요약 300자 상한, 전체 30건 상한, `SourceTextFormat`)이다.
   - TREND(`TrendEvaluator`): 첫 평가(`last_trend_id`가 null)는 `score`만 읽어 0~100으로 제한하고 현재 점수와의 차이로 기록, 재평가는 `difference`만 읽어 ±10 클램프(0이거나 근거 요약이 비면 변화 없음). 모드에 맞지 않는 필드는 무시한다. 근거 URL은 그날 트렌드 항목의 URL만.
 - **첫 평가 / 전체 평가**: 두 갈래 각각 플래그가 있다. 근거 4개 기준은 `ideas.needs_full_evaluation`, TREND는 `ideas.last_trend_id`가 null인지다. 새 아이디어와 **4항목 내용이 실제로 바뀐 수정**(`Idea.edit`)에서 둘 다 "첫 평가 필요"로 돌아간다. 근거 쪽은 **해시가 같은 소스도 포함해 조회에 성공한 모든 소스의 상위 항목**으로 `initial-evaluation`(기준별 0~100)을 한 번 수행한다. 기존 아이디어를 근거와 함께 다시 평가할 때는 이 플래그만 켜고 수동 평가나 배치를 실행하면 된다. TREND 쪽은 `last_trend_id`가 null이고 오늘 트렌드가 있으면 `trend-evaluation` 첫 평가를 한다. 기록 규칙은 같다: 점수 → `현재 점수와의 차이`로 바꿔 `recordResults`에 넘기므로 점수가 바뀐 기준마다 `Evaluation` 행(첫 평가는 `difference = 점수`, `score_after = 점수`)이 생기고 총점 이력 스냅샷 1행과 `last_evaluated_at`이 갱신된다. 점수가 하나도 안 바뀌면(수정 후 같은 점수) 아무것도 기록하지 않지만 완료 표시는 남긴다. 실패하면 표시를 남기지 않아 다음 배치에서 재시도한다(HOLD인 동안은 평가 안 됨).
-- **프롬프트 계약**: `prompts/{initial-evaluation,re-evaluation,trend-item-summary-batch,global-trend-summary,trend-evaluation}.txt`. 플레이스홀더·출력 JSON은 `docs/ai-prompts.md`가 정본이다. 코드가 채우는 값: `items`(trend-item-summary-batch), `items`(global-trend-summary; 항목 요약 줄들), `target/problem/solution/expectation/items`(initial — 4개 기준만, items = 항목당 원문 발췌), `…/currentScores/changedItems`(re — 4개 기준만), `target/problem/solution/expectation/currentTrendScore/trendSummary/trendItems`(trend-evaluation). 출력 스키마는 `responseSchema`로 강제한다.
+- **프롬프트 계약**: `prompts/{initial-evaluation,re-evaluation,trend-item-summary-batch,global-trend-summary,trend-evaluation}.txt`. 플레이스홀더·출력 JSON은 `docs/ai-prompts.md`가 정본이다. 코드가 채우는 값: `items`(trend-item-summary-batch), `items`(global-trend-summary; 항목 요약 줄들), `target/problem/solution/expectation/items`(initial — 4개 기준만, items = 항목당 원문 발췌), `…/currentScores/pastEvaluations/newItems/removedItems`(re — 4개 기준만), `target/problem/solution/expectation/currentTrendScore/trendSummary/trendItems`(trend-evaluation). 출력 스키마는 `responseSchema`로 강제한다.
 - 첫 평가·전체 평가의 응답에는 기준별 `referenceUrls` 배열이 필수다. 실제로 인용한 입력 URL을 담고, 인용한 자료가 없으면 빈 배열을 반환한다. 서버는 수집 자료에 없는 URL을 버린다.
 - Gemini 평가 호출은 응답이 길어 `GEMINI_TIMEOUT_SECONDS` 기본 10초가 빠듯할 수 있다. 시간 초과가 잦으면 30 이상으로 올린다.
 
@@ -244,7 +245,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `GET /api/ideas?status=ACTIVE|HOLD&sort=TOTAL|RECENT_RISE`. 기본은 `ACTIVE` + `TOTAL`(총점순). `RECENT_RISE`는 `last_difference` 내림차순(없으면 뒤). 보류 탭은 `status=HOLD`.
 
 ### 외부 자료 변경 감지
-- **변경 감지 = `content_hash` 비교**: `Source.updateHash(newHash)`가 이전 해시와 다르면 true. **첫 조회(이전 해시 없음)도 `CHANGED`로 항목을 돌려준다**(해시를 기록하면서). 첫 조회를 "변경 없음"으로 처리하면 첫 평가에 외부 자료가 하나도 들어가지 않아 근거 문서가 0개가 된다. 해시는 바뀌지 않는 값인 **제목·URL만** 쓰고 url 기준으로 정렬한 뒤 계산한다(`SourceHasher`: 요약·지표·날짜·순위는 넣지 않아 순위만 바뀌거나 요약만 바뀐 것은 변경이 아니다). 변경이 감지되면 새 항목만 가려내지 않고 **상위 N개를 전부 다시 읽고 다시 요약해 덮어쓴다**(직전 URL diff 방식은 폐기). 변경이 있을 때만 재평가를 트리거한다.
+- **변경 감지 = `content_hash` 비교**: `Source.updateHash(newHash)`가 이전 해시와 다르면 true. **첫 조회(이전 해시 없음)도 `CHANGED`로 항목을 돌려준다**(해시를 기록하면서). 첫 조회를 "변경 없음"으로 처리하면 첫 평가에 외부 자료가 하나도 들어가지 않아 근거 문서가 0개가 된다. 해시는 바뀌지 않는 값인 **제목·URL만** 쓰고 url 기준으로 정렬한 뒤 계산한다(`SourceHasher`: 요약·지표·날짜·순위는 넣지 않아 순위만 바뀌거나 요약만 바뀐 것은 변경이 아니다). 일반 재평가는 해시 변경이 아니라 반영해 둔 항목과 비교한 **URL 추가·삭제**가 있을 때 실행하고, 새 항목만 읽는다(위 "추가·삭제 판정").
 - `SourceClient`(provider당 구현체 1개, 빈으로 등록하면 자동 인식)는 두 가지를 한다: `search(keyword)`로 상위 `cue.source.top-n`(기본 5)개를 `SourceItem(title,url,summary,publishedAt,metrics)`로 반환, `fetchContent(item)`으로 항목의 **원문**을 텍스트로 읽는다(기본 구현은 빈 문자열).
 
 | provider | 조회 정렬 (급상승 기준) | 원문 |

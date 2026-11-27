@@ -11,11 +11,14 @@ import com.cue.global.error.ErrorCode;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.score.entity.Score;
+import com.cue.source.dto.EvaluatedItem;
+import com.cue.source.repository.SourceRepository;
 import com.cue.trend.entity.Trend;
 import com.cue.trend.repository.TrendRepository;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +34,7 @@ public class EvaluationRecorder {
     private final EvaluationRepository evaluations;
     private final IdeaScoreHistoryRepository histories;
     private final TrendRepository trends;
+    private final SourceRepository sources;
 
     /**
      * 점수가 바뀐 항목만 반영한다. 항목별 평가(변화량·가중치·변경 후 점수·근거·출처)를 저장하고,
@@ -41,7 +45,7 @@ public class EvaluationRecorder {
      */
     @Transactional
     public boolean recordChanges(Long ideaId, List<ScoreChange> changes) {
-        return recordResults(ideaId, changes, false, null);
+        return recordResults(ideaId, changes, false, null, Map.of());
     }
 
     /**
@@ -50,9 +54,11 @@ public class EvaluationRecorder {
      *
      * @param completeFull   키워드 근거 전체(초기) 평가를 마쳤으면 true ({@code needs_full_evaluation} 해제)
      * @param trendEvaluated TREND 평가를 마친 글로벌 트렌드 id (점수가 안 바뀌었어도 기록한다), 안 했으면 null
+     * @param evidenceItems  점수에 반영한 source별 항목 (점수가 안 바뀌었어도 기록한다), 근거 평가에 실패했으면 빈 값
      */
     @Transactional
-    public boolean recordResults(Long ideaId, List<ScoreChange> changes, boolean completeFull, Long trendEvaluated) {
+    public boolean recordResults(Long ideaId, List<ScoreChange> changes, boolean completeFull, Long trendEvaluated,
+                                 Map<Long, List<EvaluatedItem>> evidenceItems) {
         Idea idea = ideas.findById(ideaId).orElseThrow(() -> new CustomException(ErrorCode.IDEA_NOT_FOUND));
         if (!idea.isActive()) {
             throw new CustomException(ErrorCode.IDEA_NOT_ACTIVE);
@@ -63,6 +69,7 @@ public class EvaluationRecorder {
         if (trendEvaluated != null) {
             idea.completeTrendEvaluation(trendEvaluated);
         }
+        recordEvidenceItems(evidenceItems);
         LocalDateTime now = LocalDateTime.now();
         BigDecimal totalBefore = idea.getTotalScore();
         boolean changed = false;
@@ -93,6 +100,12 @@ public class EvaluationRecorder {
         idea.recordEvaluation(totalDifference, now);
         histories.save(new IdeaScoreHistory(idea, idea.getTotalScore(), totalDifference, now));
         return true;
+    }
+
+    /** source별로 점수에 반영한 항목을 기록한다. 다음 조회에서 이 목록과 비교해 추가·삭제를 가려낸다. */
+    @Transactional
+    public void recordEvidenceItems(Map<Long, List<EvaluatedItem>> evidenceItems) {
+        evidenceItems.forEach((sourceId, items) -> sources.findById(sourceId).ifPresent(s -> s.recordEvaluatedItems(items)));
     }
 
     /**

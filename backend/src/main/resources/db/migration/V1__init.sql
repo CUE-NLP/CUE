@@ -116,7 +116,9 @@ CREATE TABLE sources (
     provider      VARCHAR(30)  NOT NULL,
     keyword       VARCHAR(255) NOT NULL,
     content_hash  VARCHAR(64),
-    checked_at    TIMESTAMP
+    checked_at    TIMESTAMP,
+    -- 점수에 마지막으로 반영한 항목 [{"url","title"}] JSON. 다음 조회와 비교해 추가·삭제를 가려낸다. NULL이면 아직 기록 없음
+    evaluated_items TEXT
 );
 CREATE INDEX idx_sources_idea_provider ON sources (idea_id, provider);
 CREATE INDEX idx_sources_content_hash ON sources (content_hash);
