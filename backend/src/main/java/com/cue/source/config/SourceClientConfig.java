@@ -8,8 +8,10 @@ import com.cue.source.client.SemanticScholarSourceClient;
 import com.cue.source.client.WikipediaPageviewsSourceClient;
 import com.cue.source.client.StackExchangeSourceClient;
 import com.cue.source.fetch.JdkTransport;
+import com.cue.source.fetch.SourceApiLog;
 import com.cue.source.fetch.WebContentFetcher;
 import java.net.http.HttpClient;
+import lombok.RequiredArgsConstructor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,6 +19,7 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 @Configuration
+@RequiredArgsConstructor
 @EnableConfigurationProperties({SourceApiProperties.class, com.cue.trend.config.TrendProperties.class})
 public class SourceClientConfig {
     private static final String GITHUB_URL = "https://api.github.com";
@@ -25,6 +28,7 @@ public class SourceClientConfig {
     private static final String HACKER_NEWS_URL = "https://hn.algolia.com";
     private static final String SEMANTIC_SCHOLAR_URL = "https://api.semanticscholar.org";
     private static final String WIKIPEDIA_URL = "https://en.wikipedia.org";
+    private final SourceApiLog apiLog;
 
     @Bean
     SearchSettings searchSettings(SourceApiProperties props) {
@@ -34,7 +38,7 @@ public class SourceClientConfig {
     /** 기사 등 임의의 웹 페이지를 읽는 안전한 가져오기 (SSRF 차단·리다이렉트/크기/시간 제한). */
     @Bean
     WebContentFetcher webContentFetcher(SourceApiProperties props) {
-        return new WebContentFetcher(new JdkTransport(props.connectTimeout(), props.readTimeout(), props.fetchMaxBytes()),
+        return new WebContentFetcher(new JdkTransport(props.connectTimeout(), props.readTimeout(), props.fetchMaxBytes(), apiLog),
                 props.maxRedirects(), props.maxContentChars());
     }
 
@@ -91,10 +95,12 @@ public class SourceClientConfig {
         }
     }
 
-    private static RestClient.Builder base(RestClient.Builder builder, SourceApiProperties props, String baseUrl) {
+    private RestClient.Builder base(RestClient.Builder builder, SourceApiProperties props, String baseUrl) {
         HttpClient http = HttpClient.newBuilder().connectTimeout(props.connectTimeout()).build();
         JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
         factory.setReadTimeout(props.readTimeout());
-        return builder.clone().baseUrl(baseUrl).requestFactory(factory);
+        return builder.clone().baseUrl(baseUrl).requestFactory(factory)
+                .bufferContent((uri, method) -> apiLog.isRecording())
+                .requestInterceptor(apiLog::intercept);
     }
 }

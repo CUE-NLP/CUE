@@ -11,7 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -23,7 +23,7 @@ import tools.jackson.databind.JsonNode;
 @Slf4j
 @Component
 @Primary
-@ConditionalOnProperty(prefix = "cue.gemini", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnExpression("${cue.gemini.enabled:true} || ${cue.claude-gateway.enabled:false} || ${cue.openai-gateway.enabled:false}")
 class GeminiIdeaAnalyzer implements IdeaAnalyzer {
     static final int MAX_KEYWORDS = 2;
     private static final int MAX_KEYWORD_LENGTH = 60;

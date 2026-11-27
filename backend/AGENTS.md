@@ -143,6 +143,8 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - **두 레인** (`AiLane`): 사용자가 기다리는 호출(구조화, 저장 때 종류·키워드 추출)은 `INTERACTIVE`, 그 밖의 평가·트렌드 호출은 `BATCH`(기존 `generateJson(prompt, schema)`). `GeminiClient`가 레인마다 **속도 제한기**(`GeminiRateLimiter`, 순번 예약)를 따로 둔다 — 인터랙티브 `cue.gemini.interactive.min-interval-ms`(기본 2000), 배치 `cue.gemini.min-interval-ms`(기본 6500). 배치는 한도가 풀릴 때까지 기다리지만 **인터랙티브는 기다려야 하는 시간이 `max-wait-ms`(기본 5000)를 넘으면 슬롯을 잡지 않고 `E006`으로 바로 실패**해 평가 배치 뒤에 줄 서지 않는다.
 - **모델 분리**: 인터랙티브는 `cue.gemini.interactive.model`(기본 `gemini-3.1-flash-lite`, 비우면 기본 모델), 배치는 `cue.gemini.model`. 두 모델이 같으면 한도를 같이 쓰고, 다르게 두면 모델별로 분당·일일 한도가 따로 잡혀 새벽 배치가 낮의 구조화 한도를 먹지 않는다. 폐기된 모델명은 기동 때가 아니라 호출 때 404(G002)로 드러나니, 모델을 바꿀 때는 두 설정을 같이 확인한다.
 - **429/503 재시도**: 레인별 횟수(`cue.gemini.interactive.max-retries` 기본 1, 배치 `cue.gemini.max-retries` 기본 2)만큼 지수 백오프(1초·2초·…, `Retry-After`가 있으면 그 값, 배치 최대 60초)로 재시도한다. 인터랙티브는 필요한 대기가 `max-wait-ms`를 넘으면 재시도하지 않는다. 끝내 실패하면 인터랙티브는 `E006`, 배치는 `G002`다. 그 밖의 HTTP 오류는 재시도 없이 `G002`.
+- **Claude Gateway 테스트**: `CLAUDE_GATEWAY_ENABLED=true`이면 두 레인이 같은 `CLAUDE_GATEWAY_MODEL`(기본 `claude-opus-5-5`)을 쓴다. `ClaudeGatewayClient`가 공통 응답 스키마를 `output_config.format`으로 변환하고, Anthropic 응답의 텍스트 블록에서 JSON을 읽는다. 배열의 상한은 기존 프롬프트와 서버 로직을 따른다. 기존 레인별 대기·재시도 설정을 사용한다. Claude 전환 상태에서 키가 없으면 `E001`이고, 호출 실패는 기존 오류 코드로 처리한다.
+- **GPT Gateway 테스트**: `OPENAI_GATEWAY_ENABLED=true`이면 두 레인이 `OPENAI_GATEWAY_MODEL`로 학교 Gateway의 `/responses/`를 사용한다. Bearer 키와 모델 ID가 필요하다. Claude도 켜져 있으면 GPT를 선택한다. 공통 스키마를 Responses의 엄격한 JSON 스키마로 변환하며 기존 선택 필드는 null을 허용한다. 거절되거나 완료되지 않은 응답은 `E002`로 처리한다.
 - **열린 결정**: 구조화 프롬프트는 Java 상수라 `docs/ai-prompts.md`·`PromptTemplatesTest` 대상이 아니다. Gemini Batch API·사용자별 일일 호출 상한·큐 영속화는 하지 않았다.
 
 ### 검색 키워드 우선순위 (USER > AI)
@@ -247,6 +249,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `GET /api/ideas?status=ACTIVE|HOLD&sort=TOTAL|RECENT_RISE`. 기본은 `ACTIVE` + `TOTAL`(총점순). `RECENT_RISE`는 `last_difference` 내림차순(없으면 뒤). 보류 탭은 `status=HOLD`.
 
 ### 외부 자료 변경 감지
+- **외부 API 진단 로그**: `bootRun`에서 `~/.local/state/cue/source-api.txt`로 기록한다. `SOURCE_API_LOG_FILE`로 경로를 지정하고 빈 값으로 끈다. 아이디어 평가나 글로벌 트렌드 수집 작업이 끝날 때 요청 방식·URL·소요 시간·HTTP 상태·텍스트 응답 본문 앞 64 KiB 또는 통신 예외 유형을 모아 쓰고 `======`로 구분한다. 작업 중 Claude·GPT가 반환한 응답 JSON(`stop_reason` 또는 `status`, 결과 등)도 파싱 전에 기록한다. 요청 프롬프트와 인증 헤더를 기록하지 않고, API 키 쿼리와 설정된 API 토큰과 Gateway 키는 가린다. 임의 웹페이지 URL의 쿼리는 생략한다.
 - **변경 감지 = `content_hash` 비교**: `Source.updateHash(newHash)`가 이전 해시와 다르면 true. **첫 조회(이전 해시 없음)도 `CHANGED`로 항목을 돌려준다**(해시를 기록하면서). 첫 조회를 "변경 없음"으로 처리하면 첫 평가에 외부 자료가 하나도 들어가지 않아 근거 문서가 0개가 된다. 해시는 바뀌지 않는 값인 **제목·URL만** 쓰고 url 기준으로 정렬한 뒤 계산한다(`SourceHasher`: 요약·지표·날짜·순위는 넣지 않아 순위만 바뀌거나 요약만 바뀐 것은 변경이 아니다). 일반 재평가는 해시 변경이 아니라 반영해 둔 항목과 비교한 **URL 추가·삭제**가 있을 때 실행하고, 새 항목만 읽는다(위 "추가·삭제 판정").
 - `SourceClient`(provider당 구현체 1개, 빈으로 등록하면 자동 인식)는 두 가지를 한다: `search(keyword)`로 상위 `cue.source.top-n`(기본 5)개를 `SourceItem(title,url,summary,publishedAt,metrics)`로 반환, `fetchContent(item)`으로 항목의 **원문**을 텍스트로 읽는다(기본 구현은 빈 문자열).
 
