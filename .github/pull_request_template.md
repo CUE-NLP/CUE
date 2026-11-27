@@ -18,7 +18,7 @@ cd backend && ./gradlew test
 ## 체크리스트
 - [ ] 빌드와 테스트가 통과합니다 (`./gradlew test`)
 - [ ] 새 에러는 `global/error/ErrorCode`에 추가했습니다
-- [ ] DB 변경은 `V1__init.sql`에 반영했고, 팀원이 `docker compose down -v`로 DB를 초기화해야 하면 아래 "리뷰어에게"에 적었습니다 (스키마 확정 후에는 새 `V{n}__*.sql`만 추가)
+- [ ] DB 변경은 새 `V{n}__*.sql`로 추가했고, 이미 머지된 마이그레이션(`V1__init.sql` 포함)은 수정하지 않았습니다 (엔티티와 일치해야 `ddl-auto: validate` 통과)
 - [ ] 비밀번호·키 등 민감 정보가 코드나 로그에 포함되지 않았습니다
 - [ ] README/API 명세 변경이 필요하면 함께 수정했습니다
 

@@ -329,9 +329,9 @@ JWT 오류는 원인별로 구분됩니다 (`A003` 형식 오류 / `A004` 만료
 
 ## 데이터베이스
 
-스키마는 Flyway(`backend/src/main/resources/db/migration`)로 관리합니다. **스키마가 확정되기 전까지는 `V1__init.sql` 하나를 수정해서 쓰고**, 확정 후에 새 버전 파일을 추가합니다. V1이 바뀐 PR을 받으면 `docker compose down -v` 후 다시 실행해 DB를 새로 만들어 주세요.
+스키마는 Flyway(`backend/src/main/resources/db/migration`)로 관리합니다. **스키마는 2026-11-24에 확정했고 `V1__init.sql`은 수정하지 않습니다.** 변경은 `V2__*.sql`부터 새 파일로 추가하며 기존 데이터를 지키며 자동 적용됩니다. `V2__daily_evaluation_and_evaluated_items.sql`은 `ideas.evaluated_on`과 `sources.evaluated_items`를 빈 컬럼으로 추가하므로 DB를 초기화할 필요가 없습니다. 지금의 V1과 다른 예전 V1으로 만든 로컬 DB만 `docker compose down -v` 후 다시 실행해 한 번 새로 만들어 주세요(데이터가 지워집니다).
 
-아이디어 제목 추가는 `ideas.title`(선택, 최대 60자)을 `V1__init.sql`에 반영합니다. 이미 V1을 적용한 로컬 DB는 기존 데이터를 보존할 필요가 있는지 확인한 뒤 초기화합니다.
+아이디어 제목 `ideas.title`(선택, 최대 60자)은 `V1__init.sql`에 포함돼 있습니다. 이 열이 없는 예전 DB는 기존 데이터를 보존할 필요가 있는지 확인한 뒤 초기화합니다.
 
 | 테이블 | 설명 |
 | --- | --- |

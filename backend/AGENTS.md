@@ -41,9 +41,9 @@ trend/        entity (Trend, TrendItem) / repository / service (GlobalTrendServi
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
 
 ## DB (Flyway, `src/main/resources/db/migration`)
-- 마이그레이션은 **`V1__init.sql` 하나뿐**이다 (users, ideas, scores, refresh_tokens, trends, trend_items, evaluations, evaluation_references, idea_score_histories, sources).
-- **스키마가 확정되기 전(개발 중)에는 `V1__init.sql`을 직접 수정한다.** Flyway 이력 관리(`V2__...` 추가)는 스키마가 확정되는 마지막 단계에 시작한다. 그래서 V1이 바뀌면 이미 V1을 적용한 로컬 DB는 체크섬 불일치로 기동이 실패하니, **`docker compose down -v` 후 다시 실행**해 DB를 새로 만든다 (PR 설명에 적는다).
-- `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 V1도 같은 PR에서 고친다.
+- 마이그레이션은 **`V1__init.sql`(스키마 확정본)** 으로 시작한다 (users, ideas, scores, refresh_tokens, trends, trend_items, evaluations, evaluation_references, idea_score_histories, sources). **V1은 고정이며 수정하지 않는다.** 이후 변경은 `V2__*.sql`부터 새 파일로 추가한다. 현재 `V2__daily_evaluation_and_evaluated_items.sql`(`ideas.evaluated_on`, `sources.evaluated_items` 추가)까지 있다.
+- **스키마는 2026-11-24에 확정했다. 이미 머지된 마이그레이션 파일(`V1__init.sql` 포함)은 절대 수정하지 않는다.** 수정하면 이미 적용한 DB가 Flyway 체크섬 불일치로 기동에 실패한다. 스키마를 바꿀 때는 `V{n}__설명.sql`(n = 마지막 버전 + 1) 새 파일을 같은 PR에 추가한다. 새 마이그레이션은 기존 데이터를 지키며 자동 적용되므로 팀원이 DB를 초기화할 필요가 없다. 지금의 `V1__init.sql`과 다른 예전 V1으로 만든 로컬 DB만 `docker compose down -v` 후 한 번 새로 만든다(데이터가 지워지니 먼저 `flyway_schema_history`의 V1 체크섬을 확인한다. 지금 V1은 `449303195`).
+- `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 새 `V{n}__*.sql`을 같은 PR에 추가한다.
 
 ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea_score_histories, scores 1:N evaluations, trends 1:N trend_items, trends 0..1:N evaluations(TREND 평가만 연결), trends 0..1:N ideas(`last_trend_id`), evaluations 1:N evaluation_references, evaluations 0..1:N sources.
 - `ideas`: `type`(대분류 `IdeaType`, 현재 `IT` 하나뿐이며 IT 고정 — IT 외 분야는 나중에 `IdeaType`을 확장), `it_category`(IT 세부 종류 `ItCategory`, varchar30 NOT NULL, 기본 `DEV_TOOLS_INFRA`; 검색 API 조합을 결정, `ItCategory.searchProviders()`), `status`(`ACTIVE`/`HOLD`), `keywords`(TEXT, 줄바꿈 구분, 최대 2개)·`keyword_origin`(`USER`/`AI`, varchar20; 키워드가 없으면 둘 다 null), 구조화 4항목(`problem/target/solution/expectation`, **nullable** — 비면 HOLD), `total_score`, `last_difference`(최근 평가의 총점 변화량), `last_evaluated_at`, `last_checked_at`(사용자가 확인한 시각), `needs_full_evaluation`(전체 평가 필요 플래그, 아래 "일일 재평가" 참고), `evaluation_status`(IDLE/QUEUED/RUNNING/FAILED)·`evaluation_started_at`·`evaluation_finished_at`·`last_evaluation_error_code`(비동기 평가 상태, 아래 "비동기 평가 실행"), `last_trend_id`(TREND를 마지막으로 평가한 글로벌 트렌드 `trends.id`. null이면 TREND 첫 평가 전이고, 내용·키워드가 바뀐 수정에서도 null로 돌아가 첫 평가부터 다시 한다. 같은 트렌드면 TREND 평가를 다시 하지 않는 근거).
@@ -310,7 +310,7 @@ cd CUE/backend
 | --- | --- |
 | 호스트/포트 | `localhost:5433` (로컬 PostgreSQL이 5432를 써도 충돌하지 않게 5433으로 매핑) |
 | DB / 계정 / 비밀번호 | `cue` / `cue` / `cue` |
-| 초기화 | `docker compose down -v` 후 다시 실행 (Flyway가 스키마를 새로 만든다). **`V1__init.sql`이 바뀐 PR을 받았을 때도 필요하다.** |
+| 초기화 | `docker compose down -v` 후 다시 실행 (Flyway가 스키마를 새로 만든다). 지금의 V1과 다른 예전 V1으로 만든 로컬 DB는 한 번 필요하다. 확정 후의 `V2__*.sql` 이상은 자동 적용되므로 초기화가 필요 없다. |
 
 5433도 이미 쓰는 중이면 `DB_PORT=원하는포트`로 compose를 띄우고 `DB_URL`의 포트를 맞춘다. DB 컨테이너는 헬스체크(`pg_isready`)가 있고 타임존은 `Asia/Seoul`이다.
 
@@ -349,9 +349,9 @@ cd CUE/backend
 - 비밀 값(키, 비밀번호)은 **절대 커밋하지 않는다.** `.env`는 `.gitignore`에 있다. 외부 API 토큰(위 선택 값)과 Gemini 등 키는 이 표에 변수 이름만 적고, 실제 값은 팀 비밀 채널(Notion/Discord 비공개 등)로 공유한다.
 
 ### 협업 시 주의
-- **`V1__init.sql` 충돌**: 개발 중에는 모두가 이 한 파일을 고치므로 충돌이 잦다. 스키마 변경 PR은 작게 유지하고 머지 전에 `main`을 반영한다. 스키마 확정 후에는 이 파일을 고정하고 `V2__*.sql`부터 추가한다.
-- 엔티티를 바꾸면 `V1__init.sql`도 같은 PR에 넣는다 (`ddl-auto: validate`라서 어긋나면 서버가 안 뜬다).
-- 에러 코드(`ErrorCode`)와 `V1__init.sql`은 충돌이 잦은 파일이다. PR을 작게 유지하고 자주 `main`을 반영한다.
+- **마이그레이션 번호 충돌**: 여러 PR이 같은 `V2__` 번호를 만들 수 있다. 스키마 변경 PR은 작게 유지하고 머지 전에 `main`을 반영해 번호를 "마지막 버전 + 1"로 맞춘다. 이미 머지된 파일은 고치지 않는다.
+- 엔티티를 바꾸면 새 `V{n}__*.sql`도 같은 PR에 넣는다 (`ddl-auto: validate`라서 어긋나면 서버가 안 뜬다).
+- 에러 코드(`ErrorCode`)와 마이그레이션 번호는 충돌이 잦다. PR을 작게 유지하고 자주 `main`을 반영한다.
 - 통합 테스트는 Docker가 켜져 있어야 통과한다.
 - 프론트 연동: CORS는 설정돼 있다. 프론트 주소가 기본값(5173/3000)이 아니면 `CORS_ALLOWED_ORIGINS`에 추가한다.
 
@@ -378,7 +378,7 @@ cd backend && ./gradlew test       # 단위 + Testcontainers 통합 테스트 (D
 - 코드 변경 시 테스트를 함께 추가/수정하고 `cd backend && ./gradlew test`를 통과시킨 뒤 알린다.
 - 새 API/DTO/에러 코드는 위 "Swagger 작성 규칙"을 지키고, `ApiAuthPolicyTest.protectedEndpoints()`에 엔드포인트를 추가한다.
 - 동작이 바뀌면 루트 `README.md`의 Backend 섹션과 이 문서를 함께 갱신한다.
-- 스키마 변경은 확정 전까지 `V1__init.sql`을 수정하고 PR에 "DB 초기화 필요"를 적는다. 확정 후에는 새 버전 파일만 추가한다.
+- 스키마 변경은 `V1__init.sql`을 수정하지 않고 새 `V{n}__*.sql` 파일로만 추가한다. 이미 머지된 마이그레이션 파일은 고치지 않는다.
 
 ## 미구현·TODO
 - 평가 호출 보호: 평가는 아이디어마다 하루 한 번(`E007`)이다. 다만 내용·키워드를 고치면 같은 날 다시 평가할 수 있고 사용자별 아이디어 수·수정 횟수 제한은 없다(**열린 결정**). 429 응답 재시도/백오프도 아직 없다(실패하면 다음 배치로 넘김).
