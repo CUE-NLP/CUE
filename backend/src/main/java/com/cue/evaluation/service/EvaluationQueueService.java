@@ -63,14 +63,14 @@ public class EvaluationQueueService {
      *
      * @throws CustomException 대기열 가득 E004
      */
-    public void submitTrendRefresh(boolean force) {
+    public void submitTrendRefresh() {
         manualPending.incrementAndGet(); // 락 대기 전에 올려 배치가 먼저 끼어들지 못하게 한다
         try {
             executor.execute(() -> {
                 try {
                     lock.lock();
                     try {
-                        globalTrend.refresh(force);
+                        globalTrend.refresh();
                     } catch (RuntimeException e) {
                         log.error("글로벌 트렌드 수동 갱신 실패", e);
                     } finally {

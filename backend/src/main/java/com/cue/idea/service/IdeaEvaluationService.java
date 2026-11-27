@@ -10,7 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * 수동 평가 요청 (POST /api/ideas/{id}/evaluate). 소유자·활성·AI 사용 가능 여부는 요청 시점에 동기로 검사하고,
+ * 수동 평가 요청 (POST /api/ideas/{id}/evaluate). 소유자·활성·하루 한 번 제한·AI 사용 가능 여부는 요청 시점에 동기로 검사하고,
  * 평가 자체는 큐에 넣고 바로 돌아온다(비동기). 평가 동안의 트랜잭션은 {@link EvaluationQueueService}가 잡지 않는다.
  */
 @Service
@@ -21,7 +21,7 @@ public class IdeaEvaluationService {
     private final GeminiClient gemini;
 
     /**
-     * @throws CustomException 없음 I001, 남의 것 I002, 보류 I004, AI 사용 불가 E001, 대기열 가득 E004
+     * @throws CustomException 없음 I001, 남의 것 I002, 보류 I004, 오늘 이미 평가함 E007, AI 사용 불가 E001, 대기열 가득 E004
      */
     public EvaluateIdeaResponse request(Long userId, Long ideaId) {
         ideaService.assertEvaluable(userId, ideaId);

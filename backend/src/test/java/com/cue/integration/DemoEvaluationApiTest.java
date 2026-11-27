@@ -88,7 +88,7 @@ class DemoEvaluationApiTest extends DemoTestSupport {
         assertEquals(0, idea(b, b1).get("totalScore").asDouble());
         verify(sourceCheck, never()).checkAll(b1);
         verify(sourceCheck, never()).checkAll(hold);
-        verify(globalTrend, timeout(5000)).refresh(false);
+        verify(globalTrend, timeout(5000)).refresh();
     }
 
     @Test
@@ -100,7 +100,7 @@ class DemoEvaluationApiTest extends DemoTestSupport {
         JsonNode res = run(a, "{\"force\":false}", 202);
         assertFalse(res.get("data").get("trendRefreshed").asBoolean());
         awaitStatus(a, id, "IDLE");
-        verify(globalTrend, never()).refresh(anyBoolean());
+        verify(globalTrend, never()).refresh();
     }
 
     @Test
@@ -124,8 +124,8 @@ class DemoEvaluationApiTest extends DemoTestSupport {
     }
 
     @Test
-    void force가_true면_트렌드를_강제로_다시_수집하고_source_해시를_바꿔_변경_감지되게_한다() throws Exception {
-        when(globalTrend.isCurrent()).thenReturn(true); // 오늘 트렌드가 있어도 force면 다시 수집
+    void force가_true면_source_해시를_바꿔_변경_감지되게_하지만_오늘_트렌드는_다시_수집하지_않는다() throws Exception {
+        when(globalTrend.isCurrent()).thenReturn(true);
         String a = signUpAndLogin("force@cue.com");
         String b = signUpAndLogin("forceb@cue.com");
         long id = createIdea(a, FULL);
@@ -135,13 +135,29 @@ class DemoEvaluationApiTest extends DemoTestSupport {
         // 실행기가 먼저 읽지 못하게: 큐에 넣기 전에 해시가 바뀌어야 하므로, 응답을 받은 시점에는 이미 바뀌어 있다
 
         JsonNode data = run(a, "{\"force\":true}", 202).get("data");
-        assertTrue(data.get("trendRefreshed").asBoolean());
+        assertFalse(data.get("trendRefreshed").asBoolean());
         assertEquals(id, data.get("queued").get(0).asLong());
         assertEquals(List.of("FORCED-REFRESH"), jdbc.queryForList("select distinct content_hash from sources where idea_id = ?", String.class, id));
         assertEquals(List.of("real-hash"), jdbc.queryForList("select distinct content_hash from sources where idea_id = ?", String.class, other));
-        verify(globalTrend, timeout(5000)).refresh(true);
+        verify(globalTrend, never()).refresh();
         gate.countDown();
         awaitStatus(a, id, "IDLE");
+    }
+
+    @Test
+    void 오늘_이미_평가한_아이디어는_force여도_건너뛴다() throws Exception {
+        when(globalTrend.isCurrent()).thenReturn(true);
+        String a = signUpAndLogin("done@cue.com");
+        long id = createIdea(a, FULL);
+        jdbc.update("update ideas set evaluated_on = current_date, needs_full_evaluation = false");
+        jdbc.update("update sources set content_hash = 'real-hash'");
+
+        JsonNode data = run(a, "{\"force\":true}", 202).get("data");
+
+        assertEquals(0, data.get("queued").size());
+        assertEquals("ALREADY_EVALUATED_TODAY", data.get("skipped").get(0).get("reason").asString());
+        assertEquals(List.of("real-hash"), jdbc.queryForList("select distinct content_hash from sources where idea_id = ?", String.class, id));
+        verify(sourceCheck, never()).checkAll(id);
     }
 
     @Test

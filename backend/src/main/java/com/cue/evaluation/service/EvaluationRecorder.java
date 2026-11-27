@@ -16,6 +16,7 @@ import com.cue.source.repository.SourceRepository;
 import com.cue.trend.entity.Trend;
 import com.cue.trend.repository.TrendRepository;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -100,6 +101,12 @@ public class EvaluationRecorder {
         idea.recordEvaluation(totalDifference, now);
         histories.save(new IdeaScoreHistory(idea, idea.getTotalScore(), totalDifference, now));
         return true;
+    }
+
+    /** 그날의 평가를 끝까지 마쳤음을 기록한다 (같은 날 다시 평가하지 않는다). */
+    @Transactional
+    public void completeDailyEvaluation(Long ideaId, LocalDate date) {
+        ideas.findById(ideaId).ifPresent(idea -> idea.completeDailyEvaluation(date));
     }
 
     /** source별로 점수에 반영한 항목을 기록한다. 다음 조회에서 이 목록과 비교해 추가·삭제를 가려낸다. */

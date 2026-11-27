@@ -27,6 +27,8 @@ CREATE TABLE ideas (
     last_evaluated_at TIMESTAMP,
     last_checked_at   TIMESTAMP,
     -- true면 다음 평가에서 자료 변화와 무관하게 Gemini 전체(초기) 평가를 한 번 수행한다. 등록 직후와 내용 수정 시 켜지고, 평가가 끝나면 꺼진다.
+    -- 평가를 마지막으로 끝까지 마친 날짜 (하루 한 번 제한). 점수가 안 바뀐 평가도 기록한다
+    evaluated_on DATE,
     needs_full_evaluation BOOLEAN   NOT NULL DEFAULT TRUE,
     -- 이 아이디어의 TREND 점수를 마지막으로 평가한 글로벌 트렌드(trends.id). null이면 아직 TREND 첫 평가 전(내용 수정 시에도 null로 돌아간다).
     -- 그날 트렌드와 같으면 TREND 평가를 다시 하지 않는다. FK는 trends 생성 뒤에 건다.

@@ -7,7 +7,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cue.evaluation.service.IdeaEvaluationPipeline;
@@ -20,7 +22,9 @@ import com.cue.source.entity.ApiProvider;
 import com.cue.source.repository.SourceRepository;
 import com.cue.source.service.SourceCheckService;
 import com.cue.source.service.SourceExcerptService;
+import com.cue.trend.dto.TrendSnapshot;
 import com.cue.trend.service.GlobalTrendService;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -108,12 +112,17 @@ class FirstEvaluationEvidenceTest {
         githubNames.clear();
         reEvaluationFails = false;
         when(gemini.available()).thenReturn(true);
-        when(globalTrend.today()).thenReturn(null); // TREND 갈래는 건너뛴다
+        Long trendId = jdbc.queryForObject(
+                "insert into trends (summary, providers, content_hash) values ('요약', 'HACKER_NEWS', 'h') returning id", Long.class);
+        when(globalTrend.today()).thenReturn(new TrendSnapshot(trendId, "요약", LocalDateTime.now(), List.of()));
         when(sourceExcerpt.excerpt(any())).thenAnswer(inv -> inv.getArgument(0));
         // 초기 평가: 프롬프트에 들어온 첫 자료 URL을 근거로 인용한다 (입력에 없던 URL은 서버가 버린다)
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             String prompt = inv.getArgument(0);
             Map<String, Object> schema = inv.getArgument(1);
+            if (mapper.valueToTree(schema).at("/properties/difference").isObject()) { // TREND: prompts에는 근거 평가만 담는다
+                return mapper.readTree("{\"score\":50,\"evidenceSummary\":\"흐름과 맞닿아 있다\",\"referenceUrls\":[]}");
+            }
             if (mapper.valueToTree(schema).at("/properties/changes").isObject()) { // 재평가
                 prompts.add(prompt);
                 if (reEvaluationFails) {
@@ -170,6 +179,7 @@ class FirstEvaluationEvidenceTest {
         // 해시도 기록돼 두 번째 조회부터는 변경 없음이다
         assertEquals(0, jdbc.queryForObject("select count(*) from sources where idea_id = ? and content_hash is null", Integer.class, id));
         prompts.clear();
+        nextDay();
         assertEquals("NO_CHANGE", pipeline.evaluate(id).status().name());
         assertTrue(prompts.isEmpty());
     }
@@ -186,7 +196,12 @@ class FirstEvaluationEvidenceTest {
         String recorded = recordedItems(id);
         assertTrue(recorded.contains("repo_d") && recorded.contains("repo_e"));
 
-        // 상위 5개 중 2개 교체. AI가 실패하면 반영 기록은 그대로다
+        // 같은 날 다시 요청하면 거절한다
+        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("E007"));
+
+        // 다음 날, 상위 5개 중 2개 교체. AI가 실패하면 반영 기록은 그대로다
+        nextDay();
         githubNames.clear();
         githubNames.addAll(List.of("a", "b", "c", "f", "g"));
         reEvaluationFails = true;
@@ -195,7 +210,7 @@ class FirstEvaluationEvidenceTest {
         assertEquals("FAILED", evaluationStatus(id));
         assertEquals(recorded, recordedItems(id));
 
-        // 다시 요청하면 같은 추가·삭제가 평가된다
+        // 실패한 날은 다시 요청할 수 있고, 같은 추가·삭제가 평가된다
         reEvaluationFails = false;
         prompts.clear();
         evaluateManually(id);
@@ -215,11 +230,34 @@ class FirstEvaluationEvidenceTest {
         assertEquals(1, jdbc.queryForObject("select count(*) from evaluation_references where url = 'https://fake.test/repo_f'",
                 Integer.class));
 
-        // 더 바뀐 것이 없으면 AI를 부르지 않는다
+        // 그다음 날 더 바뀐 것이 없으면 AI를 부르지 않는다
+        nextDay();
         prompts.clear();
         evaluateManually(id);
         assertEquals("IDLE", evaluationStatus(id));
         assertTrue(prompts.isEmpty());
+    }
+
+    @Test
+    void 오늘_평가했어도_내용을_수정하면_같은_날_전체_평가를_다시_요청할_수_있다() throws Exception {
+        long id = createIdea();
+        evaluateManually(id);
+        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("E007"));
+
+        mvc.perform(patch("/api/ideas/" + id).header("Authorization", token).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"solution\":\"완전히 다른 해결\"}")).andExpect(status().isOk());
+        prompts.clear();
+        evaluateManually(id);
+
+        assertEquals(1, prompts.size());
+        assertTrue(prompts.get(0).contains("[자료 목록]") && prompts.get(0).contains("완전히 다른 해결"));
+        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
+                .andExpect(status().isConflict());
+    }
+
+    private void nextDay() {
+        jdbc.update("update ideas set evaluated_on = evaluated_on - 1");
     }
 
     /** POST /api/ideas/{id}/evaluate를 호출하고 비동기 평가가 끝날 때까지 기다린다 (최대 10초). */

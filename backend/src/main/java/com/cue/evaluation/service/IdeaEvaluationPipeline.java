@@ -26,6 +26,7 @@ import com.cue.trend.entity.Trend;
 import com.cue.trend.repository.TrendRepository;
 import com.cue.trend.service.GlobalTrendService;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -42,6 +43,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * 아이디어 한 개의 하루 평가 파이프라인. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 이 클래스는
  * @Transactional을 쓰지 않고, 필요한 DB 작업만 짧은 트랜잭션({@link TransactionTemplate} 또는 EvaluationRecorder)으로 처리한다.
+ *
+ * <p>평가는 아이디어마다 하루에 한 번이다. 오늘 이미 끝까지 마쳤으면(내용·키워드가 바뀐 경우 제외) 자료 조회 없이 끝낸다.
+ * 실패했거나 첫 TREND 평가를 하지 못한(그날 트렌드가 없는) 경우는 마친 것으로 치지 않아 같은 날 다시 시도할 수 있다.
  *
  * <p>하루 평가는 서로 독립인 두 갈래다.
  * <ul>
@@ -90,6 +94,10 @@ public class IdeaEvaluationPipeline {
         if (!gemini.available()) {
             throw new CustomException(ErrorCode.AI_NOT_CONFIGURED);
         }
+        LocalDate today = LocalDate.now(); // 자정을 넘겨 끝나도 시작한 날의 평가로 기록한다
+        if (Boolean.TRUE.equals(tx.execute(s -> ideas.findById(ideaId).map(i -> i.dailyEvaluationDone(today)).orElse(false)))) {
+            return EvaluationRunResult.noChange(); // 자료 조회·가중치 적용도 하루 한 번
+        }
         if (evaluationService.startTurn(ideaId)) {
             log.info("가중치 적용으로 총점이 바뀌었습니다 ideaId={}", ideaId);
             snapshot = snapshot(ideaId); // 가중치 적용 후 점수 기준
@@ -102,10 +110,16 @@ public class IdeaEvaluationPipeline {
 
         EvidenceChanges evidenceChanges = EvidenceChanges.between(recordedItems(previous), checked);
 
+        // 첫 TREND 평가를 아직 못 했는데 그날 트렌드가 없으면 오늘 평가를 마친 것으로 치지 않는다
+        boolean completesToday = trend != null || snapshot.lastTrendId() != null;
+
         boolean runA = evidenceChanges.any() || snapshot.needsFullEvaluation();
         boolean runB = trend != null && !trend.id().equals(snapshot.lastTrendId()) && trendDue(snapshot, trend);
         if (!runA && !runB) {
             evaluationService.recordEvidenceItems(evidenceChanges.current()); // 추가·삭제가 없어 평가 없이 기록만 맞춘다
+            if (completesToday) {
+                evaluationService.completeDailyEvaluation(ideaId, today);
+            }
             return EvaluationRunResult.noChange();
         }
 
@@ -152,6 +166,9 @@ public class IdeaEvaluationPipeline {
         if (failure != null) {
             log.warn("하루 평가 일부가 실패했습니다 (성공한 쪽은 저장됨, 실패한 쪽은 다음 실행에서 다시) ideaId={}: {}", ideaId, failure.toString());
             throw failure;
+        }
+        if (completesToday) {
+            evaluationService.completeDailyEvaluation(ideaId, today);
         }
         return EvaluationRunResult.evaluated(updated);
     }
