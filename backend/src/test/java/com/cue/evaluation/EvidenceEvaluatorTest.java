@@ -30,6 +30,15 @@ import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.json.JsonMapper;
 
 class EvidenceEvaluatorTest {
+    private static final String INITIAL_SCORES = """
+            {"scores":{
+              "PROBLEM_IMPORTANCE":{"score":72,"evidenceSummary":"a","referenceUrls":[]},
+              "MARKET_DEMAND":{"score":55,"evidenceSummary":"b","referenceUrls":[]},
+              "MARKET_DIFFERENTIATION":{"score":150,"evidenceSummary":"c","referenceUrls":[]},
+              "TECH_FEASIBILITY":{"score":50,"evidenceSummary":"d","referenceUrls":[]}
+            }}
+            """;
+
     private final GeminiClient gemini = mock(GeminiClient.class);
     private final EvidenceEvaluator analyzer = new EvidenceEvaluator(gemini, new PromptLoader());
     private final JsonMapper mapper = JsonMapper.builder().build();
@@ -118,10 +127,7 @@ class EvidenceEvaluatorTest {
 
     @Test
     void 초기_평가는_0에서_100_점수를_현재_점수와의_차이로_바꾼다() {
-        respond("{\"scores\":[{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":72,\"evidenceSummary\":\"a\"},"
-                + "{\"type\":\"MARKET_DEMAND\",\"score\":55,\"evidenceSummary\":\"b\"},"
-                + "{\"type\":\"MARKET_DIFFERENTIATION\",\"score\":150,\"evidenceSummary\":\"c\"},"
-                + "{\"type\":\"TECH_FEASIBILITY\",\"score\":50,\"evidenceSummary\":\"d\"}]}");
+        respond(INITIAL_SCORES);
         List<ScoreChange> changes = analyzer.initialEvaluate(idea("55"), List.of());
 
         // 현재 점수 50/55/50/50 → 72(+22), 55(변화 없음 제외), 100으로 제한(+50), 50(제외)
@@ -143,7 +149,7 @@ class EvidenceEvaluatorTest {
         assertTrue(prompt.getValue().contains("주니어".isEmpty() ? "" : "타깃: 타깃"));
         assertFalse(prompt.getValue().contains("{{"));
 
-        respond("{\"scores\":[]}");
+        respond(INITIAL_SCORES);
         analyzer.initialEvaluate(idea("55"), List.of());
         verify(gemini, times(2)).generateJson(prompt.capture(), anyMap());
         assertFalse(prompt.getValue().contains("{{"));
@@ -201,7 +207,19 @@ class EvidenceEvaluatorTest {
         assertEquals(1, changes.size());
         assertEquals(ScoreType.MARKET_DEMAND, changes.get(0).type());
 
-        respond("{\"scores\":[{\"type\":\"TREND\",\"score\":90,\"evidenceSummary\":\"x\"}]}");
-        assertTrue(analyzer.initialEvaluate(idea("55"), List.of(CHANGED)).isEmpty());
+        respond(INITIAL_SCORES.replace("TECH_FEASIBILITY", "TREND"));
+        assertEquals(ErrorCode.AI_RESPONSE_INVALID, assertThrows(CustomException.class,
+                () -> analyzer.initialEvaluate(idea("55"), List.of(CHANGED))).getErrorCode());
+    }
+
+    @Test
+    void 점수_근거_또는_출처_배열이_잘못되면_전체_평가를_거절한다() {
+        for (String invalid : List.of(INITIAL_SCORES.replace("72", "\"72\""),
+                INITIAL_SCORES.replace("\"a\"", "\"  \""),
+                INITIAL_SCORES.replace("[]", "null"), INITIAL_SCORES.replace("[]", "[3]"))) {
+            respond(invalid);
+            assertEquals(ErrorCode.AI_RESPONSE_INVALID, assertThrows(CustomException.class,
+                    () -> analyzer.initialEvaluate(idea("55"), List.of(CHANGED))).getErrorCode());
+        }
     }
 }

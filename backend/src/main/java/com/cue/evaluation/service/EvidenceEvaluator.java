@@ -20,6 +20,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -34,7 +36,7 @@ import tools.jackson.databind.JsonNode;
  * {@code pastEvaluations}(기존 평가 내역), {@code newItems}(새로 추가된 자료), {@code removedItems}(삭제된 자료). 비면 "(… 없음)".
  * <ul>
  *   <li>re-evaluation: {@code {"changes":[{"type","difference","evidenceSummary","referenceUrls":[]}]}} — 기준당 ±{@value #MAX_DIFFERENCE}로 서버에서 다시 제한</li>
- *   <li>initial-evaluation: {@code {"scores":[{"type","score","evidenceSummary","referenceUrls":[]}]}} — 0~100, 현재 점수와의 차이로 바꿔 기록</li>
+ *   <li>initial-evaluation: {@code {"scores":{"PROBLEM_IMPORTANCE":{"score","evidenceSummary","referenceUrls":[]}, ...}}} — 4개 기준을 검사한 뒤 현재 점수와의 차이로 기록</li>
  * </ul>
  */
 @Component
@@ -62,16 +64,19 @@ public class EvidenceEvaluator {
                             "required", List.of("type", "difference", "evidenceSummary", "referenceUrls")))),
             "required", List.of("changes"));
 
+    private static final Map<String, Object> INITIAL_SCORE_SCHEMA = Map.of(
+            "type", "OBJECT",
+            "properties", Map.of(
+                    "score", Map.of("type", "NUMBER"),
+                    "evidenceSummary", Map.of("type", "STRING"),
+                    "referenceUrls", REFERENCE_URLS),
+            "required", List.of("score", "evidenceSummary", "referenceUrls"));
+
     static final Map<String, Object> INITIAL_EVALUATION_SCHEMA = Map.of(
             "type", "OBJECT",
-            "properties", Map.of("scores", Map.of("type", "ARRAY", "maxItems", ScoreType.EVIDENCE_TYPES.size(),
-                    "items", Map.of("type", "OBJECT",
-                            "properties", Map.of(
-                                    "type", Map.of("type", "STRING", "enum", TYPE_NAMES),
-                                    "score", Map.of("type", "NUMBER"),
-                                    "evidenceSummary", Map.of("type", "STRING"),
-                                    "referenceUrls", REFERENCE_URLS),
-                            "required", List.of("type", "score", "evidenceSummary", "referenceUrls")))),
+            "properties", Map.of("scores", Map.of("type", "OBJECT",
+                    "properties", TYPE_NAMES.stream().collect(Collectors.toMap(Function.identity(), type -> INITIAL_SCORE_SCHEMA)),
+                    "required", TYPE_NAMES)),
             "required", List.of("scores"));
 
     private final GeminiClient gemini;
@@ -125,24 +130,27 @@ public class EvidenceEvaluator {
         vars.put("items", itemLines(evidence, "(수집된 자료 없음)"));
         JsonNode result = gemini.generateJson(prompts.render("initial-evaluation", vars), INITIAL_EVALUATION_SCHEMA);
         JsonNode scores = result.path("scores");
-        if (!scores.isArray()) {
+        if (!scores.isObject() || scores.size() != ScoreType.EVIDENCE_TYPES.size()) {
             throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
         }
-        Map<ScoreType, ScoreChange> out = new LinkedHashMap<>();
+        List<ScoreChange> out = new ArrayList<>();
         Map<String, SourceCheckResult> byUrl = indexByUrl(evidence);
-        for (JsonNode n : scores) {
-            ScoreType type = parseType(n.path("type").asString(null));
+        for (ScoreType type : ScoreType.EVIDENCE_TYPES) {
+            JsonNode n = scores.path(type.name());
             BigDecimal score = number(n.path("score"));
-            if (type == null || score == null || out.containsKey(type)) {
-                continue;
+            JsonNode summary = n.path("evidenceSummary");
+            JsonNode references = n.path("referenceUrls");
+            if (score == null || !summary.isString() || summary.asString().isBlank()
+                    || !references.isArray() || !references.valueStream().allMatch(JsonNode::isString)) {
+                throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
             }
             BigDecimal current = idea.scores().getOrDefault(type, BigDecimal.ZERO);
             BigDecimal diff = clamp(score, BigDecimal.ZERO, MAX_SCORE).subtract(current);
             if (diff.signum() != 0) {
-                out.put(type, toChange(type, diff, n, byUrl));
+                out.add(toChange(type, diff, n, byUrl));
             }
         }
-        return List.copyOf(out.values());
+        return List.copyOf(out);
     }
 
     private static Map<String, String> ideaVariables(IdeaSnapshot idea) {

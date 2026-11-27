@@ -103,6 +103,7 @@ class FirstEvaluationEvidenceTest {
 
     private final List<String> prompts = new CopyOnWriteArrayList<>();
     private volatile boolean reEvaluationFails;
+    private volatile boolean incompleteInitialResponse;
     private String token;
 
     @BeforeEach
@@ -111,6 +112,7 @@ class FirstEvaluationEvidenceTest {
         prompts.clear();
         githubNames.clear();
         reEvaluationFails = false;
+        incompleteInitialResponse = false;
         when(gemini.available()).thenReturn(true);
         Long trendId = jdbc.queryForObject(
                 "insert into trends (summary, providers, content_hash) values ('요약', 'HACKER_NEWS', 'h') returning id", Long.class);
@@ -131,18 +133,25 @@ class FirstEvaluationEvidenceTest {
                 return mapper.readTree("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":4,"
                         + "\"evidenceSummary\":\"새 저장소가 나타났어요.\",\"referenceUrls\":[\"https://fake.test/repo_f\"]}]}");
             }
-            JsonNode required = mapper.valueToTree(schema).at("/properties/scores/items/required");
+            JsonNode required = mapper.valueToTree(schema).at("/properties/scores/properties/PROBLEM_IMPORTANCE/required");
             assertTrue(required.valueStream().anyMatch(field -> field.asString().equals("referenceUrls")),
                     "Gemini 초기 평가 응답에 referenceUrls 배열을 요구해야 한다");
             prompts.add(prompt);
+            if (incompleteInitialResponse) {
+                return mapper.readTree("""
+                        {"scores":{"PROBLEM_IMPORTANCE":{"score":0,"evidenceSummary":"","referenceUrls":[]}}}
+                        """);
+            }
             Matcher m = Pattern.compile("https://fake\\.test/\\w+").matcher(prompt);
             String cited = m.find() ? m.group() : "";
-            return mapper.readTree("{\"scores\":["
-                    + "{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":70,\"evidenceSummary\":\"문제가 크다\","
-                    + "\"referenceUrls\":[\"" + cited + "\",\"https://not-in-input.test\"]},"
-                    + "{\"type\":\"MARKET_DEMAND\",\"score\":60,\"evidenceSummary\":\"수요가 있다\",\"referenceUrls\":[]},"
-                    + "{\"type\":\"MARKET_DIFFERENTIATION\",\"score\":40,\"evidenceSummary\":\"경쟁이 많다\",\"referenceUrls\":[]},"
-                    + "{\"type\":\"TECH_FEASIBILITY\",\"score\":80,\"evidenceSummary\":\"구현 가능\",\"referenceUrls\":[]}]}");
+            return mapper.readTree("""
+                    {"scores":{
+                      "PROBLEM_IMPORTANCE":{"score":70,"evidenceSummary":"문제가 크다","referenceUrls":["%s","https://not-in-input.test"]},
+                      "MARKET_DEMAND":{"score":60,"evidenceSummary":"수요가 있다","referenceUrls":[]},
+                      "MARKET_DIFFERENTIATION":{"score":40,"evidenceSummary":"경쟁이 많다","referenceUrls":[]},
+                      "TECH_FEASIBILITY":{"score":80,"evidenceSummary":"구현 가능","referenceUrls":[]}
+                    }}
+                    """.formatted(cited));
         });
     }
 
@@ -258,6 +267,24 @@ class FirstEvaluationEvidenceTest {
 
     private void nextDay() {
         jdbc.update("update ideas set evaluated_on = evaluated_on - 1");
+    }
+
+    @Test
+    void 기준이_빠진_첫_평가는_실패하고_같은_날_다시_전체_평가할_수_있다() throws Exception {
+        long id = createIdea();
+        incompleteInitialResponse = true;
+        evaluateManually(id);
+
+        assertEquals("FAILED", evaluationStatus(id));
+        assertEquals("E002", jdbc.queryForObject("select last_evaluation_error_code from ideas where id = ?", String.class, id));
+        assertTrue(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id));
+
+        incompleteInitialResponse = false;
+        evaluateManually(id);
+        assertEquals("IDLE", evaluationStatus(id));
+        assertFalse(jdbc.queryForObject("select needs_full_evaluation from ideas where id = ?", Boolean.class, id));
+        assertEquals(4, jdbc.queryForObject("select count(*) from evaluations e join scores s on e.score_id = s.id "
+                + "where s.idea_id = ? and s.type <> 'TREND'", Integer.class, id));
     }
 
     /** POST /api/ideas/{id}/evaluate를 호출하고 비동기 평가가 끝날 때까지 기다린다 (최대 10초). */

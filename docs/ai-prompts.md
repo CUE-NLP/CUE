@@ -75,9 +75,9 @@ CUE가 Gemini(구글 무료 티어)에 보내는 프롬프트의 설계 문서. 
 
 출력 스키마와 예시:
 ```json
-{"scores":[{"type":"PROBLEM_IMPORTANCE","score":72,"evidenceSummary":"관련 저장소의 사용 사례에서 타깃이 반복적으로 겪는 불편을 확인했어요.","referenceUrls":["https://github.com/example/llm-runtime"]},{"type":"MARKET_DEMAND","score":55,"evidenceSummary":"수요를 직접 보여주는 자료가 부족해 보수적으로 평가했어요.","referenceUrls":[]},{"type":"MARKET_DIFFERENTIATION","score":48,"evidenceSummary":"수집 자료의 오픈소스와 비교해 차별점이 더 필요해 보여요.","referenceUrls":["https://github.com/example/llm-runtime"]},{"type":"TECH_FEASIBILITY","score":80,"evidenceSummary":"자료에 나온 공개 모델과 도구를 활용해 구현할 수 있어요.","referenceUrls":["https://github.com/example/llm-runtime"]}]}
+{"scores":{"PROBLEM_IMPORTANCE":{"score":72,"evidenceSummary":"관련 저장소의 사용 사례에서 타깃이 반복적으로 겪는 불편을 확인했어요.","referenceUrls":["https://github.com/example/llm-runtime"]},"MARKET_DEMAND":{"score":55,"evidenceSummary":"수요를 직접 보여주는 자료가 부족해 보수적으로 평가했어요.","referenceUrls":[]},"MARKET_DIFFERENTIATION":{"score":48,"evidenceSummary":"수집 자료의 오픈소스와 비교해 차별점이 더 필요해 보여요.","referenceUrls":["https://github.com/example/llm-runtime"]},"TECH_FEASIBILITY":{"score":80,"evidenceSummary":"자료에 나온 공개 모델과 도구를 활용해 구현할 수 있어요.","referenceUrls":["https://github.com/example/llm-runtime"]}}}
 ```
-- `scores`는 4개 type 각 1회. 서버는 누락·중복·범위 이탈을 거부/보정한다.
+- `scores` 객체는 네 기준을 각각 필수 키로 갖는다. 서버는 네 기준의 숫자 점수, 비어 있지 않은 판단 근거, URL 배열을 검사한다. 계약에 맞지 않으면 `E002`로 처리하고 첫 평가를 완료하지 않는다.
 - 각 기준의 `referenceUrls` 배열은 필수다. 실제로 인용한 `{{items}}`의 URL을 그대로 넣고, 인용한 자료가 없으면 빈 배열을 반환한다. 서버는 입력에 없거나 중복된 URL을 제외한다.
 
 ### re-evaluation.txt

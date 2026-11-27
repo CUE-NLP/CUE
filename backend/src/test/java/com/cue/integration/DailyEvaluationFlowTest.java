@@ -62,11 +62,14 @@ class DailyEvaluationFlowTest {
 
     private static final String FULL = "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\","
             + "\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}";
-    private static final String INITIAL = "{\"scores\":["
-            + "{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":70,\"evidenceSummary\":\"문제가 크다\"},"
-            + "{\"type\":\"MARKET_DEMAND\",\"score\":60,\"evidenceSummary\":\"수요가 있다\"},"
-            + "{\"type\":\"MARKET_DIFFERENTIATION\",\"score\":40,\"evidenceSummary\":\"경쟁이 많다\"},"
-            + "{\"type\":\"TECH_FEASIBILITY\",\"score\":80,\"evidenceSummary\":\"구현 가능\"}]}";
+    private static final String INITIAL = """
+            {"scores":{
+              "PROBLEM_IMPORTANCE":{"score":70,"evidenceSummary":"문제가 크다","referenceUrls":[]},
+              "MARKET_DEMAND":{"score":60,"evidenceSummary":"수요가 있다","referenceUrls":[]},
+              "MARKET_DIFFERENTIATION":{"score":40,"evidenceSummary":"경쟁이 많다","referenceUrls":[]},
+              "TECH_FEASIBILITY":{"score":80,"evidenceSummary":"구현 가능","referenceUrls":[]}
+            }}
+            """;
 
     /** TREND 평가 응답 (첫 평가는 score, 재평가는 difference를 읽는다). */
     private static final String TREND_REPLY = "{\"score\":65,\"difference\":35,\"evidenceSummary\":\"에이전트 흐름과 맞닿아 있다\","

@@ -2,6 +2,7 @@ package com.cue.prompt;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cue.score.entity.ScoreType;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -74,7 +75,9 @@ class PromptTemplatesTest {
         assertThat(prompt).contains("referenceUrls에는", "인용할 자료가 없으면");
         for (String example : List.of(promptExample, documentedExample)) {
             JsonNode scores = objectMapper.readTree(example).path("scores");
-            assertThat(scores.size()).isEqualTo(4);
+            assertThat(scores.isObject()).isTrue();
+            assertThat(scores.propertyNames())
+                    .containsExactlyInAnyOrderElementsOf(ScoreType.EVIDENCE_TYPES.stream().map(Enum::name).toList());
             assertThat(scores.valueStream().allMatch(score -> score.path("referenceUrls").isArray())).isTrue();
         }
     }
