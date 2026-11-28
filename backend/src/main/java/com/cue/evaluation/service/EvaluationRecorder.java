@@ -103,10 +103,10 @@ public class EvaluationRecorder {
         return true;
     }
 
-    /** 그날의 평가를 끝까지 마쳤음을 기록한다 (같은 날 다시 평가하지 않는다). */
+    /** AI 평가를 끝까지 마쳤음을 기록한다 (하루 제한·재평가 대기 시간의 기준). */
     @Transactional
     public void completeDailyEvaluation(Long ideaId, LocalDate date) {
-        ideas.findById(ideaId).ifPresent(idea -> idea.completeDailyEvaluation(date));
+        ideas.findById(ideaId).ifPresent(idea -> idea.completeDailyEvaluation(date, LocalDateTime.now()));
     }
 
     /** source별로 점수에 반영한 항목을 기록한다. 다음 조회에서 이 목록과 비교해 추가·삭제를 가려낸다. */

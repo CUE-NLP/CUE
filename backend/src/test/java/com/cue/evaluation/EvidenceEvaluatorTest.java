@@ -46,7 +46,7 @@ class EvidenceEvaluatorTest {
 
     /** 새로 추가된 자료만 있는 재평가. */
     private List<ScoreChange> reEvaluate() {
-        return analyzer.reEvaluate(idea("55"), List.of(), List.of(CHANGED), List.of());
+        return analyzer.reEvaluate(idea("55"), List.of(), List.of(CHANGED), List.of(), List.of());
     }
 
     private void respond(String json) {
@@ -54,32 +54,44 @@ class EvidenceEvaluatorTest {
     }
 
     @Test
-    void 변화량은_기준당_플러스마이너스_10으로_서버에서_다시_제한한다() {
-        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":35,\"evidenceSummary\":\"크게 늘었다\",\"referenceUrls\":[\"https://github.com/a/b\"]},"
-                + "{\"type\":\"TECH_FEASIBILITY\",\"difference\":-50,\"evidenceSummary\":\"위험\"}]}");
+    void 재평가는_새_점수를_받아_변화_폭_제한_없이_현재_점수와의_차이로_바꾼다() {
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":95,\"evidenceSummary\":\"크게 늘었다\",\"referenceUrls\":[\"https://github.com/a/b\"]},"
+                + "{\"type\":\"TECH_FEASIBILITY\",\"score\":-20,\"evidenceSummary\":\"위험\"}]}");
         List<ScoreChange> changes = reEvaluate();
 
         assertEquals(2, changes.size());
-        assertEquals(new BigDecimal("10"), changes.get(0).difference());
-        assertEquals(new BigDecimal("-10"), changes.get(1).difference());
+        assertEquals(new BigDecimal("40"), changes.get(0).difference());   // 55 → 95
+        assertEquals(new BigDecimal("-50"), changes.get(1).difference());  // 50 → 0 (범위 제한)
         assertEquals("https://github.com/a/b", changes.get(0).references().get(0).url());
         assertEquals("a/b", changes.get(0).references().get(0).title());
         assertEquals(ApiProvider.GITHUB, changes.get(0).references().get(0).provider());
     }
 
     @Test
-    void 변화_0과_알_수_없는_기준과_중복과_입력에_없는_URL은_버린다() {
-        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":0,\"evidenceSummary\":\"x\"},"
-                + "{\"type\":\"WHATEVER\",\"difference\":3,\"evidenceSummary\":\"x\"},"
-                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"difference\":4,\"evidenceSummary\":\"첫번째\",\"referenceUrls\":[\"https://evil.example\"]},"
-                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"difference\":9,\"evidenceSummary\":\"중복\"},"
-                + "{\"type\":\"MARKET_DIFFERENTIATION\",\"difference\":\"abc\",\"evidenceSummary\":\"x\"}]}");
+    void 같은_점수와_알_수_없는_기준과_중복과_입력에_없는_URL은_버린다() {
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":55,\"evidenceSummary\":\"x\"},"
+                + "{\"type\":\"WHATEVER\",\"score\":3,\"evidenceSummary\":\"x\"},"
+                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":54,\"evidenceSummary\":\"첫번째\",\"referenceUrls\":[\"https://evil.example\"]},"
+                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":59,\"evidenceSummary\":\"중복\"},"
+                + "{\"type\":\"MARKET_DIFFERENTIATION\",\"score\":\"abc\",\"evidenceSummary\":\"x\"}]}");
         List<ScoreChange> changes = reEvaluate();
 
         assertEquals(1, changes.size());
         assertEquals(ScoreType.PROBLEM_IMPORTANCE, changes.get(0).type());
         assertEquals(new BigDecimal("4"), changes.get(0).difference());
         assertTrue(changes.get(0).references().isEmpty());
+    }
+
+    @Test
+    void 그대로인_자료도_넘기면_프롬프트에_넣고_근거_URL로_받는다() {
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":60,\"evidenceSummary\":\"a\",\"referenceUrls\":[\"https://github.com/a/b\"]}]}");
+
+        List<ScoreChange> changes = analyzer.reEvaluate(idea("55"), List.of(), List.of(), List.of(CHANGED), List.of());
+
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(gemini).generateJson(prompt.capture(), anyMap());
+        assertTrue(section(prompt.getValue(), "[그대로인 자료]", "[삭제된 자료]").contains("https://github.com/a/b"));
+        assertEquals("https://github.com/a/b", changes.get(0).references().get(0).url());
     }
 
     @Test
@@ -94,23 +106,23 @@ class EvidenceEvaluatorTest {
 
     @Test
     void 재평가에서_근거_요약이_비어_있으면_그_항목을_버린다() {
-        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":2,\"evidenceSummary\":\"  \"},"
-                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"difference\":2}]}");
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":57,\"evidenceSummary\":\"  \"},"
+                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":57}]}");
         assertTrue(reEvaluate().isEmpty());
     }
 
     @Test
     void 근거_요약이_300자를_넘으면_자른다() {
-        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":2,\"evidenceSummary\":\"" + "가".repeat(500) + "\"}]}");
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":57,\"evidenceSummary\":\"" + "가".repeat(500) + "\"}]}");
         String summary = reEvaluate().get(0).evidenceSummary();
         assertEquals(EvidenceEvaluator.MAX_SUMMARY_CHARS, summary.length());
         assertTrue(summary.endsWith("…"));
     }
 
     @Test
-    void 소수_변화량은_정수로_반올림하고_0이_되면_버린다() {
-        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":3.6,\"evidenceSummary\":\"a\"},"
-                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"difference\":0.4,\"evidenceSummary\":\"b\"}]}");
+    void 소수_점수는_정수로_반올림하고_현재_점수와_같아지면_버린다() {
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":58.6,\"evidenceSummary\":\"a\"},"
+                + "{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":50.4,\"evidenceSummary\":\"b\"}]}");
         List<ScoreChange> changes = reEvaluate();
         assertEquals(1, changes.size());
         assertEquals(new BigDecimal("4"), changes.get(0).difference());
@@ -156,10 +168,10 @@ class EvidenceEvaluatorTest {
                 new BigDecimal("60.00"), "기존 저장소에서 수요가 확인돼요.",
                 List.of(new ReferenceInput("https://x.test/gone", "사라진 저장소", ApiProvider.GITHUB),
                         new ReferenceInput("https://x.test/kept", "남은 저장소", ApiProvider.GITHUB)));
-        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":-2,\"evidenceSummary\":\"줄었다\","
+        respond("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":53,\"evidenceSummary\":\"줄었다\","
                 + "\"referenceUrls\":[\"https://github.com/a/b\",\"https://x.test/gone\",\"https://x.test/kept\"]}]}");
 
-        List<ScoreChange> changes = analyzer.reEvaluate(idea("55"), List.of(past), List.of(CHANGED),
+        List<ScoreChange> changes = analyzer.reEvaluate(idea("55"), List.of(past), List.of(CHANGED), List.of(),
                 List.of(new EvaluatedItem("https://x.test/gone", "사라진 저장소")));
 
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
@@ -169,7 +181,7 @@ class EvidenceEvaluatorTest {
         assertTrue(history.contains("MARKET_DEMAND | 2026-11-01 | 변화 +60 → 60점 | 기존 저장소에서 수요가 확인돼요."));
         assertTrue(history.contains("- 근거 자료(삭제됨): 사라진 저장소 | https://x.test/gone"));
         assertTrue(history.contains("- 근거 자료: 남은 저장소 | https://x.test/kept"));
-        String added = section(text, "[새로 추가된 자료]", "[삭제된 자료]");
+        String added = section(text, "[새로 추가된 자료]", "[그대로인 자료]");
         assertTrue(added.contains("https://github.com/a/b"));
         assertFalse(added.contains("https://x.test/"));
         assertTrue(text.substring(text.lastIndexOf("[삭제된 자료]")).contains("사라진 저장소 | https://x.test/gone"));
@@ -195,8 +207,8 @@ class EvidenceEvaluatorTest {
 
     @Test
     void 키워드_근거_평가는_TREND_기준을_받아들이지_않는다() {
-        respond("{\"changes\":[{\"type\":\"TREND\",\"difference\":5,\"evidenceSummary\":\"x\"},"
-                + "{\"type\":\"MARKET_DEMAND\",\"difference\":2,\"evidenceSummary\":\"y\"}]}");
+        respond("{\"changes\":[{\"type\":\"TREND\",\"score\":55,\"evidenceSummary\":\"x\"},"
+                + "{\"type\":\"MARKET_DEMAND\",\"score\":57,\"evidenceSummary\":\"y\"}]}");
         List<ScoreChange> changes = reEvaluate();
         assertEquals(1, changes.size());
         assertEquals(ScoreType.MARKET_DEMAND, changes.get(0).type());

@@ -1,5 +1,6 @@
 package com.cue.source;
 
+import static org.mockito.Mockito.times;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -77,6 +78,23 @@ class SourceExcerptServiceTest {
 
         verify(client, never()).fetchContent(any());
         assertEquals("가".repeat(400) + "…", result.items().get(0).summary());
+    }
+
+    @Test
+    void 읽은_원문은_재사용하고_실패한_것은_다시_읽는다() {
+        SourceItem ok = new SourceItem("repo", "https://github.com/o/1", "설명", "", "");
+        SourceItem flaky = new SourceItem("flaky", "https://github.com/o/2", "설명2", "", "");
+        SourceExcerptService service = service(5, 800);
+        when(client.fetchContent(ok)).thenReturn("본문");
+        when(client.fetchContent(flaky)).thenThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR)).thenReturn("본문2");
+
+        service.excerpt(changed(ok, flaky));
+        SourceCheckResult second = service.excerpt(changed(ok, flaky));
+
+        verify(client, times(1)).fetchContent(ok);
+        verify(client, times(2)).fetchContent(flaky);
+        assertEquals("설명 — 본문", second.items().get(0).summary());
+        assertEquals("설명2 — 본문2", second.items().get(1).summary());
     }
 
     @Test

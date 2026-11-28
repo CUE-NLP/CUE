@@ -42,9 +42,10 @@ class IdeaTitleUpdateTest {
         var cache = mock(AnalysisCache.class);
         var events = mock(ApplicationEventPublisher.class);
         var service = new IdeaService(ideas, mock(UserRepository.class), mock(EvaluationRepository.class),
-                mock(IdeaScoreHistoryRepository.class), sources, analyzer, cache, events);
+                mock(IdeaScoreHistoryRepository.class), sources, analyzer, cache,
+                mock(com.cue.evaluation.service.EvaluationPolicy.class), events);
 
-        var renamed = service.update(1L, 2L, new UpdateIdeaRequest("  개발 질문 노트  ", null, null, null, null, null));
+        var renamed = service.update(1L, 2L, new UpdateIdeaRequest("  개발 질문 노트  ", null, null, null, null, null, null));
 
         assertThat(renamed.title()).isEqualTo("개발 질문 노트");
         assertThat(renamed.solution()).isEqualTo("질문을 한 화면에 모은다.");
@@ -54,7 +55,7 @@ class IdeaTitleUpdateTest {
 
         when(analyzer.analyze(idea)).thenReturn(new IdeaAnalysis(ItCategory.DEV_TOOLS_INFRA,
                 List.of("developer questions")));
-        service.update(1L, 2L, new UpdateIdeaRequest("개발 질문 검색", null, null, "질문을 검색할 수 있게 한다.", null, null));
+        service.update(1L, 2L, new UpdateIdeaRequest("개발 질문 검색", null, null, "질문을 검색할 수 있게 한다.", null, null, null));
 
         assertThat(idea.isNeedsFullEvaluation()).isTrue();
         assertThat(idea.getLastTrendId()).isNull();

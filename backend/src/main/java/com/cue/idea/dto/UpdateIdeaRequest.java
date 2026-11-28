@@ -22,4 +22,8 @@ public record UpdateIdeaRequest(
         @Schema(description = "기대효과 (생략=유지, \"\"=비움)", example = "수정된 기대효과") @Size(max = 5000) String expectation,
         @Schema(description = "검색 키워드 (최대 2개, 각 1~50자). 생략/null=유지, 빈 배열=사용자 키워드를 지우고 AI가 다시 추출, "
                 + "1개 이상=그 값으로 교체(keywordOrigin=USER)", example = "[\"idea scoring\"]", nullable = true)
-        @Size(max = 2) List<@NotBlank @Size(max = 50) String> keywords) {}
+        @Size(max = 2) List<@NotBlank @Size(max = 50) String> keywords,
+        @Schema(description = "아이디어 원문 (최대 10000자). 생략/null=유지, \"\"=삭제. 원문만 바꾸면 구조화·키워드 추출·재평가를 하지 않는다. "
+                + "다시 구조화하려면 `POST /api/ideas/structure`를 직접 호출해 확인한 뒤 항목을 보낸다", nullable = true,
+                example = "수정한 아이디어 원문")
+        @Size(max = Idea.RAW_TEXT_MAX_LENGTH) String rawText) {}

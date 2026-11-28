@@ -25,6 +25,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Idea {
     public static final int TITLE_MAX_LENGTH = 60;
+    public static final int RAW_TEXT_MAX_LENGTH = 10_000;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -49,6 +51,13 @@ public class Idea {
 
     @Column(length = TITLE_MAX_LENGTH)
     private String title;
+
+    /** 사용자가 처음 적은 원문. 조회·수정용이며 평가·키워드 추출에는 쓰지 않는다(재구조화는 사용자가 구조화 API를 직접 호출). 없으면 null. */
+    @Column(name = "raw_text", columnDefinition = "TEXT")
+    private String rawText;
+
+    @Column(nullable = false)
+    private boolean favorite;
 
     @Column(columnDefinition = "TEXT")
     private String problem;
@@ -92,6 +101,10 @@ public class Idea {
     /** 평가를 마지막으로 끝까지 마친 날짜. 점수가 안 바뀌었어도 기록한다. */
     @Column(name = "evaluated_on")
     private LocalDate evaluatedOn;
+
+    /** AI 평가를 마지막으로 끝까지 마친 시각. 하루 1회 제한을 껐을 때 수동 재평가 대기 시간의 기준. */
+    @Column(name = "evaluation_completed_at")
+    private LocalDateTime evaluationCompletedAt;
 
     /** 이 아이디어의 TREND 점수를 마지막으로 평가한 글로벌 트렌드 id. null이면 TREND 첫 평가 전 (내용이 바뀌면 다시 null). */
     @Column(name = "last_trend_id")
@@ -162,6 +175,17 @@ public class Idea {
         }
     }
 
+    /** 원문 수정. null이면 그대로, 공백뿐이면 지운다. 조회용이라 평가 상태는 바뀌지 않는다. */
+    public void editRawText(String rawText) {
+        if (rawText != null) {
+            this.rawText = rawText.isBlank() ? null : rawText;
+        }
+    }
+
+    public void changeFavorite(boolean favorite) {
+        this.favorite = favorite;
+    }
+
     /**
      * 항목 수정. null이면 그대로 두고, 빈 문자열이면 비운다. 수정 후 상태를 다시 판단한다.
      *
@@ -202,9 +226,10 @@ public class Idea {
         return !needsFullEvaluation && today.equals(evaluatedOn);
     }
 
-    /** {@code date}의 평가를 끝까지 마쳤음을 기록한다. */
-    public void completeDailyEvaluation(LocalDate date) {
+    /** AI 평가를 끝까지 마쳤음을 기록한다. {@code date}는 평가를 시작한 날, {@code at}은 끝난 시각. */
+    public void completeDailyEvaluation(LocalDate date, LocalDateTime at) {
         evaluatedOn = date;
+        evaluationCompletedAt = at;
     }
 
     /** 전체(초기) 평가를 끝냈음을 기록한다. */

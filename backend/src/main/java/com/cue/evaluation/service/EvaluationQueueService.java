@@ -28,7 +28,7 @@ import org.springframework.stereotype.Service;
  *   <li>{@link #submit}: IDLE/FAILED → QUEUED로 바꾸고 전용 단일 스레드 실행기({@code evaluationExecutor})에 넣는다.
  *       이미 QUEUED/RUNNING이면 아무것도 하지 않고 현재 상태를 돌려준다(멱등). 대기열이 가득 차면 E004.</li>
  *   <li>{@link #execute}: 실행기 스레드와 일일 배치가 같이 쓰는 실제 실행. <b>전역 락</b>으로 한 번에 하나만 평가해 수동 요청과 배치가
- *       Gemini를 동시에 두드리지 않게 한다. QUEUED/IDLE → RUNNING → IDLE(성공) 또는 FAILED(예외, 에러 코드 기록). 예외는 로그로 남기고 삼키지 않는다(다시 던진다).</li>
+ *       Gemini를 동시에 두드리지 않게 한다. QUEUED(배치는 IDLE/FAILED) → RUNNING → IDLE(성공) 또는 FAILED(예외, 에러 코드 기록). 예외는 로그로 남기고 삼키지 않는다(다시 던진다).</li>
  *   <li>{@link #executeBatch}·{@link #prepareTrendForBatch}: 일일 배치용 실행. <b>수동 평가(수동 요청·저장 직후 자동·시연)가 항상 배치보다 우선</b>한다.
  *       수동 작업은 큐에 넣기 전에 대기 수({@code manualPending})를 올리고 끝난 뒤에 내리며, 배치는 락을 잡은 뒤 이 값이 0일 때만 시작한다
  *       (0이 아니면 락을 풀고 기다림). 확인과 락 획득이 한 락 안에서 일어나므로 그 사이에 수동 요청이 끼어도 배치가 먼저 시작하지 못한다.
@@ -41,9 +41,9 @@ import org.springframework.stereotype.Service;
 public class EvaluationQueueService {
     /** 실행기 작업은 큐에 넣은 것(QUEUED)만 집는다 (그사이 배치가 먼저 평가했다면 건너뜀). */
     private static final Set<EvaluationStatus> WORKER_ALLOWED = EnumSet.of(EvaluationStatus.QUEUED);
-    /** 일일 배치는 대기 중이 아닌 모든 아이디어를 대상으로 한다 (QUEUED도 같이 처리해 중복 평가를 피함). */
+    /** 일일 배치는 대기·진행 중이 아닌 아이디어만 평가한다 (QUEUED는 사용자 요청이라 실행기가 처리한다). */
     private static final Set<EvaluationStatus> BATCH_ALLOWED =
-            EnumSet.of(EvaluationStatus.IDLE, EvaluationStatus.FAILED, EvaluationStatus.QUEUED);
+            EnumSet.of(EvaluationStatus.IDLE, EvaluationStatus.FAILED);
 
     private final IdeaRepository ideas;
     private final IdeaEvaluationPipeline evaluation;
@@ -97,10 +97,18 @@ public class EvaluationQueueService {
      * @throws CustomException 없는 아이디어 I001, 대기열 가득 E004
      */
     public EvaluationStatus submit(Long ideaId, boolean throwOnFull) {
-        if (ideas.markQueued(ideaId) == 0) {
+        manualPending.incrementAndGet(); // QUEUED로 바꾸기 전에 올려 배치가 먼저 끼어들지 못하게 한다
+        boolean queued = false;
+        try {
+            queued = ideas.markQueued(ideaId) > 0;
+        } finally {
+            if (!queued) {
+                manualPending.decrementAndGet();
+            }
+        }
+        if (!queued) {
             return ideas.findEvaluationStatus(ideaId).orElseThrow(() -> new CustomException(ErrorCode.IDEA_NOT_FOUND));
         }
-        manualPending.incrementAndGet(); // 락 대기 전에 올려 배치가 먼저 끼어들지 못하게 한다
         try {
             executor.execute(() -> runQueued(ideaId));
             return EvaluationStatus.QUEUED;
@@ -132,7 +140,7 @@ public class EvaluationQueueService {
             lock.lock();
             try {
                 if (manualPending.get() == 0) {
-                    return execute(ideaId, BATCH_ALLOWED);
+                    return execute(ideaId, BATCH_ALLOWED, false);
                 }
             } finally {
                 lock.unlock();
@@ -188,7 +196,7 @@ public class EvaluationQueueService {
 
     private void runQueued(Long ideaId) {
         try {
-            execute(ideaId, WORKER_ALLOWED);
+            execute(ideaId, WORKER_ALLOWED, true);
         } catch (RuntimeException e) {
             // execute가 이미 로그와 FAILED 상태를 남겼다. 실행기 스레드로 예외가 새지 않게만 한다.
         } finally {
@@ -201,7 +209,7 @@ public class EvaluationQueueService {
      *
      * @throws RuntimeException 평가 실패 (상태는 FAILED와 에러 코드로 기록된 뒤다)
      */
-    private EvaluationRunResult execute(Long ideaId, Set<EvaluationStatus> allowedFrom) {
+    private EvaluationRunResult execute(Long ideaId, Set<EvaluationStatus> allowedFrom, boolean userRequested) {
         lock.lock();
         try {
             if (ideas.markRunning(ideaId, LocalDateTime.now(), allowedFrom) == 0) {
@@ -209,7 +217,7 @@ public class EvaluationQueueService {
                 return EvaluationRunResult.noChange();
             }
             try {
-                EvaluationRunResult result = evaluation.evaluate(ideaId);
+                EvaluationRunResult result = evaluation.evaluate(ideaId, userRequested);
                 ideas.markIdle(ideaId, LocalDateTime.now());
                 return result;
             } catch (RuntimeException e) {

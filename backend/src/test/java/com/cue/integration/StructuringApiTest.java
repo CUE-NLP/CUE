@@ -74,7 +74,7 @@ class StructuringApiTest extends DemoTestSupport {
     void 빈_원문과_너무_긴_원문은_G004() throws Exception {
         String token = signUpAndLogin("v@cue.com");
         structure(token, "{\"text\":\"   \"}").andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("G004"));
-        structure(token, "{\"text\":\"" + "가".repeat(5001) + "\"}").andExpect(status().isBadRequest())
+        structure(token, "{\"text\":\"" + "가".repeat(10001) + "\"}").andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("G004"));
         verify(gemini, never()).generateJson(any(AiLane.class), anyString(), anyString(), anyMap());
     }

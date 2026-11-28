@@ -19,6 +19,7 @@ import com.cue.idea.repository.IdeaRepository;
 import com.cue.score.entity.ScoreType;
 import com.cue.source.dto.EvaluatedItem;
 import com.cue.source.dto.SourceCheckResult;
+import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.Source;
 import com.cue.source.repository.SourceRepository;
 import com.cue.source.service.SourceCheckService;
@@ -35,9 +36,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -47,16 +50,20 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 아이디어 한 개의 하루 평가 파이프라인. 외부 HTTP·Gemini 호출 동안 DB 트랜잭션을 잡지 않으려고 이 클래스는
  * @Transactional을 쓰지 않고, 필요한 DB 작업만 짧은 트랜잭션({@link TransactionTemplate} 또는 EvaluationRecorder)으로 처리한다.
  *
- * <p>평가는 아이디어마다 하루에 한 번이다. 오늘 이미 끝까지 마쳤으면(내용·키워드가 바뀐 경우 제외) 자료 조회 없이 끝낸다.
- * 실패했거나 첫 TREND 평가를 하지 못한(그날 트렌드가 없는) 경우는 마친 것으로 치지 않아 같은 날 다시 시도할 수 있다.
+ * <p>하루 제한({@link EvaluationPolicy})이 켜져 있으면 평가는 아이디어마다 하루에 한 번이다. 오늘 AI 평가를 이미 끝까지 마쳤으면(내용·키워드가
+ * 바뀐 경우 제외) 자료 조회 없이 끝낸다. 실패했거나 첫 TREND 평가를 하지 못한(그날 트렌드가 없는) 경우, 평가할 것이 없어 AI를 부르지 않은
+ * 경우는 마친 것으로 치지 않아 같은 날 다시 시도할 수 있다.
+ *
+ * <p><b>사용자가 요청한 평가</b>({@code userRequested})는 자료나 트렌드가 그대로여도 A·B를 모두 다시 실행한다. 일일 배치는 바뀐 것이 있을 때만 실행한다.
  *
  * <p>하루 평가는 서로 독립인 두 갈래다.
  * <ul>
- *   <li><b>A. 키워드 근거 자료 → 기존 4개 기준</b>: 전체 평가는 조회에 성공한 모든 source의 상위 N개를 쓴다. 일반 재평가는 반영해 둔 항목과
- *       비교해({@link EvidenceChanges}) 추가·삭제가 있을 때만 실행하며, 기존 평가 내역·새로 추가된 항목·삭제된 항목을 넘긴다.
+ *   <li><b>A. 키워드 근거 자료 → 기존 4개 기준</b>: 전체 평가는 조회에 성공한 모든 source의 상위 N개를 쓴다. 재평가는 현재 점수·기존 평가
+ *       내역·새로 추가된 항목·삭제된 항목을 넘겨 점수를 다시 매긴다. 일일 배치는 반영해 둔 항목과 비교해({@link EvidenceChanges}) 추가·삭제가
+ *       있을 때만 실행하고, 사용자 요청은 그대로인 항목도 함께 넘긴다.
  *       원문 발췌({@link SourceExcerptService}, AI 호출 없음)를 붙여 한 번 평가한다 ({@link EvidenceEvaluator}).</li>
  *   <li><b>B. 글로벌 트렌드 → TREND</b>: 그날의 글로벌 트렌드({@link GlobalTrendService#today()}, 아이디어와 무관)를 아이디어 4항목에 대입해
- *       첫 평가(0~100) 또는 재평가(±10) ({@link TrendEvaluator}). 이 아이디어가 이미 그 트렌드로 평가됐으면 호출하지 않는다</li>
+ *       첫 평가 또는 재평가(둘 다 0~100) ({@link TrendEvaluator}). 일일 배치는 이 아이디어가 이미 그 트렌드로 평가됐으면 호출하지 않는다</li>
  * </ul>
  * 순서: ① 대상 확인(I001/I004)·Gemini 사용 가능 확인(E001) → ② 새 턴 시작(예약 가중치 적용) → ③ 트렌드 확보·source 조회·항목 비교 →
  * ④ A도 B도 필요 없으면 평가·날짜 갱신 없이 종료 → ⑤ A, B를 각자 try로 실행 → ⑥ 성공한 쪽의 결과만 한 트랜잭션으로 저장
@@ -83,22 +90,28 @@ public class IdeaEvaluationPipeline {
     private final TrendRepository trendRepository;
     private final TrendProperties trendProps;
     private final EvaluationRepository evaluations;
+    private final EvaluationPolicy policy;
+
+    /** 일일 배치와 같은 평가: 바뀐 것이 있을 때만 AI를 부른다. */
+    public EvaluationRunResult evaluate(Long ideaId) {
+        return run(ideaId, false);
+    }
 
     /**
      * @throws CustomException 없는 아이디어 I001, 보류 I004, AI 사용 불가 E001,
      *                         AI 통신 실패 G002, AI 응답 오류 E002 (A·B 중 하나가 실패한 경우, 다른 쪽 결과는 저장된 뒤다)
      */
-    public EvaluationRunResult evaluate(Long ideaId) {
-        return run(ideaId);
+    public EvaluationRunResult evaluate(Long ideaId, boolean userRequested) {
+        return run(ideaId, userRequested);
     }
 
-    private EvaluationRunResult run(Long ideaId) {
+    private EvaluationRunResult run(Long ideaId, boolean userRequested) {
         IdeaSnapshot snapshot = snapshot(ideaId); // 없음 I001, 보류 I004
         if (!gemini.available()) {
             throw new CustomException(ErrorCode.AI_NOT_CONFIGURED);
         }
         LocalDate today = LocalDate.now(); // 자정을 넘겨 끝나도 시작한 날의 평가로 기록한다
-        if (Boolean.TRUE.equals(tx.execute(s -> ideas.findById(ideaId).map(i -> i.dailyEvaluationDone(today)).orElse(false)))) {
+        if (Boolean.TRUE.equals(tx.execute(s -> ideas.findById(ideaId).map(i -> policy.dailyLimitReached(i, today)).orElse(false)))) {
             return EvaluationRunResult.noChange(); // 자료 조회·가중치 적용도 하루 한 번
         }
         if (evaluationService.startTurn(ideaId)) {
@@ -116,14 +129,15 @@ public class IdeaEvaluationPipeline {
         // 첫 TREND 평가를 아직 못 했는데 그날 트렌드가 없으면 오늘 평가를 마친 것으로 치지 않는다
         boolean completesToday = trend != null || snapshot.lastTrendId() != null;
 
-        boolean runA = evidenceChanges.any() || snapshot.needsFullEvaluation();
-        boolean runB = trend != null && !trend.id().equals(snapshot.lastTrendId()) && trendDue(snapshot, trend);
+        // 사용자 요청 재평가: 이미 두 갈래의 첫 평가를 마친 아이디어는 바뀐 것이 없어도 다시 평가한다.
+        // (TREND 첫 평가를 기다리는 아이디어는 그 갈래만 하면 되므로 근거 평가를 반복하지 않는다)
+        boolean reevaluate = userRequested && !snapshot.needsFullEvaluation() && snapshot.lastTrendId() != null;
+        boolean runA = reevaluate || evidenceChanges.any() || snapshot.needsFullEvaluation();
+        boolean runB = trend != null && (reevaluate
+                || !trend.id().equals(snapshot.lastTrendId()) && trendDue(snapshot, trend));
         if (!runA && !runB) {
             evaluationService.recordEvidenceItems(evidenceChanges.current()); // 추가·삭제가 없어 평가 없이 기록만 맞춘다
-            if (completesToday) {
-                evaluationService.completeDailyEvaluation(ideaId, today);
-            }
-            return EvaluationRunResult.noChange();
+            return EvaluationRunResult.noChange(); // AI를 부르지 않았으니 오늘 평가를 쓴 것으로 치지 않는다
         }
 
         List<ScoreChange> changes = new ArrayList<>();
@@ -135,7 +149,7 @@ public class IdeaEvaluationPipeline {
 
         if (runA) {
             try {
-                changes.addAll(evaluateEvidence(snapshot, checked, evidenceChanges));
+                changes.addAll(evaluateEvidence(snapshot, checked, evidenceChanges, reevaluate));
                 fullDone = snapshot.needsFullEvaluation();
                 reflected = evidenceChanges.current();
             } catch (RuntimeException e) {
@@ -187,16 +201,38 @@ public class IdeaEvaluationPipeline {
 
     /**
      * A: 원문 발췌를 만들어(AI 호출 없음) 기존 4개 기준을 한 번의 호출로 평가한다. 전체 평가는 조회에 성공한 모든 자료를,
-     * 재평가는 새로 추가된 자료만 발췌해 기존 평가 내역·삭제된 자료와 함께 넘긴다.
+     * 재평가는 새로 추가된 자료(사용자 요청이면 그대로인 자료도)를 발췌해 현재 점수·기존 평가 내역·삭제된 자료와 함께 넘긴다.
+     *
+     * @throws CustomException 사용자 요청 재평가에서 모든 source 조회가 실패하면 G002 (자료 없이 점수를 다시 매기지 않는다)
      */
     private List<ScoreChange> evaluateEvidence(IdeaSnapshot snapshot, List<SourceCheckResult> checked,
-                                               EvidenceChanges evidenceChanges) {
+                                               EvidenceChanges evidenceChanges, boolean reevaluate) {
+        List<SourceCheckResult> succeeded = checked.stream()
+                .filter(result -> result.status() != SourceCheckResult.Status.FAILED).toList();
         if (snapshot.needsFullEvaluation()) {
-            return analyzer.initialEvaluate(snapshot, excerpts(checked.stream()
-                    .filter(result -> result.status() != SourceCheckResult.Status.FAILED).toList()));
+            return analyzer.initialEvaluate(snapshot, excerpts(succeeded));
         }
+        if (reevaluate && !checked.isEmpty() && succeeded.isEmpty()) {
+            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, ErrorDetail.of(null, ErrorReason.ALL_SOURCES_FAILED));
+        }
+        List<SourceCheckResult> kept = reevaluate ? without(succeeded, evidenceChanges.added()) : List.of();
         return analyzer.reEvaluate(snapshot, history(snapshot.id()), excerpts(evidenceChanges.added()),
-                evidenceChanges.removed());
+                excerpts(kept), evidenceChanges.removed());
+    }
+
+    /** {@code results}에서 {@code excluded}에 있는 URL과 중복 URL을 뺀다. 항목이 남지 않는 source는 빠진다. */
+    private static List<SourceCheckResult> without(List<SourceCheckResult> results, List<SourceCheckResult> excluded) {
+        Set<String> seen = new HashSet<>();
+        excluded.forEach(r -> r.items().forEach(i -> seen.add(i.url())));
+        List<SourceCheckResult> out = new ArrayList<>();
+        for (SourceCheckResult r : results) {
+            List<SourceItem> items = r.items().stream().filter(i -> seen.add(i.url())).toList();
+            if (!items.isEmpty()) {
+                out.add(new SourceCheckResult(r.sourceId(), r.provider(), r.keyword(), r.status(), items,
+                        r.checkedAt(), r.errorMessage()));
+            }
+        }
+        return out;
     }
 
     private List<SourceCheckResult> excerpts(List<SourceCheckResult> results) {

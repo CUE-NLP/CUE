@@ -41,7 +41,8 @@ public class GeminiClient {
     private static final long BATCH_MAX_BACKOFF_MS = 60_000;
     private static final long BASE_BACKOFF_MS = 1_000;
 
-    private final RestClient restClient;
+    private final RestClient batchClient;
+    private final RestClient interactiveClient;
     private final ObjectMapper objectMapper;
     private final GeminiProperties props;
     private final GeminiLaneProperties lane;
@@ -55,11 +56,9 @@ public class GeminiClient {
                         GeminiLaneProperties lane,
                         @Value("${cue.gemini.min-interval-ms:0}") long batchMinIntervalMs,
                         @Value("${cue.gemini.max-retries:0}") int batchMaxRetries) {
-        Duration timeout = Duration.ofSeconds(props.timeoutSeconds());
-        JdkClientHttpRequestFactory factory =
-                new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(timeout).build());
-        factory.setReadTimeout(timeout);
-        this.restClient = builder.clone().requestFactory(factory).baseUrl(props.baseUrl()).build();
+        int interactiveTimeout = lane.timeoutSeconds() > 0 ? lane.timeoutSeconds() : props.timeoutSeconds();
+        this.batchClient = restClient(builder, props.baseUrl(), props.timeoutSeconds());
+        this.interactiveClient = restClient(builder, props.baseUrl(), interactiveTimeout);
         this.objectMapper = objectMapper;
         this.props = props;
         this.lane = lane;
@@ -77,7 +76,8 @@ public class GeminiClient {
     /** 테스트용: 레인 설정·재시도·시계·대기를 직접 정한다. */
     GeminiClient(RestClient restClient, ObjectMapper objectMapper, GeminiProperties props, GeminiLaneProperties lane,
                  long batchMinIntervalMs, int batchMaxRetries, Clock clock, GeminiRateLimiter.Sleeper sleeper) {
-        this.restClient = restClient;
+        this.batchClient = restClient;
+        this.interactiveClient = restClient;
         this.objectMapper = objectMapper;
         this.props = props;
         this.lane = lane;
@@ -85,6 +85,14 @@ public class GeminiClient {
         this.batchLimiter = new GeminiRateLimiter(batchMinIntervalMs, clock, sleeper);
         this.interactiveLimiter = new GeminiRateLimiter(lane.minIntervalMs(), clock, sleeper);
         this.batchMaxRetries = Math.max(0, batchMaxRetries);
+    }
+
+    private static RestClient restClient(RestClient.Builder builder, String baseUrl, int timeoutSeconds) {
+        Duration timeout = Duration.ofSeconds(timeoutSeconds);
+        JdkClientHttpRequestFactory factory =
+                new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(timeout).build());
+        factory.setReadTimeout(timeout);
+        return builder.clone().requestFactory(factory).baseUrl(baseUrl).build();
     }
 
     /** Gemini를 쓸 수 있는지 (활성 + API 키 있음). */
@@ -139,7 +147,7 @@ public class GeminiClient {
                         failure(ErrorReason.RATE_LIMIT_WAIT_EXCEEDED));
             }
             try {
-                return restClient.post()
+                return (interactive ? interactiveClient : batchClient).post()
                         .uri("/v1beta/models/{model}:generateContent", model)
                         .header("x-goog-api-key", props.apiKey())
                         .contentType(MediaType.APPLICATION_JSON)

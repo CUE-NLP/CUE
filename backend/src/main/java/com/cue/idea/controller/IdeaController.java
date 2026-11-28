@@ -12,6 +12,7 @@ import com.cue.idea.dto.IdeaHistoryResponse;
 import com.cue.idea.dto.IdeaResponse;
 import com.cue.idea.dto.StructureIdeaRequest;
 import com.cue.idea.dto.StructureIdeaResponse;
+import com.cue.idea.dto.UpdateFavoriteRequest;
 import com.cue.idea.dto.UpdateIdeaRequest;
 import com.cue.idea.dto.UpdateWeightsRequest;
 import com.cue.idea.entity.IdeaSort;
@@ -38,7 +39,7 @@ public class IdeaController {
     private final IdeaStructuringService structuringService;
 
     @Operation(summary = "아이디어 구조화(미리보기)",
-            description = "자유롭게 쓴 원문(최대 5000자)을 AI로 제목과 타깃·문제·해결·기대효과로 정리해 돌려준다. **저장하지 않고 원문도 남기지 않는다.** "
+            description = "자유롭게 쓴 원문(최대 10000자)을 AI로 제목과 타깃·문제·해결·기대효과로 정리해 돌려준다. **아무것도 저장하지 않는다**(원문은 저장·수정할 때 `rawText`로 보낸다). 원문의 수치·기능·조건은 줄이지 않고 항목에 옮기며, 긴 원문은 응답까지 수십 초가 걸릴 수 있다. "
                     + "사용자가 결과를 확인·수정한 뒤 `POST /api/ideas`로 저장한다. "
                     + "원문에 근거가 없는 항목은 AI가 채우지 않고 빈 문자열로 두며, 하나라도 비면 `complete=false`(그대로 저장하면 HOLD)이고 `missingFields`에 비어 있는 항목이 담긴다. "
                     + "`complete=true`이면 IT 세부 종류(`itCategory`)와 영어 키워드 후보(`keywords`)도 함께 담기고, **내용을 고치지 않고 저장하면 서버가 이 결과를 다시 써서 저장 때 AI를 한 번 덜 호출한다**(고치면 평소처럼 다시 추출). "
@@ -58,6 +59,7 @@ public class IdeaController {
                     + "**하나라도 비면 HOLD**(보류, AI 호출·평가 없음)로 서버가 정한다. "
                     + "**키워드(`keywords`, 최대 2개·각 1~50자)를 보내면 AI 추출 없이 그 값을 쓰고(`keywordOrigin=USER`), 비어 있을 때만 AI가 추출한다(`keywordOrigin=AI`).** "
                     + "IT 세부 종류(`itCategory`: AI_ML·DEV_TOOLS_INFRA·WEB_APP_SERVICE·DATA_ANALYTICS)는 키워드와 무관하게 항상 AI가 판단하고, 대분류 `type`은 항상 IT다. "
+                    + "원문(`rawText`, 선택, 최대 10000자)은 조회용으로 저장하며 평가에는 쓰지 않는다. 즐겨찾기는 false로 시작한다. "
                     + "점수는 첫 평가 전까지 0, 가중치는 5개 기준(문제 중요성·시장 수요·시장 차별성·기술적 실현 가능성·트렌디함) 각 20%. "
                     + "**ACTIVE로 저장되면 서버가 커밋 뒤 첫 평가를 비동기로 자동 시작한다**(`evaluationStatus`가 QUEUED→RUNNING→IDLE; 폴링은 `GET /api/ideas/{id}`). 키워드가 3개 이상이거나 빈 문자열·50자 초과면 `G004`.")
     @ApiErrors(ErrorCode.USER_NOT_FOUND)
@@ -69,7 +71,7 @@ public class IdeaController {
     }
 
     @Operation(summary = "아이디어 상세 조회",
-            description = "제목·상태·구조화 항목·총점·항목별 점수/가중치(현재·예약)·최근 변화량·`hasNewChange`를 반환한다. "
+            description = "제목·상태·원문(`rawText`)·즐겨찾기·구조화 항목·총점·항목별 점수/가중치(현재·예약)·최근 변화량·`hasNewChange`를 반환한다. "
                     + "평가 진행 상황 폴링용으로 `evaluationStatus`(IDLE/QUEUED/RUNNING/FAILED)와 실패 시 `lastEvaluationErrorCode`를 함께 돌려준다.")
     @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED})
     @GetMapping("/{id}")
@@ -90,7 +92,7 @@ public class IdeaController {
     }
 
     @Operation(summary = "아이디어 수정",
-            description = "보낸 항목만 수정한다(생략/null=유지). 제목만 수정하면 Gemini 호출·자료 수집 설정 변경·재평가 없이 제목을 저장한다. "
+            description = "보낸 항목만 수정한다(생략/null=유지). 제목이나 원문(`rawText`)만 수정하면 Gemini 호출·자료 수집 설정 변경·재평가 없이 저장한다. "
                     + "구조화 항목은 빈 문자열로 비울 수 있고, 4개 항목이 모두 채워지면 ACTIVE, 하나라도 비면 HOLD가 된다. "
                     + "키워드: `keywords` 생략=유지, **빈 배열=사용자 키워드를 지우고 AI가 다시 추출**, "
                     + "1개 이상=그 값으로 교체(AI 추출 없음, `keywordOrigin=USER`). 키워드 검증 실패(3개 이상·빈 문자열·50자 초과)는 `G004`. "
@@ -101,6 +103,18 @@ public class IdeaController {
     public CommonResponse<IdeaResponse> update(@AuthenticationPrincipal UserPrincipal principal, @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id,
                                                @Valid @RequestBody UpdateIdeaRequest req) {
         return CommonResponse.onSuccess(ideaService.update(principal.id(), id, req));
+    }
+
+    /** 즐겨찾기 설정·해제. 평가 중에도 할 수 있다. */
+    @Operation(summary = "즐겨찾기 변경",
+            description = "`{\"favorite\": true}`면 즐겨찾기, false면 해제한다(같은 값을 다시 보내도 된다). "
+                    + "점수·평가와 무관해 평가 중에도 바꿀 수 있다. 목록은 `GET /api/ideas?favorite=true`로 거른다.")
+    @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED})
+    @PatchMapping("/{id}/favorite")
+    public CommonResponse<IdeaResponse> favorite(@AuthenticationPrincipal UserPrincipal principal,
+                                                 @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id,
+                                                 @Valid @RequestBody UpdateFavoriteRequest req) {
+        return CommonResponse.onSuccess(ideaService.changeFavorite(principal.id(), id, req.favorite()));
     }
 
     /** 아이디어와 그 평가 데이터를 삭제한다. 본인 것만(I002), 평가 대기·진행 중이면 I005. */
@@ -126,18 +140,20 @@ public class IdeaController {
 
     /**
      * 평가를 비동기로 요청한다: 즉시 <b>202 Accepted</b>로 돌아오고(본문 code는 다른 성공 응답처럼 "200"), 평가는 서버 큐에서 돈다.
-     * 본인 아이디어만(I002), 보류는 I004, 오늘 이미 평가했으면 E007, Gemini 불가는 E001, 대기열이 가득 차면 E004를 요청 시점에 바로 돌려준다.
+     * 본인 아이디어만(I002), 보류는 I004, 오늘 이미 평가했으면 E007(하루 제한을 끈 경우 대기 시간 중이면 E008), Gemini 불가는 E001, 대기열이 가득 차면 E004를 요청 시점에 바로 돌려준다.
      * 이미 평가 대기·진행 중이면 에러 없이 현재 상태(QUEUED/RUNNING)를 돌려준다. 결과는 GET /api/ideas/{id}의 evaluationStatus를 폴링해 확인한다.
      */
     @Operation(summary = "평가 비동기 요청",
             description = "이 아이디어의 평가(키워드 근거 4개 기준 + 글로벌 트렌드 TREND)를 서버 큐에 넣고 **기다리지 않고 즉시 `202 Accepted`**를 돌려준다"
                     + "(본문 `code`는 다른 성공 응답처럼 `\"200\"`). `data.status`는 방금 큐에 넣었으면 `QUEUED`, 이미 대기·진행 중이면 에러 없이 현재 상태(`QUEUED`/`RUNNING`)를 돌려준다(멱등). "
-                    + "**평가는 아이디어마다 하루에 한 번**이라 오늘 이미 평가했으면 `E007`이다(내용·키워드를 수정하면 같은 날 다시 가능, 실패한 평가는 다시 요청 가능). "
+                    + "**아이디어를 수정하지 않아도 다시 평가한다**: 현재 점수와 평가 내역, 지금 수집되는 자료·트렌드로 점수를 0~100에서 다시 매긴다(점수가 같으면 이력을 남기지 않는다). "
+                    + "**기본은 아이디어마다 하루에 한 번**이라 오늘 이미 평가했으면(새벽 일일 평가에서 AI가 평가한 것 포함) `E007`이다. 내용·키워드를 수정하면 같은 날 다시 가능하고, 실패한 평가는 다시 요청할 수 있다. "
+                    + "서버에서 하루 제한을 끄면(`EVALUATION_DAILY_LIMIT_ENABLED=false`) 대신 아이디어별 대기 시간(기본 10분)이 적용되어 그 안의 요청은 `E008`(429)이다. "
                     + "본인 아이디어만(`I002`), 없음 `I001`, 보류(HOLD) `I004`, Gemini 사용 불가 `E001`, 대기열이 가득 차면 `E004`는 요청 시점에 바로 반환한다. "
                     + "평가는 서버에서 한 번에 하나씩 순서대로 돈다. 결과는 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링해 `evaluationStatus`가 `IDLE`이면 갱신된 점수·`hasNewChange`로, `FAILED`면 `lastEvaluationErrorCode`와 `lastEvaluationError`(위치·외부 API·원인)로 확인한다. "
                     + "평가가 끝날 때까지 이 아이디어는 수정할 수 없다(`PATCH`가 `I005`).")
     @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED, ErrorCode.IDEA_NOT_ACTIVE,
-            ErrorCode.EVALUATION_ALREADY_DONE_TODAY, ErrorCode.AI_NOT_CONFIGURED, ErrorCode.EVALUATION_QUEUE_FULL})
+            ErrorCode.EVALUATION_ALREADY_DONE_TODAY, ErrorCode.EVALUATION_COOLDOWN, ErrorCode.AI_NOT_CONFIGURED, ErrorCode.EVALUATION_QUEUE_FULL})
     @PostMapping("/{id}/evaluate")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public CommonResponse<EvaluateIdeaResponse> evaluate(@AuthenticationPrincipal UserPrincipal principal,
@@ -165,16 +181,20 @@ public class IdeaController {
         return CommonResponse.onSuccessList(ideaService.evaluationHistory(principal.id(), id));
     }
 
-    /** 리더보드. status=ACTIVE(기본)는 평가 대상, HOLD는 보류 탭. sort=TOTAL(기본, 총점순) | RECENT_RISE(최근 상승순). */
+    /** 리더보드. status=ACTIVE(기본)는 평가 대상, HOLD는 보류 탭. sort=TOTAL(기본, 총점순) | LATEST(최신순) | RECENT_RISE(최근 상승순). */
     @Operation(summary = "리더보드(내 아이디어 목록)",
-            description = "로그인한 사용자의 아이디어를 상태별로 정렬해 반환한다. 기본은 평가 대상(ACTIVE) 총점순이며, 보류 탭은 `status=HOLD`.")
+            description = "로그인한 사용자의 아이디어를 상태별로 정렬해 반환한다. 기본은 평가 대상(ACTIVE) 총점순이며, 보류 탭은 `status=HOLD`. "
+                    + "`sort`는 하나만 고른다(총점순·최신 등록순·최근 상승순). `favorite=true`는 즐겨찾기만 보여 주며 어느 정렬·상태와도 함께 쓴다. "
+                    + "목록 응답의 `rawText`는 항상 null이다(원문은 단건 조회).")
     @GetMapping
     public CommonResponse<ListData<IdeaResponse>> leaderboard(
             @AuthenticationPrincipal UserPrincipal principal,
             @Parameter(description = "조회할 상태. ACTIVE=평가 대상(기본), HOLD=보류 탭")
             @RequestParam(defaultValue = "ACTIVE") IdeaStatus status,
-            @Parameter(description = "정렬. TOTAL=총점 높은 순(기본), RECENT_RISE=최근 평가의 총점 변화량 큰 순(평가 이력 없으면 뒤)")
-            @RequestParam(defaultValue = "TOTAL") IdeaSort sort) {
-        return CommonResponse.onSuccessList(ideaService.leaderboard(principal.id(), status, sort));
+            @Parameter(description = "정렬(하나만). TOTAL=총점 높은 순(기본), LATEST=최신 등록순, RECENT_RISE=최근 평가의 총점 변화량 큰 순(평가 이력 없으면 뒤)")
+            @RequestParam(defaultValue = "TOTAL") IdeaSort sort,
+            @Parameter(description = "true면 즐겨찾기만. 생략/false면 전체")
+            @RequestParam(defaultValue = "false") boolean favorite) {
+        return CommonResponse.onSuccessList(ideaService.leaderboard(principal.id(), status, sort, favorite));
     }
 }
