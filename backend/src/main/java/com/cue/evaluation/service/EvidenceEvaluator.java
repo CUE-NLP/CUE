@@ -8,6 +8,9 @@ import com.cue.global.ai.GeminiClient;
 import com.cue.global.ai.PromptLoader;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorReason;
+import com.cue.global.error.ExternalApi;
 import com.cue.score.entity.ScoreType;
 import com.cue.source.dto.EvaluatedItem;
 import com.cue.source.dto.SourceCheckResult;
@@ -101,7 +104,8 @@ public class EvidenceEvaluator {
         JsonNode result = gemini.generateJson(prompts.render("re-evaluation", vars), RE_EVALUATION_SCHEMA);
         JsonNode changes = result.path("changes");
         if (!changes.isArray()) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.MISSING_LIST, "changes"));
         }
         Map<ScoreType, ScoreChange> out = new LinkedHashMap<>();
         Map<String, SourceCheckResult> byUrl = indexByUrl(added);
@@ -126,7 +130,8 @@ public class EvidenceEvaluator {
         JsonNode result = gemini.generateJson(prompts.render("initial-evaluation", vars), INITIAL_EVALUATION_SCHEMA);
         JsonNode scores = result.path("scores");
         if (!scores.isArray()) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.MISSING_LIST, "scores"));
         }
         Map<ScoreType, ScoreChange> out = new LinkedHashMap<>();
         Map<String, SourceCheckResult> byUrl = indexByUrl(evidence);

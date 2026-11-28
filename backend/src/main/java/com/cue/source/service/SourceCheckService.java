@@ -2,6 +2,7 @@ package com.cue.source.service;
 
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorLocation;
 import com.cue.source.client.SourceClient;
 import com.cue.source.dto.SourceCheckResult;
 import com.cue.source.dto.SourceItem;
@@ -53,11 +54,14 @@ public class SourceCheckService {
         try {
             return check(source);
         } catch (CustomException e) {
-            log.warn("source 조회 실패 id={} provider={} code={}", source.getId(), source.getProvider(), e.getErrorCode().getCode());
+            log.warn("source 조회 실패 id={} provider={} code={} 위치={}, API={}, 원인={}", source.getId(), source.getProvider(),
+                    e.getErrorCode().getCode(), ErrorLocation.SOURCE_SEARCH.label(), source.getProvider().api().label(),
+                    e.getDetail() == null ? e.getErrorCode().getMessage() : e.getDetail().reason());
             return SourceCheckResult.failed(source.getId(), source.getProvider(), source.getKeyword(),
                     e.getErrorCode().getMessage());
         } catch (RuntimeException e) {
-            log.warn("source 조회 중 예기치 못한 오류 id={}", source.getId(), e);
+            log.warn("source 조회 중 예기치 못한 오류 id={} 위치={}, API={}", source.getId(), ErrorLocation.SOURCE_SEARCH.label(),
+                    source.getProvider().api().label(), e);
             return SourceCheckResult.failed(source.getId(), source.getProvider(), source.getKeyword(),
                     ErrorCode.EXTERNAL_SERVER_ERROR.getMessage());
         }

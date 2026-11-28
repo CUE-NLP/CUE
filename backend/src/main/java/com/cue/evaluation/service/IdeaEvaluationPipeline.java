@@ -11,6 +11,9 @@ import com.cue.evaluation.repository.EvaluationRepository;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorLocation;
+import com.cue.global.error.ErrorReason;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.score.entity.ScoreType;
@@ -137,7 +140,7 @@ public class IdeaEvaluationPipeline {
                 reflected = evidenceChanges.current();
             } catch (RuntimeException e) {
                 restoreHashes(changed, previous); // 다음 실행에서 같은 변경을 다시 감지한다
-                failure = e;
+                failure = locate(e, ErrorLocation.EVIDENCE_EVALUATION);
             }
         }
         if (runB) {
@@ -145,10 +148,11 @@ public class IdeaEvaluationPipeline {
                 changes.addAll(trendEvaluator.evaluate(snapshot, trend));
                 trendDone = trend.id();
             } catch (RuntimeException e) {
+                RuntimeException located = locate(e, ErrorLocation.TREND_EVALUATION);
                 if (failure == null) {
-                    failure = e;
+                    failure = located;
                 } else {
-                    failure.addSuppressed(e);
+                    failure.addSuppressed(located);
                 }
             }
         }
@@ -158,10 +162,11 @@ public class IdeaEvaluationPipeline {
             updated = evaluationService.recordResults(ideaId, changes, fullDone, trendDone, reflected);
         } catch (RuntimeException e) {
             restoreHashes(changed, previous); // 저장하지 못했으니 변경을 다음에 다시 감지한다
+            RuntimeException located = locate(e, ErrorLocation.EVALUATION_SAVE);
             if (failure != null) {
-                e.addSuppressed(failure);
+                located.addSuppressed(failure);
             }
-            throw e;
+            throw located;
         }
         if (failure != null) {
             log.warn("하루 평가 일부가 실패했습니다 (성공한 쪽은 저장됨, 실패한 쪽은 다음 실행에서 다시) ideaId={}: {}", ideaId, failure.toString());
@@ -171,6 +176,13 @@ public class IdeaEvaluationPipeline {
             evaluationService.completeDailyEvaluation(ideaId, today);
         }
         return EvaluationRunResult.evaluated(updated);
+    }
+
+    /** 실패에 발생 위치를 붙인다. 예상하지 못한 예외는 G001로 감싸 원래 예외를 cause로 남긴다. */
+    private static CustomException locate(RuntimeException e, ErrorLocation location) {
+        return e instanceof CustomException custom ? custom.at(location)
+                : new CustomException(ErrorCode.INTERNAL_SERVER_ERROR,
+                        ErrorDetail.of(null, ErrorReason.INTERNAL_ERROR).at(location), e);
     }
 
     /**

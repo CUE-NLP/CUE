@@ -97,6 +97,7 @@ class OpenApiDocsTest extends PostgresIntegrationTest {
                 String url = path.getKey().replace("{id}", "1");
                 var builder = op.getKey().equals("get") ? get(url)
                         : op.getKey().equals("post") ? post(url).contentType(MediaType.APPLICATION_JSON).content("{}")
+                        : op.getKey().equals("delete") ? org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(url)
                         : org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                                 .patch(url).contentType(MediaType.APPLICATION_JSON).content("{}");
                 String code = mapper.readTree(mvc.perform(builder).andReturn().getResponse().getContentAsString())

@@ -1,7 +1,6 @@
 package com.cue.source.client;
 
-import com.cue.global.error.CustomException;
-import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorReason;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
 import java.util.ArrayList;
@@ -61,7 +60,7 @@ public class GithubSourceClient implements SourceClient {
     @Override
     public String fetchContent(SourceItem item) {
         if (!FULL_NAME.matcher(item.title()).matches()) {
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+            throw SourceClientSupport.failure(ErrorReason.INVALID_REPOSITORY_NAME);
         }
         return SourceClientSupport.getText(restClient.get().uri("/repos/" + item.title() + "/readme")
                 .header("Accept", "application/vnd.github.raw+json"));

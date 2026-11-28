@@ -1,5 +1,6 @@
 package com.cue.idea.dto;
 
+import com.cue.global.error.ErrorDetail;
 import com.cue.idea.entity.EvaluationStatus;
 import com.cue.idea.entity.IdeaStatus;
 import com.cue.idea.entity.ItCategory;
@@ -42,4 +43,6 @@ public record IdeaResponse(
                 example = "AI", nullable = true) KeywordOrigin keywordOrigin,
         @Schema(description = "평가 실행 상태(폴링용). IDLE=대기·완료, QUEUED=대기열, RUNNING=평가 중, FAILED=실패(lastEvaluationErrorCode 참고). "
                 + "QUEUED·RUNNING 동안은 아이디어를 수정할 수 없다(I005)", example = "IDLE") EvaluationStatus evaluationStatus,
-        @Schema(description = "마지막 평가가 실패했을 때(FAILED)의 에러 코드. 그 밖은 null", example = "G002", nullable = true) String lastEvaluationErrorCode) {}
+        @Schema(description = "마지막 평가가 실패했을 때(FAILED)의 에러 코드. 그 밖은 null", example = "G002", nullable = true) String lastEvaluationErrorCode,
+        @Schema(description = "마지막 평가가 실패한 위치와, 외부 API를 쓰다 실패했으면 그 API·원인. FAILED가 아니면 null", nullable = true)
+        ErrorDetail lastEvaluationError) {}

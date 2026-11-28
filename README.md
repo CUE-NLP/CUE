@@ -213,6 +213,7 @@ cd backend && ./gradlew test
 | GET | `/api/ideas` | ✓ | 저장된 `title`을 포함한 리더보드 목록(`data.items`). `status=ACTIVE`(기본)/`HOLD`(보류 탭), `sort=TOTAL`(기본, 총점순)/`RECENT_RISE`(최근 상승순) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (저장된 `title` · 상태 · 구조화 항목 · 점수 · 가중치 · 최근 변화량) |
 | PATCH | `/api/ideas/{id}` | ✓ | `{"title":"새 제목"}`으로 제목만 수정하면 AI 호출·소스 재등록·재평가가 발생하지 않음. 네 항목·검색 키워드 변경은 기존 평가 규칙 적용. `keywords`: 생략=유지, `[]`=AI 재추출, 1~2개=교체. 평가 대기·진행 중이면 `409 I005` |
+| DELETE | `/api/ideas/{id}` | ✓ | 아이디어와 점수·평가 이력·근거·총점 이력·수집 설정을 영구 삭제(응답 `data` null). 본인만(`I002`), 없거나 이미 삭제했으면 `I001`, 평가가 대기·진행 중이면 `I005`(409). 글로벌 트렌드는 남음 |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 ("새로운 변화" 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (점수 이력 차트용, 오래된 순, 목록 응답 `data.items`) |
 | GET | `/api/ideas/{id}/evaluations` | ✓ | 항목별 평가 이력 (변화량 · 근거 요약 · 출처 URL, 최신순, 목록 응답 `data.items`) |
@@ -280,6 +281,8 @@ PATCH /api/ideas/1/weights
 
 [`ErrorCode`](backend/src/main/java/com/cue/global/error/ErrorCode.java)에서 관리하며, 코드는 `{영문 1자}{3자리}` 형식이고 전체에서 유일해야 합니다 (테스트로 검사).
 
+에러가 난 위치와, 외부 API를 쓰다 실패했으면 그 API와 원인을 함께 알립니다. 외부 AI 호출이 실패한 응답은 `data`에 `{"location": "아이디어 구조화", "api": "Gemini", "reason": "429 호출 한도 초과"}` 형태로 담고, 비동기 평가 실패는 `GET /api/ideas/{id}`의 `lastEvaluationError`로 같은 형태를 돌려줍니다. 외부 자료 API(GitHub 등) 실패는 평가를 멈추지 않으므로 서버 로그에 API와 원인을 남깁니다.
+
 | 구분 | 코드 | HTTP | 의미 |
 | --- | --- | --- | --- |
 | Global | `G001` | 500 | 예상치 못한 서버 오류 |
@@ -305,7 +308,7 @@ PATCH /api/ideas/1/weights
 | | `I002` | 403 | 본인 아이디어가 아님 |
 | | `I003` | 400 | 가중치 오류 (5개 항목(TREND 포함)·0~100·합 100) |
 | | `I004` | 409 | 보류(HOLD) 아이디어는 평가 불가 |
-| | `I005` | 409 | 평가가 대기·진행 중인 아이디어는 수정 불가 (끝난 뒤 다시 시도) |
+| | `I005` | 409 | 평가가 대기·진행 중인 아이디어는 수정·삭제 불가 (끝난 뒤 다시 시도) |
 | | `I006` | 429 | 구조화 요청이 너무 잦음 (잠시 뒤 다시 시도) |
 | Source | `S001` | 404 | 수집 설정(source)을 찾을 수 없음 |
 | | `S002` | 501 | 아직 지원하지 않는 외부 API |

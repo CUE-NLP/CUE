@@ -5,6 +5,7 @@ import com.cue.global.ai.GeminiClient;
 import com.cue.global.cache.TtlCache;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorLocation;
 import com.cue.idea.dto.StructureIdeaResponse;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.ItCategory;
@@ -136,7 +137,12 @@ public class IdeaStructuringService {
         }
         checkCooldown(userId);
 
-        JsonNode r = gemini.generateJson(AiLane.INTERACTIVE, SYSTEM_PROMPT, "# 아이디어 원문\n" + text, SCHEMA);
+        JsonNode r;
+        try {
+            r = gemini.generateJson(AiLane.INTERACTIVE, SYSTEM_PROMPT, "# 아이디어 원문\n" + text, SCHEMA);
+        } catch (CustomException e) {
+            throw e.at(ErrorLocation.IDEA_STRUCTURING);
+        }
         String target = clean(r.path("target"));
         String problem = clean(r.path("problem"));
         String solution = clean(r.path("solution"));

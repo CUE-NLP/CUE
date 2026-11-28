@@ -66,6 +66,24 @@ class GeminiClientTest {
                 () -> c.parse("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"not json\"}]}}]}")).getErrorCode());
     }
 
+    @Test
+    void 실패하면_어느_API가_왜_실패했는지_담는다() {
+        MockRestServiceServer[] server = new MockRestServiceServer[1];
+        GeminiClient c = client(server, "k", true);
+        server[0].expect(requestTo(org.hamcrest.Matchers.startsWith("https://gemini.test")))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS).body("{\"error\":\"secret body\"}"));
+
+        CustomException http = assertThrows(CustomException.class, () -> c.generateJson("p", SCHEMA));
+        assertEquals("Gemini", http.getDetail().api());
+        assertEquals("429 호출 한도 초과", http.getDetail().reason());
+        assertFalse(http.getMessage().contains("secret body")); // 응답 본문은 원인에 담지 않는다
+
+        CustomException cut = assertThrows(CustomException.class,
+                () -> c.parse("{\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}"));
+        assertEquals("응답에 본문이 없음(finishReason=MAX_TOKENS)", cut.getDetail().reason());
+        assertEquals("응답 해석 실패", assertThrows(CustomException.class, () -> c.parse("not json")).getDetail().reason());
+    }
+
     // ===== 레인·재시도·속도 제한 =====
 
     private static final String OK = "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"a\\\":1}\"}]}}]}";

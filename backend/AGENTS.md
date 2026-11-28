@@ -41,7 +41,7 @@ trend/        entity (Trend, TrendItem) / repository / service (GlobalTrendServi
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
 
 ## DB (Flyway, `src/main/resources/db/migration`)
-- 마이그레이션은 **`V1__init.sql`(스키마 확정본)** 으로 시작한다 (users, ideas, scores, refresh_tokens, trends, trend_items, evaluations, evaluation_references, idea_score_histories, sources). **V1은 고정이며 수정하지 않는다.** 이후 변경은 `V2__*.sql`부터 새 파일로 추가한다. 현재 `V2__daily_evaluation_and_evaluated_items.sql`(`ideas.evaluated_on`, `sources.evaluated_items` 추가)까지 있다.
+- 마이그레이션은 **`V1__init.sql`(스키마 확정본)** 으로 시작한다 (users, ideas, scores, refresh_tokens, trends, trend_items, evaluations, evaluation_references, idea_score_histories, sources). **V1은 고정이며 수정하지 않는다.** 이후 변경은 `V2__*.sql`부터 새 파일로 추가한다. 현재 `V2__daily_evaluation_and_evaluated_items.sql`(`ideas.evaluated_on`, `sources.evaluated_items` 추가), `V3__evaluation_error_detail.sql`(`ideas.last_evaluation_error_location/api/reason` 추가)까지 있다.
 - **스키마는 2026-11-24에 확정했다. 이미 머지된 마이그레이션 파일(`V1__init.sql` 포함)은 절대 수정하지 않는다.** 수정하면 이미 적용한 DB가 Flyway 체크섬 불일치로 기동에 실패한다. 스키마를 바꿀 때는 `V{n}__설명.sql`(n = 마지막 버전 + 1) 새 파일을 같은 PR에 추가한다. 새 마이그레이션은 기존 데이터를 지키며 자동 적용되므로 팀원이 DB를 초기화할 필요가 없다. 지금의 `V1__init.sql`과 다른 예전 V1으로 만든 로컬 DB만 `docker compose down -v` 후 한 번 새로 만든다(데이터가 지워지니 먼저 `flyway_schema_history`의 V1 체크섬을 확인한다. 지금 V1은 `449303195`).
 - `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 새 `V{n}__*.sql`을 같은 PR에 추가한다.
 
@@ -77,8 +77,9 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - `global/error/ErrorCode`에만 추가한다. 코드 형식 `{영문1자}{3자리}` — G 공통, A 인증, U 사용자, I 아이디어, S 외부 자료 수집, D 시연, E 평가. **코드 문자열은 전체에서 유일**해야 하며 `DomainTest`가 검사한다. (LoopOn에서 코드 중복 버그가 있었음)
 - 외부 자료(S): `S001` source 없음 / `S002` 미지원 provider / `S003` 허용되지 않는 URL(SSRF 차단).
 - 시연(D): `D001` 시연 API 꺼짐(403) / `D002` 시연 실행 쿨다운(429).
-- 아이디어(I): `I005` 평가가 대기·진행 중인 아이디어는 수정 불가(409) / `I006` 구조화 요청이 너무 잦음(429).
+- 아이디어(I): `I005` 평가가 대기·진행 중인 아이디어는 수정·삭제 불가(409) / `I006` 구조화 요청이 너무 잦음(429).
 - 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E004` 평가 대기열 가득(503) / `E005` 재시작으로 평가 중단(503, `FAILED` 상태의 `last_evaluation_error_code`로만 노출) / `E006` AI가 바쁨(503, 인터랙티브 레인이 한도·429/503으로 호출하지 못함 — 구조화는 사용자가 직접 입력하게 안내) / `E007` 오늘 이미 평가함(409, 평가는 아이디어마다 하루 한 번). AI 통신 실패 자체는 `G002`. (`E003`은 비동기 전환으로 없앴다: 이미 진행 중이면 에러 없이 현재 상태를 돌려준다.)
+- **에러에는 위치와 원인을 담는다** (`ErrorDetail{location, api, reason}`). **문구는 `global/error`에서만 정한다**: 무슨 에러인지는 `ErrorCode`, 어디서는 `ErrorLocation`, 왜는 `ErrorReason`(HTTP 상태·통신 예외 분류 포함, 값은 `%s`), 어떤 외부 API는 `ExternalApi`. 다른 파일에서는 문자열을 적지 않고 `ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.MISSING_LIST, "scores")`처럼 고른 뒤, 위치를 아는 호출한 쪽이 `e.at(ErrorLocation.…)`를 붙인다(`ErrorWordingTest`가 검사). **키·토큰·URL 쿼리·응답 본문·예외 메시지는 원인에 넣지 않는다.** 실패 응답의 `data`, 아이디어의 `lastEvaluationError`(평가 실패), 로그에 같이 나온다. 외부 자료 API 실패는 평가를 멈추지 않아 로그에만 남는다. 새 원인·위치가 필요하면 enum에 추가한다.
 - 코드 번호를 새로 만들기 전에 열려 있는 PR 브랜치의 `ErrorCode`도 확인해 번호가 겹치지 않게 한다 (예: 외부 자료 수집의 `S001·S002`). 현재 G001~G007, A001~A010, U001~U002, I001~I006, S001~S003, D001~D002, E001·E002·E004·E005·E006·E007.
 - **범용 예외로 새지 않게 한다**: 실패 경로는 `IllegalArgumentException`/`IllegalStateException`/메시지 없는 던지기 대신 `CustomException(ErrorCode)`로 던진다. 프레임워크 예외(`HttpMediaTypeNotSupportedException` 등)는 `GlobalExceptionHandler`에서 코드로 매핑한다. 새 ErrorCode를 만들면 `GlobalExceptionHandler`/서비스에서 실제로 쓰이는지, Swagger(`@ApiErrors`)에 나열됐는지 확인한다.
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.
@@ -228,7 +229,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - **재시작 정리**: `EvaluationStateRecovery`(`ApplicationRunner`)가 부팅 때 남은 `QUEUED`/`RUNNING`을 `FAILED(E005)`로 바꾼다(큐는 메모리라 재시작하면 사라진다). 평가가 필요한 아이디어(`needs_full_evaluation`)는 사용자의 재요청이나 다음 일일 배치에서 다시 평가된다.
 - **저장 직후 자동 평가**: `POST /api/ideas`로 ACTIVE가 만들어지거나 `PATCH`로 내용이 **실제로 바뀐** ACTIVE 아이디어가 되면(HOLD→ACTIVE 포함) `IdeaService`가 `IdeaEvaluationRequested`를 발행하고 `AutoEvaluationListener`(`@TransactionalEventListener(AFTER_COMMIT)`)가 커밋 **뒤에** 큐에 넣는다(롤백되면 호출 안 됨). `cue.evaluation.auto-on-save`(기본 true, 통합 테스트는 false)로 끈다. Gemini 불가·대기열 가득이어도 저장 응답은 성공하며 로그(대기열 가득이면 `FAILED(E004)`)만 남긴다. 내용이 같은 수정은 다시 시작하지 않는다.
 - **폴링**: `IdeaResponse`에 `evaluationStatus`·`lastEvaluationErrorCode`가 있다. 완료(IDLE)되면 점수·`hasNewChange`가 갱신된 상태다.
-- **평가 중 수정 차단 (`I005 IDEA_EVALUATING`, 409)**: `PATCH /api/ideas/{id}`는 `evaluation_status`가 QUEUED/RUNNING이면 거절한다(IDLE·FAILED는 허용). 검사 순서는 존재 `I001` → 소유자 `I002` → 평가 중 `I005` → 변경. **경쟁 방지**: `IdeaService.update`가 `IdeaRepository.findByIdForUpdate`(`PESSIMISTIC_WRITE`, `SELECT … FOR UPDATE`)로 행을 잠근 채 같은 트랜잭션에서 상태 확인과 수정을 한다. 평가를 시작하는 쪽(`markQueued`·`markRunning`, 수동·자동 첫 평가·배치 모두)은 조건부 UPDATE라 이 행 잠금이 풀릴 때(수정 커밋)까지 기다린다: 평가가 먼저 QUEUED/RUNNING이 되면 수정이 거절되고, 수정이 먼저면 평가는 수정된 내용으로 시작한다. 그래서 "평가 중인데 수정이 반영되는" 일과 평가 완료가 수정 플래그를 덮어쓰는 일이 없다(이전의 버전 컬럼 안은 쓰지 않는다). 자동 첫 평가가 큐에 들어간 직후부터 끝날 때까지도 수정이 막히므로 프론트는 로딩 화면 동안 수정 버튼을 비활성화하고 `I005`가 오면 안내한다.
+- **평가 중 수정 차단 (`I005 IDEA_EVALUATING`, 409)**: `PATCH`·`DELETE /api/ideas/{id}`는 `evaluation_status`가 QUEUED/RUNNING이면 거절한다(IDLE·FAILED는 허용). 삭제도 같은 행 잠금(`findOwnedForUpdate`)을 써서, 삭제가 먼저면 뒤따르는 평가 시작은 대상이 없어 하지 않는다. 검사 순서는 존재 `I001` → 소유자 `I002` → 평가 중 `I005` → 변경. **경쟁 방지**: `IdeaService.update`가 `IdeaRepository.findByIdForUpdate`(`PESSIMISTIC_WRITE`, `SELECT … FOR UPDATE`)로 행을 잠근 채 같은 트랜잭션에서 상태 확인과 수정을 한다. 평가를 시작하는 쪽(`markQueued`·`markRunning`, 수동·자동 첫 평가·배치 모두)은 조건부 UPDATE라 이 행 잠금이 풀릴 때(수정 커밋)까지 기다린다: 평가가 먼저 QUEUED/RUNNING이 되면 수정이 거절되고, 수정이 먼저면 평가는 수정된 내용으로 시작한다. 그래서 "평가 중인데 수정이 반영되는" 일과 평가 완료가 수정 플래그를 덮어쓰는 일이 없다(이전의 버전 컬럼 안은 쓰지 않는다). 자동 첫 평가가 큐에 들어간 직후부터 끝날 때까지도 수정이 막히므로 프론트는 로딩 화면 동안 수정 버튼을 비활성화하고 `I005`가 오면 안내한다.
   - **막지 않는 것**: `PATCH /{id}/weights`는 예약만 하고 다음 턴 시작(`startNextTurn`)에 적용되므로 진행 중인 평가에 영향이 없다. `POST /{id}/check`는 `last_checked_at`만 바꿔 평가 결과와 무관하다.
 - **한계·열린 결정**: ① 큐는 메모리라 재시작하면 사라지고 `FAILED(E005)`로만 알려준다(재시작 때 자동 재투입은 하지 않음). ② 수동 요청 호출 횟수 제한(쿨다운)은 아직 없다. ③ 단일 워커라 아이디어가 많으면 대기 시간이 길다(Gemini 한도가 늘면 스레드 수와 락을 함께 조정).
 
@@ -278,6 +279,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 | GET | `/api/ideas` | ✓ | 제목을 포함한 리더보드 목록(`data.items`). `status`(ACTIVE 기본/HOLD), `sort`(TOTAL 기본/RECENT_RISE) |
 | GET | `/api/ideas/{id}` | ✓ | 아이디어 상세 (제목·상태·점수·가중치·최근 변화량·hasNewChange) |
 | PATCH | `/api/ideas/{id}` | ✓ | 제목만 수정하면 분류·소스 재등록·평가를 건너뜀. `keywords`: 생략=유지, `[]`=삭제 후 AI, 1~2개=교체. 평가가 대기·진행 중이면 `I005`(409) |
+| DELETE | `/api/ideas/{id}` | ✓ | 영구 삭제(응답 `data` null). `I001`·`I002`, 평가 대기·진행 중이면 `I005`. 점수·평가·근거·총점 이력·source는 DB `ON DELETE CASCADE`로 함께 삭제, 트렌드는 남음 |
 | PATCH | `/api/ideas/{id}/weights` | ✓ | 가중치 변경 예약 (5개 기준 모두, 합 100) |
 | POST | `/api/ideas/{id}/check` | ✓ | 최신 점수 확인 처리 (새 변화 알림 해제) |
 | GET | `/api/ideas/{id}/history` | ✓ | 총점 이력 (차트용, 오래된 순, `data.items`) |

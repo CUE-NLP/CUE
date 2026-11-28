@@ -23,7 +23,7 @@ public interface IdeaRepository extends JpaRepository<Idea, Long> {
     /** IDLE/FAILED → QUEUED. 이미 QUEUED/RUNNING이면 0. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @Query("update Idea i set i.evaluationStatus = com.cue.idea.entity.EvaluationStatus.QUEUED, i.lastEvaluationErrorCode = null "
+    @Query("update Idea i set i.evaluationStatus = com.cue.idea.entity.EvaluationStatus.QUEUED, i.lastEvaluationErrorCode = null, i.lastEvaluationErrorLocation = null, i.lastEvaluationErrorApi = null, i.lastEvaluationErrorReason = null "
             + "where i.id = :id and i.evaluationStatus in (com.cue.idea.entity.EvaluationStatus.IDLE, com.cue.idea.entity.EvaluationStatus.FAILED)")
     int markQueued(@Param("id") Long id);
 
@@ -31,28 +31,30 @@ public interface IdeaRepository extends JpaRepository<Idea, Long> {
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("update Idea i set i.evaluationStatus = com.cue.idea.entity.EvaluationStatus.RUNNING, i.evaluationStartedAt = :now, "
-            + "i.evaluationFinishedAt = null, i.lastEvaluationErrorCode = null where i.id = :id and i.evaluationStatus in :allowed")
+            + "i.evaluationFinishedAt = null, i.lastEvaluationErrorCode = null, i.lastEvaluationErrorLocation = null, i.lastEvaluationErrorApi = null, i.lastEvaluationErrorReason = null where i.id = :id and i.evaluationStatus in :allowed")
     int markRunning(@Param("id") Long id, @Param("now") LocalDateTime now, @Param("allowed") Collection<EvaluationStatus> allowed);
 
     /** → IDLE (완료 시각 기록, 에러 코드 비움). */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("update Idea i set i.evaluationStatus = com.cue.idea.entity.EvaluationStatus.IDLE, i.evaluationFinishedAt = :now, "
-            + "i.lastEvaluationErrorCode = null where i.id = :id")
+            + "i.lastEvaluationErrorCode = null, i.lastEvaluationErrorLocation = null, i.lastEvaluationErrorApi = null, i.lastEvaluationErrorReason = null where i.id = :id")
     int markIdle(@Param("id") Long id, @Param("now") LocalDateTime now);
 
     /** → FAILED (완료 시각과 에러 코드 기록). */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("update Idea i set i.evaluationStatus = com.cue.idea.entity.EvaluationStatus.FAILED, i.evaluationFinishedAt = :now, "
-            + "i.lastEvaluationErrorCode = :code where i.id = :id")
-    int markFailed(@Param("id") Long id, @Param("now") LocalDateTime now, @Param("code") String code);
+            + "i.lastEvaluationErrorCode = :code, i.lastEvaluationErrorLocation = :location, i.lastEvaluationErrorApi = :api, "
+            + "i.lastEvaluationErrorReason = :reason where i.id = :id")
+    int markFailed(@Param("id") Long id, @Param("now") LocalDateTime now, @Param("code") String code,
+                   @Param("location") String location, @Param("api") String api, @Param("reason") String reason);
 
     /** 부팅 시: 서버가 죽어 남은 QUEUED/RUNNING을 FAILED(code)로 정리한다. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("update Idea i set i.evaluationStatus = com.cue.idea.entity.EvaluationStatus.FAILED, i.evaluationFinishedAt = :now, "
-            + "i.lastEvaluationErrorCode = :code where i.evaluationStatus in (com.cue.idea.entity.EvaluationStatus.QUEUED, com.cue.idea.entity.EvaluationStatus.RUNNING)")
+            + "i.lastEvaluationErrorCode = :code, i.lastEvaluationErrorLocation = null, i.lastEvaluationErrorApi = null, i.lastEvaluationErrorReason = null where i.evaluationStatus in (com.cue.idea.entity.EvaluationStatus.QUEUED, com.cue.idea.entity.EvaluationStatus.RUNNING)")
     int failStaleEvaluations(@Param("now") LocalDateTime now, @Param("code") String code);
 
     /** 수정용 조회: 행을 잠가(SELECT ... FOR UPDATE) 상태 확인과 수정 사이에 평가 상태 전이가 끼어들지 못하게 한다. */
