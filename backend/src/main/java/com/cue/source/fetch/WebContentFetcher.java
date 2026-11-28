@@ -2,6 +2,8 @@ package com.cue.source.fetch;
 
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorReason;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.Charset;
@@ -51,25 +53,32 @@ public class WebContentFetcher {
                     uri = uri.resolve(r.location());
                     continue;
                 }
-                if (r.status() != 200 || r.body() == null) {
-                    throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+                if (r.status() != 200) {
+                    throw failure(uri, ErrorDetail.ofStatus(null, r.status()), null);
                 }
-                return extract(r);
+                if (r.body() == null) {
+                    throw failure(uri, ErrorDetail.of(null, ErrorReason.EMPTY_RESPONSE), null);
+                }
+                return extract(uri, r);
             }
         } catch (IOException e) {
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+            throw failure(uri, ErrorDetail.of(null, e), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+            throw failure(uri, ErrorDetail.of(null, ErrorReason.INTERRUPTED), e);
         }
-        throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // 리다이렉트 횟수 초과
+        throw failure(uri, ErrorDetail.of(null, ErrorReason.TOO_MANY_REDIRECTS), null);
     }
 
-    private String extract(Response r) {
+    private static CustomException failure(URI uri, ErrorDetail detail, Throwable cause) {
+        return new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, detail.onWebPage(uri.getHost()), cause);
+    }
+
+    private String extract(URI uri, Response r) {
         String type = r.contentType() == null ? "" : r.contentType().toLowerCase(Locale.ROOT);
         boolean html = type.contains("html");
         if (!html && !type.startsWith("text/")) {
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR); // 이진/JSON 등은 원문으로 쓰지 않는다
+            throw failure(uri, ErrorDetail.of(null, ErrorReason.NOT_TEXT_RESPONSE), null); // 이진/JSON 등은 원문으로 쓰지 않는다
         }
         String text = new String(r.body(), charset(type));
         text = html ? HtmlText.toText(text) : text.replaceAll("\\s+", " ").strip();

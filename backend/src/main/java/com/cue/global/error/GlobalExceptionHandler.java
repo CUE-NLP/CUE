@@ -24,9 +24,12 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(CustomException.class)
-    ResponseEntity<CommonResponse<Void>> handleCustom(CustomException e, HttpServletRequest req) {
+    ResponseEntity<? extends CommonResponse<?>> handleCustom(CustomException e, HttpServletRequest req) {
         ErrorCode code = e.getErrorCode();
         log.warn("[BUS] {} {} | {}: {}", req.getMethod(), req.getRequestURI(), code.getCode(), e.getMessage());
+        if (e.getDetail() != null) { // 위치·외부 API·원인을 data에 담는다
+            return ResponseEntity.status(code.getStatus()).body(CommonResponse.onFailure(code, e.getDetail()));
+        }
         return fail(code);
     }
 

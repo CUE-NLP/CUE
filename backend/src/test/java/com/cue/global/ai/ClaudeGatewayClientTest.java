@@ -71,6 +71,8 @@ class ClaudeGatewayClientTest {
             CustomException error = assertThrows(CustomException.class, () -> log.recordOperation(
                     "아이디어 평가 ideaId=8", () -> claude.generateJson("truncated-prompt", schema)));
             assertEquals(ErrorCode.AI_RESPONSE_INVALID, error.getErrorCode());
+            assertEquals("Claude Gateway", error.getDetail().api());
+            assertEquals("응답이 완료되지 않음(stop_reason=max_tokens)", error.getDetail().reason());
         } finally {
             endpoint.stop(0);
         }

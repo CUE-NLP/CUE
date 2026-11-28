@@ -8,6 +8,8 @@ import com.cue.global.ai.GeminiClient;
 import com.cue.global.ai.PromptLoader;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorReason;
 import com.cue.score.entity.ScoreType;
 import com.cue.source.dto.EvaluatedItem;
 import com.cue.source.dto.SourceCheckResult;
@@ -20,7 +22,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -106,7 +107,8 @@ public class EvidenceEvaluator {
         JsonNode result = gemini.generateJson(prompts.render("re-evaluation", vars), RE_EVALUATION_SCHEMA);
         JsonNode changes = result.path("changes");
         if (!changes.isArray()) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.of(gemini.api(), ErrorReason.MISSING_LIST, "changes"));
         }
         Map<ScoreType, ScoreChange> out = new LinkedHashMap<>();
         for (JsonNode n : changes) {
@@ -132,7 +134,8 @@ public class EvidenceEvaluator {
         JsonNode result = gemini.generateJson(prompts.render("initial-evaluation", vars), INITIAL_EVALUATION_SCHEMA);
         JsonNode scores = result.path("scores");
         if (!scores.isObject() || scores.size() != ScoreType.EVIDENCE_TYPES.size()) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.of(gemini.api(), ErrorReason.INVALID_FIELD, "scores"));
         }
         List<ScoreChange> out = new ArrayList<>();
         for (ScoreType type : ScoreType.EVIDENCE_TYPES) {
@@ -142,7 +145,8 @@ public class EvidenceEvaluator {
             JsonNode references = n.path("referenceIds");
             if (score == null || !summary.isString() || summary.asString().isBlank()
                     || !references.isArray() || !references.valueStream().allMatch(JsonNode::isIntegralNumber)) {
-                throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+                throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                        ErrorDetail.of(gemini.api(), ErrorReason.INVALID_FIELD, "scores." + type));
             }
             BigDecimal current = idea.scores().getOrDefault(type, BigDecimal.ZERO);
             BigDecimal diff = clamp(score, BigDecimal.ZERO, MAX_SCORE).subtract(current);

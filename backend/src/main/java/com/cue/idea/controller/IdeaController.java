@@ -28,7 +28,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import lombok.RequiredArgsConstructor;
 
-@Tag(name = "아이디어", description = "아이디어 저장·수정·조회, 리더보드, 가중치, 점수·평가 이력. 모두 액세스 토큰이 필요하며 본인의 아이디어만 접근할 수 있다(타인 아이디어는 `I002`).")
+@Tag(name = "아이디어", description = "아이디어 저장·수정·삭제·조회, 리더보드, 가중치, 점수·평가 이력. 모두 액세스 토큰이 필요하며 본인의 아이디어만 접근할 수 있다(타인 아이디어는 `I002`).")
 @RestController
 @RequestMapping("/api/ideas")
 @RequiredArgsConstructor
@@ -43,7 +43,8 @@ public class IdeaController {
                     + "원문에 근거가 없는 항목은 AI가 채우지 않고 빈 문자열로 두며, 하나라도 비면 `complete=false`(그대로 저장하면 HOLD)이고 `missingFields`에 비어 있는 항목이 담긴다. "
                     + "`complete=true`이면 IT 세부 종류(`itCategory`)와 영어 키워드 후보(`keywords`)도 함께 담기고, **내용을 고치지 않고 저장하면 서버가 이 결과를 다시 써서 저장 때 AI를 한 번 덜 호출한다**(고치면 평소처럼 다시 추출). "
                     + "같은 원문을 다시 보내면 AI 호출 없이 직전 결과를 돌려주고, 같은 사용자는 3초(설정값) 안에 새 원문을 다시 보낼 수 없다(`I006`). "
-                    + "AI가 바쁘거나 실패하면(`E006`·`E001`·`E002`·`G002`) 프론트는 사용자가 4칸을 직접 채워 저장하게 안내한다.")
+                    + "AI가 바쁘거나 실패하면(`E006`·`E001`·`E002`·`G002`) 프론트는 사용자가 4칸을 직접 채워 저장하게 안내한다. "
+                    + "외부 AI 호출이 실패한 응답(`E006`·`E002`·`G002`)의 `data`에는 `{location, api, reason}`(에러가 난 위치, 외부 API, 원인)이 담긴다.")
     @ApiErrors({ErrorCode.AI_NOT_CONFIGURED, ErrorCode.AI_RESPONSE_INVALID, ErrorCode.AI_BUSY,
             ErrorCode.STRUCTURING_TOO_FAST, ErrorCode.EXTERNAL_SERVER_ERROR})
     @PostMapping("/structure")
@@ -102,6 +103,18 @@ public class IdeaController {
         return CommonResponse.onSuccess(ideaService.update(principal.id(), id, req));
     }
 
+    /** 아이디어와 그 평가 데이터를 삭제한다. 본인 것만(I002), 평가 대기·진행 중이면 I005. */
+    @Operation(summary = "아이디어 삭제",
+            description = "아이디어와 그 점수·평가 이력·근거 자료·총점 이력·수집 설정을 **영구 삭제**한다(되돌릴 수 없음). 성공 응답의 `data`는 null이다. "
+                    + "본인 아이디어만(`I002`), 없거나 이미 삭제했으면 `I001`. 평가가 대기·진행 중이면 `I005`로 거절하므로 끝난 뒤 다시 요청한다(보류·실패 상태는 삭제 가능).")
+    @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED, ErrorCode.IDEA_EVALUATING})
+    @DeleteMapping("/{id}")
+    public CommonResponse<Void> delete(@AuthenticationPrincipal UserPrincipal principal,
+                                       @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id) {
+        ideaService.delete(principal.id(), id);
+        return CommonResponse.onSuccess();
+    }
+
     /** 최신 점수를 확인했음을 기록한다 ("새로운 변화" 알림 해제). */
     @Operation(summary = "새 변화 확인 처리",
             description = "사용자가 최신 점수를 확인했음을 기록해 `hasNewChange`(새로운 변화 알림)를 해제한다. 이후 새 평가가 생기면 다시 true가 된다.")
@@ -121,7 +134,7 @@ public class IdeaController {
                     + "(본문 `code`는 다른 성공 응답처럼 `\"200\"`). `data.status`는 방금 큐에 넣었으면 `QUEUED`, 이미 대기·진행 중이면 에러 없이 현재 상태(`QUEUED`/`RUNNING`)를 돌려준다(멱등). "
                     + "**평가는 아이디어마다 하루에 한 번**이라 오늘 이미 평가했으면 `E007`이다(내용·키워드를 수정하면 같은 날 다시 가능, 실패한 평가는 다시 요청 가능). "
                     + "본인 아이디어만(`I002`), 없음 `I001`, 보류(HOLD) `I004`, Gemini 사용 불가 `E001`, 대기열이 가득 차면 `E004`는 요청 시점에 바로 반환한다. "
-                    + "평가는 서버에서 한 번에 하나씩 순서대로 돈다. 결과는 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링해 `evaluationStatus`가 `IDLE`이면 갱신된 점수·`hasNewChange`로, `FAILED`면 `lastEvaluationErrorCode`로 확인한다. "
+                    + "평가는 서버에서 한 번에 하나씩 순서대로 돈다. 결과는 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링해 `evaluationStatus`가 `IDLE`이면 갱신된 점수·`hasNewChange`로, `FAILED`면 `lastEvaluationErrorCode`와 `lastEvaluationError`(위치·외부 API·원인)로 확인한다. "
                     + "평가가 끝날 때까지 이 아이디어는 수정할 수 없다(`PATCH`가 `I005`).")
     @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED, ErrorCode.IDEA_NOT_ACTIVE,
             ErrorCode.EVALUATION_ALREADY_DONE_TODAY, ErrorCode.AI_NOT_CONFIGURED, ErrorCode.EVALUATION_QUEUE_FULL})

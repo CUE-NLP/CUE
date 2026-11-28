@@ -2,6 +2,7 @@ package com.cue.trend.service;
 
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.ai.PromptLoader;
+import com.cue.global.error.ErrorLocation;
 import com.cue.source.client.SearchSettings;
 import com.cue.source.client.SourceClient;
 import com.cue.source.config.SourceApiProperties;
@@ -101,7 +102,7 @@ public class GlobalTrendService {
             return snapshot;
         } catch (RuntimeException e) {
             failedAt = LocalDateTime.now();
-            log.warn("글로벌 트렌드를 만들지 못했습니다. TREND 평가는 건너뜁니다: {}", e.toString());
+            log.warn("글로벌 트렌드를 만들지 못했습니다. TREND 평가는 건너뜁니다 위치={}: {}", ErrorLocation.TREND_COLLECTION.label(), e.toString());
             return null;
         }
     }
@@ -157,7 +158,8 @@ public class GlobalTrendService {
                     found.put(provider, items);
                 }
             } catch (RuntimeException e) {
-                log.warn("트렌드 조회 실패 provider={}: {}", provider, e.toString());
+                log.warn("트렌드 조회 실패 provider={} 위치={}, API={}: {}", provider, ErrorLocation.TREND_SEARCH.label(),
+                        provider.api().label(), e.toString());
             }
         }
         if (found.isEmpty()) {
@@ -261,7 +263,7 @@ public class GlobalTrendService {
             }
             return java.util.Optional.of(content);
         } catch (RuntimeException e) {
-            log.warn("트렌드 항목 원문 읽기 실패, 건너뜁니다 url={}: {}", item.url(), e.toString());
+            log.warn("트렌드 항목 원문 읽기 실패, 건너뜁니다 url={} 위치={}: {}", item.url(), ErrorLocation.TREND_CONTENT.label(), e.toString());
             return java.util.Optional.empty();
         }
     }

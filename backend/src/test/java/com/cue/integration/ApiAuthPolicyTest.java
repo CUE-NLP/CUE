@@ -1,5 +1,6 @@
 package com.cue.integration;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -88,6 +89,7 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
                 new Endpoint(HttpMethod.GET, "/api/ideas/{id}", null),
                 new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}", "{\"problem\":\"x\"}"),
                 new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}/weights", WEIGHTS_BODY),
+                new Endpoint(HttpMethod.DELETE, "/api/ideas/{id}", null),
                 new Endpoint(HttpMethod.POST, "/api/ideas/{id}/check", null),
                 new Endpoint(HttpMethod.POST, "/api/ideas/{id}/evaluate", null),
                 new Endpoint(HttpMethod.POST, "/api/demo/evaluations/run", "{\"force\":false}"),
@@ -105,6 +107,7 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
             case "GET" -> get(path);
             case "POST" -> post(path);
             case "PATCH" -> patch(path);
+            case "DELETE" -> delete(path);
             default -> throw new IllegalArgumentException(e.toString());
         };
         if (e.body() != null) {

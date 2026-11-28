@@ -2,6 +2,9 @@ package com.cue.global.ai;
 
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorReason;
+import com.cue.global.error.ExternalApi;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -51,14 +54,17 @@ final class ClaudeGatewayClient {
 
     JsonNode responseText(JsonNode response) {
         // 중단된 응답은 부분 JSON을 반환할 수 있다.
-        if (!"end_turn".equals(response.path("stop_reason").asString())) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+        String stopReason = response.path("stop_reason").asString("");
+        if (!"end_turn".equals(stopReason)) {
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.of(ExternalApi.CLAUDE_GATEWAY, ErrorReason.INCOMPLETE_RESPONSE, "stop_reason=" + stopReason));
         }
         return response.path("content").valueStream()
                 .filter(block -> "text".equals(block.path("type").asString()))
                 .map(block -> block.path("text"))
                 .findFirst()
-                .orElseThrow(() -> new CustomException(ErrorCode.AI_RESPONSE_INVALID));
+                .orElseThrow(() -> new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                        ErrorDetail.of(ExternalApi.CLAUDE_GATEWAY, ErrorReason.NO_RESPONSE_CONTENT, "")));
     }
 
     private static void convertSchema(ObjectNode schema) {

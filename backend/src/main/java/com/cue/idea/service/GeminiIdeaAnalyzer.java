@@ -4,6 +4,10 @@ import com.cue.global.ai.AiLane;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorLocation;
+import com.cue.global.error.ErrorReason;
+import com.cue.global.error.ExternalApi;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.ItCategory;
 import java.util.Arrays;
@@ -108,7 +112,7 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         try {
             return requestAnalysis(idea, false);
         } catch (RuntimeException e) {
-            log.warn("Gemini 분석 실패, 임시 분석기로 대체합니다: {}", e.toString());
+            log.warn("Gemini 분석 실패, 임시 분석기로 대체합니다 위치={}: {}", ErrorLocation.KEYWORD_EXTRACTION.label(), e.toString());
             return fallback.analyze(idea);
         }
     }
@@ -122,7 +126,7 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         try {
             return requestAnalysis(idea, true).itCategory();
         } catch (RuntimeException e) {
-            log.warn("Gemini 종류 분류 실패, 임시 분석기로 대체합니다: {}", e.toString());
+            log.warn("Gemini 종류 분류 실패, 임시 분석기로 대체합니다 위치={}: {}", ErrorLocation.CATEGORY_CLASSIFICATION.label(), e.toString());
             return fallback.analyzeCategory(idea);
         }
     }
@@ -132,18 +136,23 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         String userText = "타깃: " + idea.getTarget() + "\n문제: " + idea.getProblem()
                 + "\n해결: " + idea.getSolution() + "\n기대효과: " + idea.getExpectation();
         String systemPrompt = typeOnly ? SYSTEM_PROMPT + TYPE_ONLY_NOTICE : SYSTEM_PROMPT;
-        return parse(gemini.generateJson(AiLane.INTERACTIVE, systemPrompt, userText, schema(typeOnly)), typeOnly);
+        return parse(gemini.generateJson(AiLane.INTERACTIVE, systemPrompt, userText, schema(typeOnly)), typeOnly, gemini.api());
     }
 
     /** 응답 JSON을 종류·키워드로 바꾼다. 키워드가 하나도 없으면(종류만 모드 제외) E002. */
     static IdeaAnalysis parse(JsonNode result, boolean typeOnly) {
+        return parse(result, typeOnly, ExternalApi.GEMINI);
+    }
+
+    private static IdeaAnalysis parse(JsonNode result, boolean typeOnly, ExternalApi api) {
         ItCategory category = ItCategory.fromAi(result.path("itCategory").asString(null));
         if (typeOnly) {
             return new IdeaAnalysis(category, List.of());
         }
         List<String> keywords = normalizeKeywords(result.path("keywords"));
         if (keywords.isEmpty()) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.of(api, ErrorReason.MISSING_KEYWORDS));
         }
         return new IdeaAnalysis(category, keywords);
     }

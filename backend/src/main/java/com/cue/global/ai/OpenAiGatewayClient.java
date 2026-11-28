@@ -2,6 +2,9 @@ package com.cue.global.ai;
 
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorReason;
+import com.cue.global.error.ExternalApi;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
@@ -54,8 +57,10 @@ final class OpenAiGatewayClient {
     }
 
     JsonNode responseText(JsonNode response) {
-        if (!"completed".equals(response.path("status").asString())) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+        String status = response.path("status").asString("");
+        if (!"completed".equals(status)) {
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.of(ExternalApi.OPENAI_GATEWAY, ErrorReason.INCOMPLETE_RESPONSE, "status=" + status));
         }
         String text = response.path("output").valueStream()
                 .filter(item -> "message".equals(item.path("type").asString()))
@@ -64,7 +69,8 @@ final class OpenAiGatewayClient {
                 .map(content -> content.path("text").asString(""))
                 .collect(Collectors.joining());
         if (text.isBlank()) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.of(ExternalApi.OPENAI_GATEWAY, ErrorReason.NO_RESPONSE_CONTENT, ""));
         }
         return mapper.getNodeFactory().stringNode(text);
     }
