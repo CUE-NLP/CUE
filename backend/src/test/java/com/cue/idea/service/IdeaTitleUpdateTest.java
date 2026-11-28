@@ -42,7 +42,8 @@ class IdeaTitleUpdateTest {
         var cache = mock(AnalysisCache.class);
         var events = mock(ApplicationEventPublisher.class);
         var service = new IdeaService(ideas, mock(UserRepository.class), mock(EvaluationRepository.class),
-                mock(IdeaScoreHistoryRepository.class), sources, analyzer, cache, events);
+                mock(IdeaScoreHistoryRepository.class), sources, analyzer, cache,
+                mock(com.cue.evaluation.service.EvaluationPolicy.class), events);
 
         var renamed = service.update(1L, 2L, new UpdateIdeaRequest("  개발 질문 노트  ", null, null, null, null, null, null));
 

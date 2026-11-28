@@ -1,5 +1,6 @@
 package com.cue.evaluation;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,13 +14,16 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.cue.evaluation.dto.EvaluationRunResult;
+import com.cue.evaluation.repository.EvaluationRepository;
+import com.cue.evaluation.service.EvaluationPolicy;
 import com.cue.evaluation.service.EvaluationRecorder;
 import com.cue.evaluation.service.EvidenceEvaluator;
 import com.cue.evaluation.service.IdeaEvaluationPipeline;
 import com.cue.evaluation.service.TrendEvaluator;
-import com.cue.evaluation.repository.EvaluationRepository;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.ai.PromptLoader;
+import com.cue.global.error.CustomException;
+import com.cue.global.error.ErrorCode;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.IdeaType;
 import com.cue.idea.repository.IdeaRepository;
@@ -94,7 +98,7 @@ class FullEvaluationEvidenceTest {
         var pipeline = new IdeaEvaluationPipeline(ideas, sources, new SourceCheckService(sources, clients),
                 recorder, new EvidenceEvaluator(gemini, new PromptLoader()),
                 mock(TrendEvaluator.class), mock(GlobalTrendService.class), new SourceExcerptService(clients, sourceProps),
-                gemini, tx, null, null, mock(EvaluationRepository.class));
+                gemini, tx, null, null, mock(EvaluationRepository.class), mock(EvaluationPolicy.class));
 
         pipeline.evaluate(ideaId);
         assertEquals(1, prompts.size());
@@ -116,5 +120,21 @@ class FullEvaluationEvidenceTest {
         assertTrue(reEvaluation.substring(addedAt, removedAt).contains(replacement.url()));
         assertTrue(reEvaluation.substring(removedAt).contains(first.url()));
         assertFalse(reEvaluation.contains(second.url()));
+
+        // 사용자 요청 재평가: 바뀐 것이 없어도 호출하고, 그대로인 자료를 함께 넘긴다
+        idea.completeTrendEvaluation(1L);
+        assertEquals(EvaluationRunResult.Status.EVALUATED, pipeline.evaluate(ideaId, true).status());
+        assertEquals(3, prompts.size());
+        String requested = prompts.getLast();
+        String kept = requested.substring(requested.lastIndexOf("[그대로인 자료]"), requested.lastIndexOf("[삭제된 자료]"));
+        assertTrue(kept.contains(replacement.url()));
+        assertTrue(kept.contains(second.url()));
+
+        // 모든 자료 조회가 실패하면 자료 없이 점수를 다시 매기지 않는다
+        when(github.search("keyword")).thenThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR));
+        when(stack.search("keyword")).thenThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR));
+        assertEquals(ErrorCode.EXTERNAL_SERVER_ERROR,
+                assertThrows(CustomException.class, () -> pipeline.evaluate(ideaId, true)).getErrorCode());
+        assertEquals(3, prompts.size());
     }
 }

@@ -2,6 +2,7 @@ package com.cue.idea.service;
 
 import com.cue.evaluation.repository.EvaluationRepository;
 import com.cue.evaluation.repository.IdeaScoreHistoryRepository;
+import com.cue.evaluation.service.EvaluationPolicy;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.dto.CreateIdeaRequest;
@@ -25,7 +26,7 @@ import com.cue.source.entity.Source;
 import com.cue.source.repository.SourceRepository;
 import com.cue.user.repository.UserRepository;
 import java.math.BigDecimal;
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -44,6 +45,7 @@ public class IdeaService {
     private final SourceRepository sources;
     private final IdeaAnalyzer analyzer;
     private final AnalysisCache analysisCache;
+    private final EvaluationPolicy evaluationPolicy;
     private final org.springframework.context.ApplicationEventPublisher events;
 
     /**
@@ -141,16 +143,16 @@ public class IdeaService {
         return toDetail(findOwned(userId, ideaId));
     }
 
-    /** 평가를 요청할 수 있는지 확인한다: 없으면 I001, 남의 것이면 I002, 보류면 I004, 오늘 이미 평가했으면 E007. */
+    /** 평가를 요청할 수 있는지 확인한다: 없으면 I001, 남의 것이면 I002, 보류면 I004, 오늘 이미 평가했으면 E007, 대기 시간 중이면 E008. */
     @Transactional(readOnly = true)
     public void assertEvaluable(Long userId, Long ideaId) {
         Idea idea = findOwned(userId, ideaId);
         if (!idea.isActive()) {
             throw new CustomException(ErrorCode.IDEA_NOT_ACTIVE);
         }
-        if (idea.dailyEvaluationDone(LocalDate.now())) {
-            throw new CustomException(ErrorCode.EVALUATION_ALREADY_DONE_TODAY);
-        }
+        evaluationPolicy.blockReason(idea, LocalDateTime.now()).ifPresent(code -> {
+            throw new CustomException(code);
+        });
     }
 
     private Idea findOwnedForUpdate(Long userId, Long ideaId) {

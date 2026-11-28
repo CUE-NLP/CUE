@@ -1,5 +1,6 @@
 package com.cue.evaluation;
 
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -49,7 +50,7 @@ class EvaluationQueuePriorityTest {
         executor.initialize();
         when(ideas.markQueued(anyLong())).thenReturn(1);
         when(ideas.markRunning(anyLong(), any(), any())).thenReturn(1);
-        when(evaluation.evaluate(anyLong())).thenAnswer(inv -> {
+        when(evaluation.evaluate(anyLong(), anyBoolean())).thenAnswer(inv -> {
             Long id = inv.getArgument(0);
             if (id == 1L) {
                 order.add("수동1");

@@ -60,7 +60,8 @@ public enum ErrorCode {
     EVALUATION_QUEUE_FULL(HttpStatus.SERVICE_UNAVAILABLE, "E004", "평가 요청이 많아 대기열이 가득 찼습니다. 잠시 후 다시 시도해주세요."),
     EVALUATION_INTERRUPTED(HttpStatus.SERVICE_UNAVAILABLE, "E005", "서버가 재시작되어 평가가 중단되었습니다. 다시 시도해주세요."),
     AI_BUSY(HttpStatus.SERVICE_UNAVAILABLE, "E006", "AI가 지금 바쁩니다. 직접 입력하거나 잠시 후 다시 시도해주세요."),
-    EVALUATION_ALREADY_DONE_TODAY(HttpStatus.CONFLICT, "E007", "오늘은 이미 평가했습니다. 내일 다시 평가하거나 아이디어 내용을 수정한 뒤 요청해주세요.");
+    EVALUATION_ALREADY_DONE_TODAY(HttpStatus.CONFLICT, "E007", "오늘은 이미 평가했습니다. 내일 다시 평가하거나 아이디어 내용을 수정한 뒤 요청해주세요."),
+    EVALUATION_COOLDOWN(HttpStatus.TOO_MANY_REQUESTS, "E008", "방금 평가한 아이디어입니다. 잠시 후 다시 요청해주세요.");
 
     private final HttpStatus status;
     private final String code;

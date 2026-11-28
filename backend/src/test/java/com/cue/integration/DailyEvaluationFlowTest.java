@@ -68,8 +68,8 @@ class DailyEvaluationFlowTest {
             + "{\"type\":\"MARKET_DIFFERENTIATION\",\"score\":40,\"evidenceSummary\":\"경쟁이 많다\"},"
             + "{\"type\":\"TECH_FEASIBILITY\",\"score\":80,\"evidenceSummary\":\"구현 가능\"}]}";
 
-    /** TREND 평가 응답 (첫 평가는 score, 재평가는 difference를 읽는다). */
-    private static final String TREND_REPLY = "{\"score\":65,\"difference\":35,\"evidenceSummary\":\"에이전트 흐름과 맞닿아 있다\","
+    /** TREND 평가 응답 (첫 평가·재평가 모두 score를 읽는다). */
+    private static final String TREND_REPLY = "{\"score\":65,\"evidenceSummary\":\"에이전트 흐름과 맞닿아 있다\","
             + "\"referenceUrls\":[\"https://news.ycombinator.com/item?id=1\",\"https://not-in-trend.test/x\"]}";
     private String trendReply = TREND_REPLY;
 
@@ -95,11 +95,11 @@ class DailyEvaluationFlowTest {
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             Map<?, ?> props = (Map<?, ?>) ((Map<?, ?>) inv.getArgument(1)).get("properties");
             if (props.containsKey("scores")) return mapper.readTree(INITIAL);
-            if (props.containsKey("difference")) return mapper.readTree(trendReply);
+            if (props.containsKey("score")) return mapper.readTree(trendReply);
             if (props.containsKey("changes")) return mapper.readTree(
-                    "{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":35,\"evidenceSummary\":\"관심이 급증했다\","
+                    "{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":95,\"evidenceSummary\":\"관심이 급증했다\","
                             + "\"referenceUrls\":[\"https://github.com/a/b\"]},"
-                            + "{\"type\":\"TECH_FEASIBILITY\",\"difference\":-3,\"evidenceSummary\":\"성숙도 하락\"}]}");
+                            + "{\"type\":\"TECH_FEASIBILITY\",\"score\":77,\"evidenceSummary\":\"성숙도 하락\"}]}");
             return mapper.readTree("{\"summary\":\"에이전트 도구가 늘고 있다\"}");
         });
     }
@@ -258,7 +258,7 @@ class DailyEvaluationFlowTest {
     // ===== 자료 변화 → 재평가 =====
 
     @Test
-    void 근거_자료가_바뀌면_4개_기준만_재평가하고_변화량을_10으로_제한하며_트렌드와는_연결하지_않는다() throws Exception {
+    void 근거_자료가_바뀌면_4개_기준만_점수를_다시_매기고_트렌드와는_연결하지_않는다() throws Exception {
         String token = signUpAndLogin("change@cue.com");
         long id = createIdea(token, FULL);
         evaluate(token, id); // 초기 평가: 70/60/40/80
@@ -274,15 +274,15 @@ class DailyEvaluationFlowTest {
             if (s.get("type").asString().equals("MARKET_DEMAND")) demand = s.get("score").asDouble();
             if (s.get("type").asString().equals("TECH_FEASIBILITY")) tech = s.get("score").asDouble();
         }
-        assertEquals(70.0, demand); // 60 + min(35, 10)
-        assertEquals(77.0, tech);   // 80 - 3
+        assertEquals(95.0, demand); // 60 → 95 (변화 폭 제한 없음)
+        assertEquals(77.0, tech);   // 80 → 77
 
         assertEquals(1, count("select count(*) from evaluations where trend_id is not null")); // 첫 평가의 TREND 1건뿐, 키워드 근거 평가는 연결 없음
         assertEquals(2, count("select count(*) from idea_score_histories where idea_id = ?", id));
         verify(gemini, times(3)).generateJson(anyString(), anyMap()); // 첫 평가(A·B) 2회 + 재평가는 A만 1회 (소스 요약은 목)
         
         mvc.perform(get("/api/ideas/" + id + "/evaluations").header("Authorization", token))
-                .andExpect(jsonPath("$.data.items[?(@.scoreType=='MARKET_DEMAND' && @.difference==10.0)].references[0].url")
+                .andExpect(jsonPath("$.data.items[?(@.scoreType=='MARKET_DEMAND' && @.difference==35.0)].references[0].url")
                         .value("https://github.com/a/b"));
     }
 
@@ -311,7 +311,7 @@ class DailyEvaluationFlowTest {
     }
 
     @Test
-    void 새_트렌드가_오면_TREND만_재평가하고_변화량을_10으로_제한해_새_트렌드에_연결한다() throws Exception {
+    void 새_트렌드가_오면_TREND만_점수를_다시_매기고_새_트렌드에_연결한다() throws Exception {
         String token = signUpAndLogin("trend@cue.com");
         long id = createIdea(token, FULL);
         evaluate(token, id); // TREND 65
@@ -319,12 +319,13 @@ class DailyEvaluationFlowTest {
 
         TrendSnapshot next = newTrend("새로운 흐름");
         when(globalTrend.today()).thenReturn(next);
+        trendReply = TREND_REPLY.replace("65", "90");
         clearInvocations(gemini);
         var result = evaluate(token, id);
 
         assertEquals("EVALUATED", result.get("status").asString());
         assertTrue(result.get("changed").asBoolean());
-        assertEquals(75.0, trendScore(result.get("idea"))); // 65 + min(35, 10)
+        assertEquals(90.0, trendScore(result.get("idea"))); // 65 → 90
         verify(gemini, times(1)).generateJson(anyString(), anyMap()); // 4개 기준(A)은 호출하지 않는다
         assertEquals(6, evaluationCount(id));
         assertEquals(next.id(), jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
@@ -363,6 +364,7 @@ class DailyEvaluationFlowTest {
         ageLastTrend(id, 5);
         TrendSnapshot later = newTrend("며칠 뒤 새 흐름");
         when(globalTrend.today()).thenReturn(later);
+        trendReply = TREND_REPLY.replace("65", "70");
         assertEquals("EVALUATED", evaluate(token, id).get("status").asString());
         assertEquals(later.id(), jdbc.queryForObject("select last_trend_id from ideas where id = ?", Long.class, id));
     }
@@ -373,7 +375,7 @@ class DailyEvaluationFlowTest {
         long id = createIdea(token, FULL);
         doAnswer(inv -> {
             Map<?, ?> props = (Map<?, ?>) ((Map<?, ?>) inv.getArgument(1)).get("properties");
-            if (props.containsKey("difference")) throw new com.cue.global.error.CustomException(com.cue.global.error.ErrorCode.EXTERNAL_SERVER_ERROR);
+            if (props.containsKey("score")) throw new com.cue.global.error.CustomException(com.cue.global.error.ErrorCode.EXTERNAL_SERVER_ERROR);
             return mapper.readTree(INITIAL);
         }).when(gemini).generateJson(anyString(), anyMap());
 
@@ -483,6 +485,56 @@ class DailyEvaluationFlowTest {
                 .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("E001"));
         assertEquals(0, evaluationCount(id));
         verify(sourceCheck, never()).checkAll(anyLong());
+    }
+
+    // ===== 사용자 요청 재평가 =====
+
+    @Test
+    void 사용자_요청은_바뀐_것이_없어도_두_갈래를_다시_평가한다() throws Exception {
+        String token = signUpAndLogin("requested@cue.com");
+        long id = createIdea(token, FULL);
+        evaluate(token, id); // 70/60/40/80, TREND 65
+        clearInvocations(gemini);
+        trendReply = TREND_REPLY.replace("65", "75");
+        nextDay();
+
+        assertTrue(dailyEvaluation.evaluate(id, true).changed());
+
+        verify(gemini, times(2)).generateJson(anyString(), anyMap());
+        assertEquals(75, count("select score::int from scores where idea_id = ? and type = 'TREND'", id));
+        assertEquals(95, count("select score::int from scores where idea_id = ? and type = 'MARKET_DEMAND'", id));
+    }
+
+    @Test
+    void 오늘_평가를_마친_아이디어의_수동_요청은_E007이고_수정하면_다시_할_수_있다() throws Exception {
+        String token = signUpAndLogin("limit@cue.com");
+        long id = createIdea(token, FULL);
+        batch.runAll(); // 새벽 평가도 하루 한 번에 들어간다
+
+        mvc.perform(post("/api/ideas/" + id + "/evaluate").header("Authorization", token))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("E007"));
+        clearInvocations(gemini);
+        assertEquals("NO_CHANGE", dailyEvaluation.evaluate(id, true).status().name());
+        verify(gemini, never()).generateJson(anyString(), anyMap());
+
+        mvc.perform(patch("/api/ideas/" + id).header("Authorization", token).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"solution\":\"다른 해결\"}")).andExpect(status().isOk());
+        assertEquals("EVALUATED", dailyEvaluation.evaluate(id).status().name());
+    }
+
+    @Test
+    void 바뀐_것이_없어_AI를_부르지_않은_새벽_평가는_오늘_평가로_치지_않는다() throws Exception {
+        String token = signUpAndLogin("idle@cue.com");
+        long id = createIdea(token, FULL);
+        evaluate(token, id);
+        nextDay();
+        clearInvocations(gemini);
+
+        batch.runAll(); // 자료·트렌드 그대로
+        verify(gemini, never()).generateJson(anyString(), anyMap());
+
+        assertEquals("EVALUATED", dailyEvaluation.evaluate(id, true).status().name());
+        verify(gemini, times(2)).generateJson(anyString(), anyMap());
     }
 
     // ===== 배치 =====

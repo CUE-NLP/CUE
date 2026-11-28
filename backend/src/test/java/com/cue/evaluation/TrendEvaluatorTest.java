@@ -63,24 +63,22 @@ class TrendEvaluatorTest {
     }
 
     @Test
-    void 재평가는_difference를_플러스마이너스_10으로_제한하고_0이면_변화_없음() {
-        respond("{\"difference\":35,\"evidenceSummary\":\"크게 늘었다\"}");
-        assertEquals(new BigDecimal("10"), evaluator.evaluate(idea("60", 3L), TREND).get(0).difference());
-        respond("{\"difference\":-50,\"evidenceSummary\":\"식었다\"}");
-        assertEquals(new BigDecimal("-10"), evaluator.evaluate(idea("60", 3L), TREND).get(0).difference());
-        respond("{\"difference\":0,\"evidenceSummary\":\"영향 없음\"}");
+    void 재평가도_새_점수를_받아_변화_폭_제한_없이_차이로_바꾸고_같으면_변화_없음() {
+        respond("{\"score\":95,\"evidenceSummary\":\"크게 늘었다\"}");
+        assertEquals(new BigDecimal("35"), evaluator.evaluate(idea("60", 3L), TREND).get(0).difference());
+        respond("{\"score\":10,\"evidenceSummary\":\"식었다\"}");
+        assertEquals(new BigDecimal("-50"), evaluator.evaluate(idea("60", 3L), TREND).get(0).difference());
+        respond("{\"score\":60,\"evidenceSummary\":\"영향 없음\"}");
         assertTrue(evaluator.evaluate(idea("60", 3L), TREND).isEmpty());
     }
 
     @Test
-    void 모드에_맞지_않는_필드는_무시하고_숫자가_아니거나_근거가_없으면_변화_없음() {
-        respond("{\"difference\":8,\"evidenceSummary\":\"x\"}"); // 첫 평가인데 score가 없다
+    void 점수가_숫자가_아니거나_재평가에_근거가_없으면_변화_없음() {
+        respond("{\"evidenceSummary\":\"x\"}"); // score가 없다
         assertTrue(evaluator.evaluate(idea("0", null), TREND).isEmpty());
-        respond("{\"score\":90,\"evidenceSummary\":\"x\"}");    // 재평가인데 difference가 없다
+        respond("{\"score\":\"많이\",\"evidenceSummary\":\"x\"}");
         assertTrue(evaluator.evaluate(idea("50", 3L), TREND).isEmpty());
-        respond("{\"difference\":\"많이\",\"evidenceSummary\":\"x\"}");
-        assertTrue(evaluator.evaluate(idea("50", 3L), TREND).isEmpty());
-        respond("{\"difference\":5,\"evidenceSummary\":\" \"}"); // 재평가는 근거 없는 변동 금지
+        respond("{\"score\":55,\"evidenceSummary\":\" \"}"); // 재평가는 근거 없는 변동 금지
         assertTrue(evaluator.evaluate(idea("50", 3L), TREND).isEmpty());
     }
 

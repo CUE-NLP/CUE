@@ -68,6 +68,10 @@ cue:
     # 등록·내용 수정으로 ACTIVE가 되면 첫 평가를 자동으로 큐에 넣는다 (프론트 "분석 중" 화면용). 테스트에서는 false
     auto-on-save: ${EVALUATION_AUTO_ON_SAVE:true}
     # 평가 대기열 상한(가득 차면 E004) / 종료 시 진행 중 평가를 기다리는 시간(초). 평가는 한 번에 하나만 실행한다
+    # true면 평가는 아이디어마다 하루 한 번(E007, 새벽 평가 포함). 내용·키워드를 수정하면 같은 날에도 평가한다
+    daily-limit-enabled: ${EVALUATION_DAILY_LIMIT_ENABLED:true}
+    # 하루 제한을 껐을 때만: 같은 아이디어를 다시 요청하기까지의 대기(초, E008). 0이면 대기 없음
+    manual-cooldown-seconds: ${EVALUATION_MANUAL_COOLDOWN_SECONDS:600}
     queue-capacity: ${EVALUATION_QUEUE_CAPACITY:50}
     shutdown-wait-seconds: ${EVALUATION_SHUTDOWN_WAIT_SECONDS:30}
   trend:

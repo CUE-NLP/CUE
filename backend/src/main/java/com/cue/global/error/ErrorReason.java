@@ -47,6 +47,7 @@ public enum ErrorReason {
     INVALID_STORY_ID("글 번호 형식이 아님"),
     // 서버 내부
     QUEUE_FULL("대기열이 가득 참"),
+    ALL_SOURCES_FAILED("외부 자료를 하나도 조회하지 못함"),
     INTERNAL_ERROR("서버 내부 오류");
 
     private final String template;

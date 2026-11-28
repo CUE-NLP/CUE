@@ -120,7 +120,7 @@ class FirstEvaluationEvidenceTest {
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(inv -> {
             String prompt = inv.getArgument(0);
             Map<String, Object> schema = inv.getArgument(1);
-            if (mapper.valueToTree(schema).at("/properties/difference").isObject()) { // TREND: prompts에는 근거 평가만 담는다
+            if (mapper.valueToTree(schema).at("/properties/score").isObject()) { // TREND: prompts에는 근거 평가만 담는다
                 return mapper.readTree("{\"score\":50,\"evidenceSummary\":\"흐름과 맞닿아 있다\",\"referenceUrls\":[]}");
             }
             if (mapper.valueToTree(schema).at("/properties/changes").isObject()) { // 재평가
@@ -128,7 +128,7 @@ class FirstEvaluationEvidenceTest {
                 if (reEvaluationFails) {
                     throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
                 }
-                return mapper.readTree("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"difference\":4,"
+                return mapper.readTree("{\"changes\":[{\"type\":\"MARKET_DEMAND\",\"score\":64,"
                         + "\"evidenceSummary\":\"새 저장소가 나타났어요.\",\"referenceUrls\":[\"https://fake.test/repo_f\"]}]}");
             }
             JsonNode required = mapper.valueToTree(schema).at("/properties/scores/items/required");
@@ -185,7 +185,7 @@ class FirstEvaluationEvidenceTest {
     }
 
     @Test
-    void 수동_재평가는_기존_평가_내역과_추가_삭제된_항목만_보내고_성공해야_반영_기록을_바꾼다() throws Exception {
+    void 수동_재평가는_평가_내역과_추가_삭제_그대로인_항목을_나눠_보내고_성공해야_반영_기록을_바꾼다() throws Exception {
         githubNames.addAll(List.of("a", "b", "c", "d", "e"));
         long id = createIdea();
         evaluateManually(id); // 첫(전체) 평가: 자료 전부
@@ -218,24 +218,27 @@ class FirstEvaluationEvidenceTest {
         assertEquals(1, prompts.size());
         String prompt = prompts.get(0);
         String history = prompt.substring(prompt.lastIndexOf("[기존 평가 내역]"), prompt.lastIndexOf("[새로 추가된 자료]"));
-        String added = prompt.substring(prompt.lastIndexOf("[새로 추가된 자료]"), prompt.lastIndexOf("[삭제된 자료]"));
+        String added = prompt.substring(prompt.lastIndexOf("[새로 추가된 자료]"), prompt.lastIndexOf("[그대로인 자료]"));
+        String unchanged = prompt.substring(prompt.lastIndexOf("[그대로인 자료]"), prompt.lastIndexOf("[삭제된 자료]"));
         String removed = prompt.substring(prompt.lastIndexOf("[삭제된 자료]"));
         assertTrue(history.contains("문제가 크다"), "첫 평가의 근거 요약이 재평가에 들어가야 한다");
         assertTrue(added.contains("repo_f") && added.contains("repo_g"));
         assertTrue(removed.contains("repo_d") && removed.contains("repo_e"));
         for (String kept : List.of("repo_a", "repo_b", "repo_c")) {
             assertFalse(added.contains(kept) || removed.contains(kept), kept);
+            assertTrue(unchanged.contains(kept), kept);
         }
         assertTrue(recordedItems(id).contains("repo_g") && !recordedItems(id).contains("repo_d"));
         assertEquals(1, jdbc.queryForObject("select count(*) from evaluation_references where url = 'https://fake.test/repo_f'",
                 Integer.class));
 
-        // 그다음 날 더 바뀐 것이 없으면 AI를 부르지 않는다
+        // 그다음 날 바뀐 것이 없어도 사용자가 요청하면 다시 평가한다
         nextDay();
         prompts.clear();
         evaluateManually(id);
         assertEquals("IDLE", evaluationStatus(id));
-        assertTrue(prompts.isEmpty());
+        assertEquals(1, prompts.size());
+        assertTrue(prompts.get(0).contains("(새로 추가된 자료 없음)"));
     }
 
     @Test

@@ -102,6 +102,10 @@ public class Idea {
     @Column(name = "evaluated_on")
     private LocalDate evaluatedOn;
 
+    /** AI 평가를 마지막으로 끝까지 마친 시각. 하루 1회 제한을 껐을 때 수동 재평가 대기 시간의 기준. */
+    @Column(name = "evaluation_completed_at")
+    private LocalDateTime evaluationCompletedAt;
+
     /** 이 아이디어의 TREND 점수를 마지막으로 평가한 글로벌 트렌드 id. null이면 TREND 첫 평가 전 (내용이 바뀌면 다시 null). */
     @Column(name = "last_trend_id")
     private Long lastTrendId;
@@ -222,9 +226,10 @@ public class Idea {
         return !needsFullEvaluation && today.equals(evaluatedOn);
     }
 
-    /** {@code date}의 평가를 끝까지 마쳤음을 기록한다. */
-    public void completeDailyEvaluation(LocalDate date) {
+    /** AI 평가를 끝까지 마쳤음을 기록한다. {@code date}는 평가를 시작한 날, {@code at}은 끝난 시각. */
+    public void completeDailyEvaluation(LocalDate date, LocalDateTime at) {
         evaluatedOn = date;
+        evaluationCompletedAt = at;
     }
 
     /** 전체(초기) 평가를 끝냈음을 기록한다. */

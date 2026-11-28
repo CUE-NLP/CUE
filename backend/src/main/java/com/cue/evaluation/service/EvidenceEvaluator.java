@@ -34,17 +34,16 @@ import tools.jackson.databind.JsonNode;
  * <p>키워드 근거 자료로 <b>기존 4개 기준</b>({@link ScoreType#EVIDENCE_TYPES})만 평가한다. TREND는 {@link TrendEvaluator}가 맡는다.
  * 프롬프트(resources/prompts, 설계는 docs/ai-prompts.md) 플레이스홀더: {@code problem, target, solution, expectation}(아이디어 4항목),
  * 전체 평가는 {@code items}(조회한 근거 자료 전부), 재평가는 {@code currentScores}(현재 점수 "TYPE: 점수" 줄바꿈 목록),
- * {@code pastEvaluations}(기존 평가 내역), {@code newItems}(새로 추가된 자료), {@code removedItems}(삭제된 자료). 비면 "(… 없음)".
+ * {@code pastEvaluations}(기존 평가 내역), {@code newItems}(새로 추가된 자료), {@code keptItems}(그대로인 자료, 사용자 요청일 때만),
+ * {@code removedItems}(삭제된 자료). 비면 "(… 없음)".
  * <ul>
- *   <li>re-evaluation: {@code {"changes":[{"type","difference","evidenceSummary","referenceUrls":[]}]}} — 기준당 ±{@value #MAX_DIFFERENCE}로 서버에서 다시 제한</li>
+ *   <li>re-evaluation: {@code {"changes":[{"type","score","evidenceSummary","referenceUrls":[]}]}} — 점수가 달라지는 기준의 새 점수(0~100), 현재 점수와의 차이로 기록</li>
  *   <li>initial-evaluation: {@code {"scores":[{"type","score","evidenceSummary","referenceUrls":[]}]}} — 0~100, 현재 점수와의 차이로 바꿔 기록</li>
  * </ul>
  */
 @Component
 @RequiredArgsConstructor
 public class EvidenceEvaluator {
-    /** 재평가 한 번에서 기준 하나가 움직일 수 있는 최대 점수(정수). 프롬프트가 어겨도 서버가 한 번 더 제한한다. */
-    public static final BigDecimal MAX_DIFFERENCE = BigDecimal.TEN;
     static final BigDecimal MAX_SCORE = new BigDecimal("100");
     /** 근거 요약 최대 길이(자름). */
     public static final int MAX_SUMMARY_CHARS = 300;
@@ -59,10 +58,10 @@ public class EvidenceEvaluator {
                     "items", Map.of("type", "OBJECT",
                             "properties", Map.of(
                                     "type", Map.of("type", "STRING", "enum", TYPE_NAMES),
-                                    "difference", Map.of("type", "NUMBER"),
+                                    "score", Map.of("type", "NUMBER"),
                                     "evidenceSummary", Map.of("type", "STRING"),
                                     "referenceUrls", REFERENCE_URLS),
-                            "required", List.of("type", "difference", "evidenceSummary", "referenceUrls")))),
+                            "required", List.of("type", "score", "evidenceSummary", "referenceUrls")))),
             "required", List.of("changes"));
 
     static final Map<String, Object> INITIAL_EVALUATION_SCHEMA = Map.of(
@@ -81,15 +80,16 @@ public class EvidenceEvaluator {
     private final PromptLoader prompts;
 
     /**
-     * 기존 평가 내역에 새로 추가된 자료를 더하고 삭제된 자료를 빼서 기준별 점수 변화를 받는다. 변화가 0인 기준은 빠진다.
-     * 그대로인 자료는 다시 보내지 않는다 (현재 점수와 기존 평가 내역에 반영돼 있다). 근거 URL은 새로 추가된 자료의 것만 받는다.
+     * 현재 점수와 기존 평가 내역을 넘기고, 점수가 달라지는 기준의 새 점수(0~100)를 받아 현재 점수와의 차이로 돌려준다.
+     * 변화 폭 제한은 없다. 점수가 같거나 근거 요약이 없는 기준은 빠진다. 근거 URL은 이번에 넘긴 자료(새 자료·그대로인 자료)의 것만 받는다.
      *
      * @param history 기준별 최근 평가 내역
      * @param added   새로 추가된 항목만 담은 조회 결과
+     * @param kept    그대로인 항목 (일일 배치는 비워 보낸다: 현재 점수와 평가 내역에 반영돼 있다)
      * @param removed 검색 결과에서 사라진 항목
      */
     public List<ScoreChange> reEvaluate(IdeaSnapshot idea, List<PastEvaluation> history, List<SourceCheckResult> added,
-                                        List<EvaluatedItem> removed) {
+                                        List<SourceCheckResult> kept, List<EvaluatedItem> removed) {
         Map<String, String> vars = ideaVariables(idea);
         StringBuilder scores = new StringBuilder();
         for (ScoreType type : ScoreType.EVIDENCE_TYPES) {
@@ -98,6 +98,7 @@ public class EvidenceEvaluator {
         vars.put("currentScores", scores.toString().strip());
         vars.put("pastEvaluations", historyLines(history, removed));
         vars.put("newItems", itemLines(added, "(새로 추가된 자료 없음)"));
+        vars.put("keptItems", itemLines(kept, "(보내지 않음: 현재 점수와 평가 내역에 반영돼 있음)"));
         vars.put("removedItems", removed.isEmpty() ? "(삭제된 자료 없음)" : removed.stream()
                 .limit(SourceTextFormat.EVIDENCE_MAX_ITEMS)
                 .map(i -> SourceTextFormat.reference(i.title(), i.url())).collect(Collectors.joining("\n")));
@@ -108,14 +109,17 @@ public class EvidenceEvaluator {
                     ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.MISSING_LIST, "changes"));
         }
         Map<ScoreType, ScoreChange> out = new LinkedHashMap<>();
-        Map<String, SourceCheckResult> byUrl = indexByUrl(added);
+        List<SourceCheckResult> provided = new ArrayList<>(added);
+        provided.addAll(kept);
+        Map<String, SourceCheckResult> byUrl = indexByUrl(provided);
         for (JsonNode n : changes) {
             ScoreType type = parseType(n.path("type").asString(null));
-            BigDecimal diff = number(n.path("difference"));
-            if (type == null || diff == null || out.containsKey(type)) {
+            BigDecimal score = number(n.path("score"));
+            if (type == null || score == null || out.containsKey(type)) {
                 continue;
             }
-            diff = clamp(diff, MAX_DIFFERENCE.negate(), MAX_DIFFERENCE);
+            BigDecimal diff = clamp(score, BigDecimal.ZERO, MAX_SCORE)
+                    .subtract(idea.scores().getOrDefault(type, BigDecimal.ZERO));
             if (diff.signum() != 0 && !n.path("evidenceSummary").asString("").isBlank()) {
                 out.put(type, toChange(type, diff, n, byUrl));
             }
