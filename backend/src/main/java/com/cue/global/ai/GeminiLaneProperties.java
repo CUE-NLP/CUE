@@ -10,9 +10,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param minIntervalMs 호출 사이 최소 간격(ms)
  * @param maxWaitMs     속도 제한 때문에 기다릴 수 있는 최대 시간(ms). 넘으면 E006
  * @param maxRetries    429/503일 때 재시도 횟수
+ * @param timeoutSeconds 인터랙티브 호출의 연결·읽기 타임아웃(초). 0이면 {@code cue.gemini.timeout-seconds}
  */
 @ConfigurationProperties(prefix = "cue.gemini.interactive")
-public record GeminiLaneProperties(String model, long minIntervalMs, long maxWaitMs, int maxRetries) {
+public record GeminiLaneProperties(String model, long minIntervalMs, long maxWaitMs, int maxRetries, int timeoutSeconds) {
     public GeminiLaneProperties {
         model = model == null ? "" : model.trim();
         if (minIntervalMs < 0) {
@@ -24,10 +25,13 @@ public record GeminiLaneProperties(String model, long minIntervalMs, long maxWai
         if (maxRetries < 0) {
             maxRetries = 0;
         }
+        if (timeoutSeconds < 0) {
+            timeoutSeconds = 0;
+        }
     }
 
     /** 설정이 없을 때(테스트 등)의 기본값: 간격·재시도 없음. */
     public static GeminiLaneProperties none() {
-        return new GeminiLaneProperties("", 0, 0, 0);
+        return new GeminiLaneProperties("", 0, 0, 0, 0);
     }
 }
