@@ -3,6 +3,8 @@ package com.cue.global.error;
 /** 실패 원인에 알리는 외부 API 이름. */
 public enum ExternalApi {
     GEMINI("Gemini"),
+    CLAUDE_GATEWAY("Claude Gateway"),
+    OPENAI_GATEWAY("OpenAI Gateway"),
     GITHUB("GitHub"),
     HUGGING_FACE("Hugging Face"),
     STACK_EXCHANGE("Stack Exchange"),

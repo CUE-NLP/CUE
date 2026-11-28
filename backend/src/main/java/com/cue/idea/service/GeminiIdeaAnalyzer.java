@@ -15,7 +15,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -27,7 +27,7 @@ import tools.jackson.databind.JsonNode;
 @Slf4j
 @Component
 @Primary
-@ConditionalOnProperty(prefix = "cue.gemini", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnExpression("${cue.gemini.enabled:true} || ${cue.claude-gateway.enabled:false} || ${cue.openai-gateway.enabled:false}")
 class GeminiIdeaAnalyzer implements IdeaAnalyzer {
     static final int MAX_KEYWORDS = 2;
     private static final int MAX_KEYWORD_LENGTH = 60;
@@ -136,11 +136,15 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         String userText = "타깃: " + idea.getTarget() + "\n문제: " + idea.getProblem()
                 + "\n해결: " + idea.getSolution() + "\n기대효과: " + idea.getExpectation();
         String systemPrompt = typeOnly ? SYSTEM_PROMPT + TYPE_ONLY_NOTICE : SYSTEM_PROMPT;
-        return parse(gemini.generateJson(AiLane.INTERACTIVE, systemPrompt, userText, schema(typeOnly)), typeOnly);
+        return parse(gemini.generateJson(AiLane.INTERACTIVE, systemPrompt, userText, schema(typeOnly)), typeOnly, gemini.api());
     }
 
     /** 응답 JSON을 종류·키워드로 바꾼다. 키워드가 하나도 없으면(종류만 모드 제외) E002. */
     static IdeaAnalysis parse(JsonNode result, boolean typeOnly) {
+        return parse(result, typeOnly, ExternalApi.GEMINI);
+    }
+
+    private static IdeaAnalysis parse(JsonNode result, boolean typeOnly, ExternalApi api) {
         ItCategory category = ItCategory.fromAi(result.path("itCategory").asString(null));
         if (typeOnly) {
             return new IdeaAnalysis(category, List.of());
@@ -148,7 +152,7 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         List<String> keywords = normalizeKeywords(result.path("keywords"));
         if (keywords.isEmpty()) {
             throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
-                    ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.MISSING_KEYWORDS));
+                    ErrorDetail.of(api, ErrorReason.MISSING_KEYWORDS));
         }
         return new IdeaAnalysis(category, keywords);
     }

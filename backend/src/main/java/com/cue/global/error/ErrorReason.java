@@ -38,7 +38,9 @@ public enum ErrorReason {
     NOT_TEXT_RESPONSE("텍스트가 아닌 응답"),
     UNREADABLE_RESPONSE("응답 해석 실패%s"),
     NO_RESPONSE_CONTENT("응답에 본문이 없음%s"),
+    INCOMPLETE_RESPONSE("응답이 완료되지 않음(%s)"),
     MISSING_LIST("응답에 %s 목록이 없음"),
+    INVALID_FIELD("응답의 %s 항목이 빠졌거나 형식이 올바르지 않음"),
     MISSING_KEYWORDS("응답에 키워드가 없음"),
     // 원문을 읽을 대상의 형식
     INVALID_REPOSITORY_NAME("저장소 이름 형식이 아님"),

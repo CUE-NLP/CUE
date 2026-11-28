@@ -72,6 +72,11 @@ tasks.withType<Test> {
 tasks.bootRun {
     systemProperty("spring.docker.compose.enabled", "true")
     systemProperty(
+        "cue.source.api-log-file",
+        providers.environmentVariable("SOURCE_API_LOG_FILE")
+            .orElse(providers.systemProperty("user.home").map { "$it/.local/state/cue/source-api.txt" }).get()
+    )
+    systemProperty(
         "spring.docker.compose.file",
         layout.projectDirectory.file("../docker-compose.yml").asFile.canonicalPath
     )

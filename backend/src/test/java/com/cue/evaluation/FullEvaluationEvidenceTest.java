@@ -82,7 +82,14 @@ class FullEvaluationEvidenceTest {
         when(gemini.generateJson(anyString(), anyMap())).thenAnswer(call -> {
             String prompt = call.getArgument(0);
             prompts.add(prompt);
-            return mapper.readTree(prompt.contains("[자료 목록]") ? "{\"scores\":[]}" : "{\"changes\":[]}");
+            return mapper.readTree(prompt.contains("[자료 목록]") ? """
+                    {"scores":{
+                      "PROBLEM_IMPORTANCE":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]},
+                      "MARKET_DEMAND":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]},
+                      "MARKET_DIFFERENTIATION":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]},
+                      "TECH_FEASIBILITY":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]}
+                    }}
+                    """ : "{\"changes\":[]}");
         });
         var clients = List.of(github, stack);
         var recorder = mock(EvaluationRecorder.class); // 저장 대신 반영한 항목만 source에 기록한다

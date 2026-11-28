@@ -52,6 +52,20 @@ cue:
       # 속도 제한 때문에 기다릴 수 있는 최대 시간(ms). 넘으면 E006 (AI 바쁨)
       max-wait-ms: ${GEMINI_INTERACTIVE_MAX_WAIT_MS:5000}
       max-retries: ${GEMINI_INTERACTIVE_MAX_RETRIES:1}
+  claude-gateway:
+    enabled: ${CLAUDE_GATEWAY_ENABLED:false}
+    api-key: ${CLAUDE_GATEWAY_API_KEY:}
+    base-url: ${CLAUDE_GATEWAY_BASE_URL:https://factchat-cloud.mindlogic.ai/v1/gateway/claude}
+    model: ${CLAUDE_GATEWAY_MODEL:claude-opus-5-5}
+    timeout-seconds: ${CLAUDE_GATEWAY_TIMEOUT_SECONDS:45}
+    max-tokens: ${CLAUDE_GATEWAY_MAX_TOKENS:4096}
+  openai-gateway:
+    enabled: ${OPENAI_GATEWAY_ENABLED:false}
+    api-key: ${OPENAI_GATEWAY_API_KEY:}
+    base-url: ${OPENAI_GATEWAY_BASE_URL:https://factchat-cloud.mindlogic.ai/v1/gateway}
+    model: ${OPENAI_GATEWAY_MODEL:}
+    timeout-seconds: ${OPENAI_GATEWAY_TIMEOUT_SECONDS:45}
+    max-output-tokens: ${OPENAI_GATEWAY_MAX_OUTPUT_TOKENS:4096}
   structuring:
     # 같은 사용자의 구조화 요청 최소 간격(초). 캐시 적중은 소비하지 않는다
     cooldown-seconds: ${STRUCTURING_COOLDOWN_SECONDS:3}
@@ -78,6 +92,7 @@ cue:
     # 아이디어의 TREND 재평가 최소 간격(일). 기본 1 = 하루에 한 번(트렌드는 하루 1회 갱신, 상위 항목이 어제와 같으면 새 트렌드가 없어 호출도 없다). 첫 평가는 바로. 0이면 같은 날 새 트렌드에도 평가
     min-reeval-days: ${TREND_MIN_REEVAL_DAYS:1}
   source:
+    api-log-file: ${SOURCE_API_LOG_FILE:}
     # 외부 자료 API 토큰/키: 모두 선택. 없으면 익명 호출(rate limit 낮음). 값은 환경변수로만 주입하고 커밋하지 않는다.
     connect-timeout: 3s
     read-timeout: 5s

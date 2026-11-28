@@ -115,7 +115,10 @@ class ErrorDetailTest {
 
         org.mockito.Mockito.reset(gemini);
         when(gemini.available()).thenReturn(true);
-        when(gemini.generateJson(anyString(), anyMap())).thenReturn(mapper.readTree("{\"scores\":[]}"));
+        String criterion = "{\"score\":60,\"evidenceSummary\":\"근거\",\"referenceIds\":[]}";
+        when(gemini.generateJson(anyString(), anyMap())).thenReturn(mapper.readTree("{\"scores\":{"
+                + "\"PROBLEM_IMPORTANCE\":" + criterion + ",\"MARKET_DEMAND\":" + criterion
+                + ",\"MARKET_DIFFERENTIATION\":" + criterion + ",\"TECH_FEASIBILITY\":" + criterion + "}}"));
 
         JsonNode done = evaluateAndWait(id);
 

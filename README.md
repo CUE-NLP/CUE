@@ -21,8 +21,8 @@ React 화면은 `frontend/src/pages/`, 재사용 UI·모달은 `frontend/src/com
    - **키워드 근거 자료**로 판단하는 4개: 문제 중요성 · 시장 수요 · 시장 차별성 · 기술적 실현 가능성
    - **글로벌 트렌드**로 판단하는 1개: **트렌디함(`TREND`)** — 아이디어와 무관하게 하루 1회 모은 Hacker News · GitHub · Hugging Face 급상승 자료를 아이디어에 대입해 판단
 4. **갱신(Idea Delta)**: 평가는 아이디어마다 **하루에 한 번**입니다(수동 요청 포함. 내용·키워드를 수정했거나 평가가 실패한 경우는 같은 날 다시 가능). 매일(기본 03:00 KST) 두 갈래로 재평가합니다. 변화가 있을 때만 Gemini를 호출하고, 점수가 달라지면 변화량과 근거 요약(출처 URL 포함)을 저장
-   - **A. 키워드 근거 자료 → 4개 기준**: 외부 API에서 키워드 자료를 조회해 원문 발췌로 한 번 평가합니다. 첫 평가와 전체 재평가에서는 조회에 성공한 모든 소스의 상위 항목을 쓰고, 기준마다 실제 인용한 자료의 URL 배열을 받습니다. 일반 재평가(수동 평가 포함)는 지난번에 반영한 항목과 URL로 비교해 추가·삭제가 있을 때 실행하며, 기존 평가 내역과 새로 추가된 항목, 삭제된 항목만 넣습니다.
-   - **B. 글로벌 트렌드 → TREND**: 하루 1회(아이디어 수와 무관) 키워드 없이 급상승 자료를 수집·요약 → 각 아이디어에 대입해 TREND 점수 갱신 (트렌드가 어제와 같으면 호출하지 않음)
+   - **A. 키워드 근거 자료 → 4개 기준**: 외부 API에서 키워드 자료를 조회해 원문 발췌로 한 번 평가합니다. 첫 평가와 전체 재평가에서는 조회에 성공한 모든 소스의 상위 항목을 쓰고, 기준별 인용 자료 ID를 받아 서버가 원본 URL로 연결합니다. 일반 재평가(수동 평가 포함)는 지난번에 반영한 항목과 URL로 비교해 추가·삭제가 있을 때 실행하며, 기존 평가 내역과 새로 추가된 항목, 삭제된 항목만 넣습니다.
+   - **B. 글로벌 트렌드 → TREND**: 하루 1회(아이디어 수와 무관) 키워드 없이 급상승 자료를 수집·요약 → 각 아이디어에 대입해 TREND 점수를 갱신하고, 트렌드 자료 ID를 원본 URL로 연결합니다 (트렌드가 어제와 같으면 호출하지 않음).
 
 ## 저장소 구조
 
@@ -145,6 +145,38 @@ cd backend && ./gradlew bootRun
 | `/swagger-ui.html` | API 문서 (Swagger UI) |
 | `/actuator/health` | 헬스체크 |
 
+### 학교 Gateway로 Claude 테스트
+
+백엔드를 실행하는 터미널에서 학교 Gateway 키를 입력하고 `CLAUDE_GATEWAY_ENABLED=true`로 실행하면 구조화·키워드 추출·평가·트렌드 요약이 Claude Opus 5.5를 사용합니다. 먼저 아래 한 줄을 실행한 뒤 프롬프트에 학교 키를 입력합니다.
+
+```bash
+read -rsp '학교 API 키: ' CLAUDE_GATEWAY_API_KEY
+```
+
+```bash
+export CLAUDE_GATEWAY_API_KEY
+cd backend
+CLAUDE_GATEWAY_ENABLED=true EVALUATION_ENABLED=false ./gradlew bootRun
+```
+
+위 예시에서 일일 배치를 끄고 프론트에서 새 아이디어를 구조화한 뒤 첫 평가를 요청합니다. 평가가 완료되면 상세 화면에서 점수와 근거 자료를 확인합니다.
+
+### 학교 Gateway로 GPT 테스트
+
+학교 Gateway의 `POST /v1/gateway/responses/`를 사용합니다. 모델은 Gateway 모델 목록(`GET /v1/gateway/models/`)에서 Responses API와 구조화 출력을 지원하는 GPT 모델 ID를 골라 지정합니다.
+
+```bash
+read -rsp '학교 Gateway 키: ' OPENAI_GATEWAY_API_KEY
+printf '\n'
+export OPENAI_GATEWAY_API_KEY
+read -rp '학교 Gateway GPT 모델 ID: ' OPENAI_GATEWAY_MODEL
+export OPENAI_GATEWAY_MODEL
+cd backend
+OPENAI_GATEWAY_ENABLED=true EVALUATION_ENABLED=false ./gradlew bootRun
+```
+
+`OPENAI_GATEWAY_ENABLED=true`이면 기존 구조화·분류·평가·트렌드 호출이 GPT를 사용합니다. Claude와 GPT를 함께 켠 경우 GPT를 선택합니다.
+
 ### 환경 변수
 
 | 이름 | 기본값 | 설명 |
@@ -161,6 +193,12 @@ cd backend && ./gradlew bootRun
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | 사용 모델. 무료 티어에서 분당 15회·일일 500회라 평가 배치에 맞는다(일반 Flash 계열은 분당 5회·일일 20회) |
 | `GEMINI_ENABLED` | `true` | `false`면 Gemini 비활성(테스트 등) |
 | `GEMINI_BASE_URL` / `GEMINI_TIMEOUT_SECONDS` | `https://generativelanguage.googleapis.com` / `10` | Gemini 엔드포인트 / 호출 타임아웃(초) |
+| `CLAUDE_GATEWAY_ENABLED` / `CLAUDE_GATEWAY_API_KEY` | `false` / (없음) | `true`면 AI 호출을 Claude Gateway로 전환. 학교에서 발급받은 API 키 사용 |
+| `CLAUDE_GATEWAY_BASE_URL` / `CLAUDE_GATEWAY_MODEL` | `https://factchat-cloud.mindlogic.ai/v1/gateway/claude` / `claude-opus-5-5` | Anthropic Messages 기본 주소와 두 호출 레인에서 쓰는 모델 |
+| `CLAUDE_GATEWAY_TIMEOUT_SECONDS` / `CLAUDE_GATEWAY_MAX_TOKENS` | `45` / `4096` | Claude 호출 타임아웃(초)과 최대 출력 토큰 |
+| `OPENAI_GATEWAY_ENABLED` / `OPENAI_GATEWAY_API_KEY` | `false` / (없음) | `true`면 AI 호출에 학교 Gateway의 GPT 사용 |
+| `OPENAI_GATEWAY_BASE_URL` / `OPENAI_GATEWAY_MODEL` | `https://factchat-cloud.mindlogic.ai/v1/gateway` / (없음) | Gateway 주소 / 사용할 GPT 모델 ID |
+| `OPENAI_GATEWAY_TIMEOUT_SECONDS` / `OPENAI_GATEWAY_MAX_OUTPUT_TOKENS` | `45` / `4096` | GPT 호출 타임아웃(초)과 최대 출력 토큰 |
 | `GITHUB_TOKEN` | 없음 | (선택) GitHub API 토큰 |
 | `HUGGING_FACE_TOKEN` | 없음 | (선택) Hugging Face API 토큰 |
 | `TREND_DAYS` / `TREND_TOP_N` | `7` / `5` | 글로벌 트렌드: "급상승" 기간(일) / provider(HN·GitHub·Hugging Face)마다 읽고 요약할 상위 항목 수 |
@@ -170,6 +208,7 @@ cd backend && ./gradlew bootRun
 | `WIKIMEDIA_USER_AGENT` | 프로젝트 식별용 일반 문자열 | Wikimedia API 필수 User-Agent (개인 이메일을 넣지 마세요) |
 | `SOURCE_PAGEVIEWS_DAYS` | `30` | 위키 문서 조회수를 합산할 최근 일수 (키워드 근거 조회는 기간 제한 없이 인기·관련도 순) |
 | `SOURCE_TOP_N` | `5` | source마다 읽을 상위 항목 수 |
+| `SOURCE_API_LOG_FILE` | `~/.local/state/cue/source-api.txt` (`bootRun`), 그 외 실행은 꺼짐 | 평가·트렌드 수집 중 외부 자료와 Claude·GPT 응답을 남기는 진단 파일. 빈 값으로 끌 수 있음 |
 | `SOURCE_MAX_CONTENT_CHARS` / `SOURCE_SUMMARY_REUSE_DAYS` | `8000` / `7` | (글로벌 트렌드) 원문을 자르는 길이 / 같은 URL 요약 재사용 기간(일) |
 | `SOURCE_EXCERPT_CHARS` | `800` | 키워드 근거 자료에서 항목당 평가 프롬프트에 넣는 원문 발췌 길이(AI 요약 호출 없음) |
 | `SOURCE_BATCH_CONTENT_CHARS` / `SOURCE_BATCH_TOTAL_CHARS` | `4000` / `16000` | 항목 일괄 요약(source당 1회 호출): 항목당 원문 상한 / 한 호출의 원문 전체 상한(글자) |

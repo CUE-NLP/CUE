@@ -17,7 +17,14 @@ abstract class DemoTestSupport {
     static final String FULL = "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\","
             + "\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}";
     static final String HOLD = "{\"problem\":\"p\",\"target\":\"t\"}";
-    static final String INITIAL = "{\"scores\":[{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":70,\"evidenceSummary\":\"문제가 크다\"}]}";
+    static final String INITIAL = """
+            {"scores":{
+              "PROBLEM_IMPORTANCE":{"score":70,"evidenceSummary":"문제가 크다","referenceIds":[]},
+              "MARKET_DEMAND":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]},
+              "MARKET_DIFFERENTIATION":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]},
+              "TECH_FEASIBILITY":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]}
+            }}
+            """;
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;

@@ -62,9 +62,14 @@ class AsyncEvaluationFlowTest {
 
     private static final String FULL = "{\"problem\":\"개발 질문이 흩어져 있다\",\"target\":\"주니어 개발자\","
             + "\"solution\":\"질문 정리 도구\",\"expectation\":\"시간 절약\"}";
-    private static final String INITIAL = "{\"scores\":["
-            + "{\"type\":\"PROBLEM_IMPORTANCE\",\"score\":70,\"evidenceSummary\":\"문제가 크다\"},"
-            + "{\"type\":\"MARKET_DEMAND\",\"score\":60,\"evidenceSummary\":\"수요가 있다\"}]}";
+    private static final String INITIAL = """
+            {"scores":{
+              "PROBLEM_IMPORTANCE":{"score":70,"evidenceSummary":"문제가 크다","referenceIds":[]},
+              "MARKET_DEMAND":{"score":60,"evidenceSummary":"수요가 있다","referenceIds":[]},
+              "MARKET_DIFFERENTIATION":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]},
+              "TECH_FEASIBILITY":{"score":0,"evidenceSummary":"자료 부족","referenceIds":[]}
+            }}
+            """;
 
     /** 이 래치가 열릴 때까지 Gemini 목이 응답하지 않는다 (평가를 RUNNING 상태로 붙잡아 둔다). */
     private volatile CountDownLatch gate = new CountDownLatch(0);

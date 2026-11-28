@@ -6,12 +6,15 @@ import com.cue.global.error.ErrorDetail;
 import com.cue.global.error.ErrorReason;
 import com.cue.global.error.ExternalApi;
 import com.cue.idea.service.GeminiProperties;
+import com.cue.source.fetch.SourceApiLog;
 import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,8 +28,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Gemini 호출 클라이언트. 설정은 {@code cue.gemini.*}를 쓴다. 비활성이거나 키가 없으면 {@link #available()}이 false이며,
- * 호출하는 쪽이 먼저 확인해 건너뛴다. 출력은 JSON 구조화 응답(responseSchema)이다.
+ * 구조화 JSON 호출과 레인 관리. 기본은 Gemini이며, Gateway 설정에서 Claude 또는 GPT를 선택할 수 있다.
  *
  * <p><b>두 레인</b>({@link AiLane}): 사용자가 기다리는 호출은 {@link AiLane#INTERACTIVE}(가벼운 모델·짧은 간격·오래 안 기다림),
  * 배치 호출은 {@link AiLane#BATCH}(기본 모델·긴 간격)로 보낸다. 레인마다 속도 제한기를 따로 둬서 배치가 사용자 호출을 막지 않는다.
@@ -36,7 +38,8 @@ import tools.jackson.databind.ObjectMapper;
  */
 @Slf4j
 @Component
-@EnableConfigurationProperties({GeminiProperties.class, GeminiLaneProperties.class})
+@EnableConfigurationProperties({GeminiProperties.class, GeminiLaneProperties.class,
+        ClaudeGatewayProperties.class, OpenAiGatewayProperties.class})
 public class GeminiClient {
     private static final long BATCH_MAX_BACKOFF_MS = 60_000;
     private static final long BASE_BACKOFF_MS = 1_000;
@@ -44,6 +47,8 @@ public class GeminiClient {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final GeminiProperties props;
+    private final ClaudeGatewayClient claudeGateway;
+    private final OpenAiGatewayClient openAiGateway;
     private final GeminiLaneProperties lane;
     private final GeminiRateLimiter batchLimiter;
     private final GeminiRateLimiter interactiveLimiter;
@@ -52,21 +57,35 @@ public class GeminiClient {
 
     @Autowired
     public GeminiClient(RestClient.Builder builder, ObjectMapper objectMapper, GeminiProperties props,
-                        GeminiLaneProperties lane,
+                        GeminiLaneProperties lane, ClaudeGatewayProperties claude, OpenAiGatewayProperties openAi,
+                        SourceApiLog sourceApiLog,
                         @Value("${cue.gemini.min-interval-ms:0}") long batchMinIntervalMs,
                         @Value("${cue.gemini.max-retries:0}") int batchMaxRetries) {
-        Duration timeout = Duration.ofSeconds(props.timeoutSeconds());
-        JdkClientHttpRequestFactory factory =
-                new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(timeout).build());
+        this(restClient(builder, props.baseUrl(), props.timeoutSeconds()).build(), objectMapper, props, lane,
+                batchMinIntervalMs, batchMaxRetries, Clock.systemUTC(), Thread::sleep,
+                claude.enabled() && !openAi.enabled()
+                        ? new ClaudeGatewayClient(gatewayRestClient(builder, claude.baseUrl(), claude.timeoutSeconds(),
+                                sourceApiLog), claude, objectMapper)
+                        : null,
+                openAi.enabled()
+                        ? new OpenAiGatewayClient(gatewayRestClient(builder, openAi.baseUrl(), openAi.timeoutSeconds(),
+                                sourceApiLog), openAi, objectMapper)
+                        : null);
+    }
+
+    private static RestClient.Builder restClient(RestClient.Builder builder, String baseUrl, int timeoutSeconds) {
+        Duration timeout = Duration.ofSeconds(timeoutSeconds);
+        var factory = new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(timeout).build());
         factory.setReadTimeout(timeout);
-        this.restClient = builder.clone().requestFactory(factory).baseUrl(props.baseUrl()).build();
-        this.objectMapper = objectMapper;
-        this.props = props;
-        this.lane = lane;
-        this.sleeper = Thread::sleep;
-        this.batchLimiter = new GeminiRateLimiter(batchMinIntervalMs, Clock.systemUTC(), sleeper);
-        this.interactiveLimiter = new GeminiRateLimiter(lane.minIntervalMs(), Clock.systemUTC(), sleeper);
-        this.batchMaxRetries = Math.max(0, batchMaxRetries);
+        return builder.clone().requestFactory(factory).baseUrl(baseUrl);
+    }
+
+    private static RestClient gatewayRestClient(RestClient.Builder builder, String baseUrl, int timeoutSeconds,
+                                               SourceApiLog sourceApiLog) {
+        return restClient(builder, baseUrl, timeoutSeconds)
+                .bufferContent((uri, method) -> sourceApiLog.isRecording())
+                .requestInterceptor(sourceApiLog::intercept)
+                .build();
     }
 
     /** 테스트용: 이미 구성된 RestClient(MockRestServiceServer 연결)를 쓴다. 간격·재시도 없음. */
@@ -77,9 +96,17 @@ public class GeminiClient {
     /** 테스트용: 레인 설정·재시도·시계·대기를 직접 정한다. */
     GeminiClient(RestClient restClient, ObjectMapper objectMapper, GeminiProperties props, GeminiLaneProperties lane,
                  long batchMinIntervalMs, int batchMaxRetries, Clock clock, GeminiRateLimiter.Sleeper sleeper) {
+        this(restClient, objectMapper, props, lane, batchMinIntervalMs, batchMaxRetries, clock, sleeper, null, null);
+    }
+
+    private GeminiClient(RestClient restClient, ObjectMapper objectMapper, GeminiProperties props, GeminiLaneProperties lane,
+                         long batchMinIntervalMs, int batchMaxRetries, Clock clock, GeminiRateLimiter.Sleeper sleeper,
+                         ClaudeGatewayClient claudeGateway, OpenAiGatewayClient openAiGateway) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.props = props;
+        this.claudeGateway = claudeGateway;
+        this.openAiGateway = openAiGateway;
         this.lane = lane;
         this.sleeper = sleeper;
         this.batchLimiter = new GeminiRateLimiter(batchMinIntervalMs, clock, sleeper);
@@ -87,8 +114,22 @@ public class GeminiClient {
         this.batchMaxRetries = Math.max(0, batchMaxRetries);
     }
 
-    /** Gemini를 쓸 수 있는지 (활성 + API 키 있음). */
+    /** 지금 선택된 AI 제공업체. 실패 원인에 어느 API인지 알릴 때 쓴다. */
+    public ExternalApi api() {
+        if (openAiGateway != null) {
+            return ExternalApi.OPENAI_GATEWAY;
+        }
+        return claudeGateway != null ? ExternalApi.CLAUDE_GATEWAY : ExternalApi.GEMINI;
+    }
+
+    /** 선택한 제공업체를 쓸 수 있는지 (활성 + API 키 있음). */
     public boolean available() {
+        if (openAiGateway != null) {
+            return openAiGateway.available();
+        }
+        if (claudeGateway != null) {
+            return claudeGateway.available();
+        }
         return props.enabled() && props.apiKey() != null && !props.apiKey().isBlank();
     }
 
@@ -110,6 +151,14 @@ public class GeminiClient {
         if (!available()) {
             throw new CustomException(ErrorCode.AI_NOT_CONFIGURED);
         }
+        if (openAiGateway != null) {
+            String response = post(aiLane, openAiGateway.model(), () -> openAiGateway.send(systemPrompt, userText, responseSchema));
+            return parse(response, openAiGateway::responseText);
+        }
+        if (claudeGateway != null) {
+            String response = post(aiLane, claudeGateway.model(), () -> claudeGateway.send(systemPrompt, userText, responseSchema));
+            return parse(response, claudeGateway::responseText);
+        }
         Map<String, Object> body = new HashMap<>();
         if (systemPrompt != null) {
             body.put("systemInstruction", Map.of("parts", List.of(Map.of("text", systemPrompt))));
@@ -119,7 +168,14 @@ public class GeminiClient {
                 "responseMimeType", "application/json",
                 "responseSchema", responseSchema,
                 "temperature", 0.2));
-        return parse(post(aiLane, modelFor(aiLane), body));
+        String model = modelFor(aiLane);
+        return parse(post(aiLane, model, () -> restClient.post()
+                .uri("/v1beta/models/{model}:generateContent", model)
+                .header("x-goog-api-key", props.apiKey())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .body(String.class)));
     }
 
     /** 레인에 쓸 모델. 인터랙티브 모델이 비어 있으면 기본 모델. */
@@ -127,43 +183,41 @@ public class GeminiClient {
         return aiLane == AiLane.INTERACTIVE && !lane.model().isBlank() ? lane.model() : props.model();
     }
 
-    private String post(AiLane aiLane, String model, Map<String, Object> body) {
+    private String post(AiLane aiLane, String model, Supplier<String> request) {
+        String provider = api().label();
+        boolean logDetails = openAiGateway == null && claudeGateway == null;
         boolean interactive = aiLane == AiLane.INTERACTIVE;
         GeminiRateLimiter limiter = interactive ? interactiveLimiter : batchLimiter;
         long maxWaitMs = interactive ? lane.maxWaitMs() : Long.MAX_VALUE;
         int maxRetries = interactive ? lane.maxRetries() : batchMaxRetries;
         for (int attempt = 0; ; attempt++) {
             if (!limiter.acquire(maxWaitMs)) {
-                log.warn("Gemini 호출 한도 대기가 길어 포기합니다 lane={}", aiLane);
+                log.warn("{} 호출 한도 대기가 길어 포기합니다 lane={}", provider, aiLane);
                 throw new CustomException(interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR,
                         failure(ErrorReason.RATE_LIMIT_WAIT_EXCEEDED));
             }
             try {
-                return restClient.post()
-                        .uri("/v1beta/models/{model}:generateContent", model)
-                        .header("x-goog-api-key", props.apiKey())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(body)
-                        .retrieve()
-                        .body(String.class);
+                return request.get();
             } catch (RestClientResponseException e) {
                 int status = e.getStatusCode().value();
                 boolean busy = status == 429 || status == 503;
                 long backoff = busy ? backoffMs(e, attempt, interactive) : -1;
                 if (busy && attempt < maxRetries && (!interactive || backoff <= lane.maxWaitMs())) {
-                    log.warn("Gemini {} 응답, {}ms 뒤 재시도합니다 lane={} attempt={}", status, backoff, aiLane, attempt + 1);
+                    log.warn("{} {} 응답, {}ms 뒤 재시도합니다 lane={} attempt={}", provider, status, backoff, aiLane, attempt + 1);
                     sleep(backoff);
                     continue;
                 }
                 // 원인을 알 수 있게 상태 코드와 응답 본문 앞부분을 남긴다 (요청 헤더의 키는 로그에 넣지 않는다)
-                ErrorDetail detail = ErrorDetail.ofStatus(ExternalApi.GEMINI, status);
-                log.warn("Gemini 호출 실패 status={} lane={} model={} 원인={} body={}", status, aiLane, model, detail.reason(),
-                        abbreviate(e.getResponseBodyAsString()));
+                ErrorDetail detail = ErrorDetail.ofStatus(api(), status);
+                // Gateway 응답 본문은 콘솔에 남기지 않는다 (필요하면 SourceApiLog 파일에서 확인)
+                String body = logDetails ? abbreviate(e.getResponseBodyAsString()) : "(생략)";
+                log.warn("{} 호출 실패 status={} lane={} model={} 원인={} body={}", provider, status, aiLane, model, detail.reason(), body);
                 throw new CustomException(busy && interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR, detail, e);
             } catch (RuntimeException e) {
-                ErrorDetail detail = ErrorDetail.of(ExternalApi.GEMINI, e);
-                log.warn("Gemini 호출 중 통신 오류 lane={} model={} 원인={} cause={}: {}", aiLane, model, detail.reason(),
-                        e.getClass().getSimpleName(), e.getMessage());
+                ErrorDetail detail = ErrorDetail.of(api(), e);
+                String message = logDetails ? e.getMessage() : "(생략)";
+                log.warn("{} 호출 중 통신 오류 lane={} model={} 원인={} cause={}: {}", provider, aiLane, model, detail.reason(),
+                        e.getClass().getSimpleName(), message);
                 throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, detail, e);
             }
         }
@@ -197,21 +251,29 @@ public class GeminiClient {
             sleeper.sleep(ms);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            log.warn("Gemini 재시도 대기 중 중단됐습니다");
+            log.warn("{} 재시도 대기 중 중단됐습니다", api().label());
             throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, failure(ErrorReason.RETRY_INTERRUPTED), ie);
         }
     }
 
     JsonNode parse(String responseBody) {
+        return parse(responseBody, response -> response.path("candidates").path(0).path("content").path("parts").path(0).path("text"));
+    }
+
+    private JsonNode parse(String responseBody, Function<JsonNode, JsonNode> responseText) {
         JsonNode root = null;
         try {
             root = objectMapper.readTree(responseBody);
-            JsonNode text = root.path("candidates").path(0).path("content").path("parts").path(0).path("text");
+            JsonNode text = responseText.apply(root);
             if (!text.isString()) {
-                throw invalidResponse(failure(ErrorReason.NO_RESPONSE_CONTENT, stopReason(root)), null);
+                throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                        failure(ErrorReason.NO_RESPONSE_CONTENT, stopReason(root)));
             }
             return objectMapper.readTree(text.asString());
         } catch (CustomException e) {
+            if (e.getDetail() != null) {
+                log.warn("{} 응답을 해석하지 못했습니다 원인={}", api().label(), e.getDetail().reason());
+            }
             throw e;
         } catch (RuntimeException e) {
             throw invalidResponse(failure(ErrorReason.UNREADABLE_RESPONSE, stopReason(root)), e);
@@ -220,7 +282,7 @@ public class GeminiClient {
 
     private CustomException invalidResponse(ErrorDetail detail, Throwable cause) {
         // 응답 본문에는 사용자의 아이디어 내용이 섞일 수 있어 로그에 남기지 않는다
-        log.warn("Gemini 응답을 해석하지 못했습니다 원인={}", detail.reason());
+        log.warn("{} 응답을 해석하지 못했습니다 원인={}", api().label(), detail.reason());
         return new CustomException(ErrorCode.AI_RESPONSE_INVALID, detail, cause);
     }
 
@@ -237,7 +299,7 @@ public class GeminiClient {
         return blocked.isEmpty() ? "" : "(blockReason=" + blocked + ")";
     }
 
-    private static ErrorDetail failure(ErrorReason reason, Object... args) {
-        return ErrorDetail.of(ExternalApi.GEMINI, reason, args);
+    private ErrorDetail failure(ErrorReason reason, Object... args) {
+        return ErrorDetail.of(api(), reason, args);
     }
 }

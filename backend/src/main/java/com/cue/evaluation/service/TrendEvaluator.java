@@ -20,7 +20,7 @@ import tools.jackson.databind.JsonNode;
  *
  * <p>모드는 아이디어의 TREND 평가 이력으로 가른다: {@code lastTrendId == null}이면 <b>첫 평가</b>(응답의 {@code score} 0~100을 현재 점수와의
  * 차이로 바꿔 기록), 아니면 <b>재평가</b>(응답의 {@code difference}를 ±10으로 서버에서 다시 제한).
- * 근거 요약은 300자로 자르고, 근거 URL은 그 트렌드의 항목 URL만 받아들인다.
+ * 근거 요약은 300자로 자르고, 그 트렌드의 항목 ID를 원래 URL로 연결한다.
  * 만든 {@link ScoreChange}에는 그 트렌드 id가 들어 있어 {@code evaluations.trend_id}로 연결된다.
  * 프롬프트: {@code trend-evaluation} (플레이스홀더 {@code problem, target, solution, expectation, currentTrendScore, trendSummary, trendItems}).
  */
@@ -33,8 +33,8 @@ public class TrendEvaluator {
                     "score", Map.of("type", "NUMBER"),
                     "difference", Map.of("type", "NUMBER"),
                     "evidenceSummary", Map.of("type", "STRING"),
-                    "referenceUrls", Map.of("type", "ARRAY", "items", Map.of("type", "STRING"))),
-            "required", List.of("evidenceSummary"));
+                    "referenceIds", EvaluationReferences.IDS_SCHEMA),
+            "required", List.of("evidenceSummary", "referenceIds"));
 
     private final GeminiClient gemini;
     private final PromptLoader prompts;
@@ -43,6 +43,7 @@ public class TrendEvaluator {
     public List<ScoreChange> evaluate(IdeaSnapshot idea, TrendSnapshot trend) {
         boolean initial = idea.lastTrendId() == null;
         BigDecimal current = idea.scores().getOrDefault(ScoreType.TREND, BigDecimal.ZERO);
+        var referenceItems = EvaluationReferences.from(trend.sources(), SourceTextFormat.MAX_ITEMS, SourceTextFormat.MAX_SUMMARY_CHARS);
         JsonNode n = gemini.generateJson(prompts.render("trend-evaluation", Map.of(
                 "problem", EvidenceEvaluator.nullToEmpty(idea.problem()),
                 "target", EvidenceEvaluator.nullToEmpty(idea.target()),
@@ -50,7 +51,7 @@ public class TrendEvaluator {
                 "expectation", EvidenceEvaluator.nullToEmpty(idea.expectation()),
                 "currentTrendScore", initial ? "없음 (첫 평가)" : current.toPlainString(),
                 "trendSummary", trend.summary(),
-                "trendItems", trend.sources().isEmpty() ? "(항목 없음)" : SourceTextFormat.formatSources(trend.sources()))), SCHEMA);
+                "trendItems", referenceItems.linesOr("(항목 없음)"))), SCHEMA);
 
         BigDecimal diff;
         if (initial) {
@@ -69,7 +70,7 @@ public class TrendEvaluator {
         if (diff.signum() == 0) {
             return List.of();
         }
-        return List.of(EvidenceEvaluator.toChange(ScoreType.TREND, diff, n, EvidenceEvaluator.indexByUrl(trend.sources()))
+        return List.of(EvidenceEvaluator.toChange(ScoreType.TREND, diff, n, referenceItems)
                 .withTrendId(trend.id()));
     }
 }

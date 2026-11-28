@@ -9,6 +9,7 @@ import com.cue.global.error.ErrorLocation;
 import com.cue.global.error.ErrorReason;
 import com.cue.idea.entity.EvaluationStatus;
 import com.cue.idea.repository.IdeaRepository;
+import com.cue.source.fetch.SourceApiLog;
 import com.cue.trend.service.GlobalTrendService;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
@@ -49,16 +50,19 @@ public class EvaluationQueueService {
     private final IdeaEvaluationPipeline evaluation;
     private final ThreadPoolTaskExecutor executor;
     private final GlobalTrendService globalTrend;
+    private final SourceApiLog sourceApiLog;
     private final ReentrantLock lock = new ReentrantLock(true);
     /** 큐에 넣었지만 아직 끝나지 않은 수동 작업(평가·트렌드 갱신) 수. 0이 아니면 배치는 시작하지 않고 양보한다. */
     private final AtomicInteger manualPending = new AtomicInteger();
 
     public EvaluationQueueService(IdeaRepository ideas, IdeaEvaluationPipeline evaluation, GlobalTrendService globalTrend,
+                                SourceApiLog sourceApiLog,
                                 @Qualifier(EvaluationExecutorConfig.EXECUTOR) ThreadPoolTaskExecutor executor) {
         this.ideas = ideas;
         this.evaluation = evaluation;
         this.executor = executor;
         this.globalTrend = globalTrend;
+        this.sourceApiLog = sourceApiLog;
     }
 
     /**
@@ -73,7 +77,7 @@ public class EvaluationQueueService {
                 try {
                     lock.lock();
                     try {
-                        globalTrend.refresh();
+                        sourceApiLog.recordOperation("글로벌 트렌드 수동 수집", globalTrend::refresh);
                     } catch (RuntimeException e) {
                         log.error("글로벌 트렌드 수동 갱신 실패", e);
                     } finally {
@@ -152,7 +156,7 @@ public class EvaluationQueueService {
             lock.lock();
             try {
                 if (manualPending.get() == 0) {
-                    globalTrend.today();
+                    sourceApiLog.recordOperation("글로벌 트렌드 배치 수집", globalTrend::today);
                     return;
                 }
             } finally {
@@ -209,7 +213,8 @@ public class EvaluationQueueService {
                 return EvaluationRunResult.noChange();
             }
             try {
-                EvaluationRunResult result = evaluation.evaluate(ideaId);
+                EvaluationRunResult result = sourceApiLog.recordOperation("아이디어 평가 ideaId=" + ideaId,
+                        () -> evaluation.evaluate(ideaId));
                 ideas.markIdle(ideaId, LocalDateTime.now());
                 return result;
             } catch (RuntimeException e) {

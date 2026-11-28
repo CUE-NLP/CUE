@@ -16,6 +16,8 @@ import com.cue.evaluation.service.EvaluationQueueService;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.idea.repository.IdeaRepository;
+import com.cue.source.config.SourceApiProperties;
+import com.cue.source.fetch.SourceApiLog;
 import com.cue.trend.service.GlobalTrendService;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -62,7 +64,8 @@ class EvaluationQueuePriorityTest {
             }
             return EvaluationRunResult.evaluated(false);
         });
-        return new EvaluationQueueService(ideas, evaluation, trend, executor);
+        return new EvaluationQueueService(ideas, evaluation, trend,
+                new SourceApiLog("", mock(SourceApiProperties.class), "", ""), executor);
     }
 
     @AfterEach
