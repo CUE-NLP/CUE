@@ -1,7 +1,9 @@
 package com.cue.source.client;
 
 import com.cue.global.error.CustomException;
-import com.cue.global.error.ExternalFailure;
+import com.cue.global.error.ErrorLocation;
+import com.cue.global.error.ErrorReason;
+import com.cue.global.error.ExternalApi;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
 import com.cue.source.fetch.HtmlText;
@@ -86,7 +88,8 @@ public class WikipediaPageviewsSourceClient implements SourceClient {
             }
             return any ? sum : -1;
         } catch (CustomException e) {
-            log.warn("조회수 읽기 실패, 지표 없이 씁니다 API=Wikipedia title={} 원인={}", title, ExternalFailure.reason(e));
+            log.warn("조회수 읽기 실패, 지표 없이 씁니다 title={} 위치={}, API={}, 원인={}", title,
+                    ErrorLocation.SOURCE_PAGEVIEWS.label(), ExternalApi.WIKIPEDIA.label(), ErrorReason.of(e));
             return -1;
         }
     }

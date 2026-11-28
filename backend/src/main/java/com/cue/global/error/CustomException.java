@@ -23,8 +23,8 @@ public class CustomException extends RuntimeException {
     }
 
     /** 같은 에러에 발생 위치를 붙인 새 예외 (원래 예외는 cause로 남는다). */
-    public CustomException at(String location) {
-        ErrorDetail located = detail == null ? new ErrorDetail(location, null, null) : detail.at(location);
+    public CustomException at(ErrorLocation location) {
+        ErrorDetail located = (detail == null ? ErrorDetail.from(errorCode) : detail).at(location);
         return new CustomException(errorCode, located, this);
     }
 

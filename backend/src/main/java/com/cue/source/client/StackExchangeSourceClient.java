@@ -1,5 +1,6 @@
 package com.cue.source.client;
 
+import com.cue.global.error.ErrorReason;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
 import java.util.ArrayList;
@@ -62,7 +63,7 @@ public class StackExchangeSourceClient implements SourceClient {
     public String fetchContent(SourceItem item) {
         Matcher m = QUESTION_ID.matcher(item.url());
         if (!m.find()) {
-            throw SourceClientSupport.failure("질문 주소 형식이 아님");
+            throw SourceClientSupport.failure(ErrorReason.INVALID_QUESTION_URL);
         }
         String id = m.group(1);
         JsonNode question = SourceClientSupport.getJson(restClient.get().uri(uri -> withKey(uri

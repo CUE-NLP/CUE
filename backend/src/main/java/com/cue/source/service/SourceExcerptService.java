@@ -1,7 +1,8 @@
 package com.cue.source.service;
 
 import com.cue.global.error.CustomException;
-import com.cue.global.error.ExternalFailure;
+import com.cue.global.error.ErrorLocation;
+import com.cue.global.error.ErrorReason;
 import com.cue.source.client.SourceClient;
 import com.cue.source.config.SourceApiProperties;
 import com.cue.source.dto.SourceCheckResult;
@@ -63,9 +64,9 @@ public class SourceExcerptService {
         } catch (RuntimeException e) {
             // 웹 페이지를 직접 읽다 실패하면 그 사이트가, 아니면 provider의 API가 실패한 것이다
             String api = e instanceof CustomException custom && custom.getDetail() != null && custom.getDetail().api() != null
-                    ? custom.getDetail().api() : result.provider().displayName();
-            log.warn("원문 읽기 실패, API 설명만 씁니다 sourceId={} url={} 위치=원문 읽기, API={}, 원인={}", result.sourceId(), item.url(), api,
-                    e instanceof CustomException custom ? ExternalFailure.reason(custom) : e.toString());
+                    ? custom.getDetail().api() : result.provider().api().label();
+            log.warn("원문 읽기 실패, API 설명만 씁니다 sourceId={} url={} 위치={}, API={}, 원인={}", result.sourceId(), item.url(),
+                    ErrorLocation.SOURCE_CONTENT.label(), api, e instanceof CustomException ? ErrorReason.of(e) : e.toString());
         }
         if (excerpt.isEmpty()) {
             return description;

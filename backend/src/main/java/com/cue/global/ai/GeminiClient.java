@@ -3,7 +3,8 @@ package com.cue.global.ai;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.global.error.ErrorDetail;
-import com.cue.global.error.ExternalFailure;
+import com.cue.global.error.ErrorReason;
+import com.cue.global.error.ExternalApi;
 import com.cue.idea.service.GeminiProperties;
 import java.net.http.HttpClient;
 import java.time.Clock;
@@ -135,7 +136,7 @@ public class GeminiClient {
             if (!limiter.acquire(maxWaitMs)) {
                 log.warn("Gemini 호출 한도 대기가 길어 포기합니다 lane={}", aiLane);
                 throw new CustomException(interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR,
-                        failure("호출 간격 제한 대기 시간 초과"));
+                        failure(ErrorReason.RATE_LIMIT_WAIT_EXCEEDED));
             }
             try {
                 return restClient.post()
@@ -155,16 +156,15 @@ public class GeminiClient {
                     continue;
                 }
                 // 원인을 알 수 있게 상태 코드와 응답 본문 앞부분을 남긴다 (요청 헤더의 키는 로그에 넣지 않는다)
-                String reason = ExternalFailure.http(status);
-                log.warn("Gemini 호출 실패 status={} lane={} model={} 원인={} body={}", status, aiLane, model, reason,
+                ErrorDetail detail = ErrorDetail.ofStatus(ExternalApi.GEMINI, status);
+                log.warn("Gemini 호출 실패 status={} lane={} model={} 원인={} body={}", status, aiLane, model, detail.reason(),
                         abbreviate(e.getResponseBodyAsString()));
-                throw new CustomException(busy && interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR,
-                        failure(reason), e);
+                throw new CustomException(busy && interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR, detail, e);
             } catch (RuntimeException e) {
-                String reason = ExternalFailure.reason(e);
-                log.warn("Gemini 호출 중 통신 오류 lane={} model={} 원인={} cause={}: {}", aiLane, model, reason,
+                ErrorDetail detail = ErrorDetail.of(ExternalApi.GEMINI, e);
+                log.warn("Gemini 호출 중 통신 오류 lane={} model={} 원인={} cause={}: {}", aiLane, model, detail.reason(),
                         e.getClass().getSimpleName(), e.getMessage());
-                throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, failure(reason), e);
+                throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, detail, e);
             }
         }
     }
@@ -198,7 +198,7 @@ public class GeminiClient {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             log.warn("Gemini 재시도 대기 중 중단됐습니다");
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, failure("재시도 대기 중 중단됨"), ie);
+            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, failure(ErrorReason.RETRY_INTERRUPTED), ie);
         }
     }
 
@@ -208,20 +208,20 @@ public class GeminiClient {
             root = objectMapper.readTree(responseBody);
             JsonNode text = root.path("candidates").path(0).path("content").path("parts").path(0).path("text");
             if (!text.isString()) {
-                throw invalidResponse("응답에 본문이 없음" + stopReason(root), null);
+                throw invalidResponse(failure(ErrorReason.NO_RESPONSE_CONTENT, stopReason(root)), null);
             }
             return objectMapper.readTree(text.asString());
         } catch (CustomException e) {
             throw e;
         } catch (RuntimeException e) {
-            throw invalidResponse("응답 해석 실패" + stopReason(root), e);
+            throw invalidResponse(failure(ErrorReason.UNREADABLE_RESPONSE, stopReason(root)), e);
         }
     }
 
-    private CustomException invalidResponse(String reason, Throwable cause) {
+    private CustomException invalidResponse(ErrorDetail detail, Throwable cause) {
         // 응답 본문에는 사용자의 아이디어 내용이 섞일 수 있어 로그에 남기지 않는다
-        log.warn("Gemini 응답을 해석하지 못했습니다 원인={}", reason);
-        return new CustomException(ErrorCode.AI_RESPONSE_INVALID, failure(reason), cause);
+        log.warn("Gemini 응답을 해석하지 못했습니다 원인={}", detail.reason());
+        return new CustomException(ErrorCode.AI_RESPONSE_INVALID, detail, cause);
     }
 
     /** 응답이 끊기거나 막힌 이유가 있으면 {@code (finishReason=MAX_TOKENS)}처럼 덧붙인다. */
@@ -237,7 +237,7 @@ public class GeminiClient {
         return blocked.isEmpty() ? "" : "(blockReason=" + blocked + ")";
     }
 
-    private static ErrorDetail failure(String reason) {
-        return ErrorDetail.external("Gemini", reason);
+    private static ErrorDetail failure(ErrorReason reason, Object... args) {
+        return ErrorDetail.of(ExternalApi.GEMINI, reason, args);
     }
 }

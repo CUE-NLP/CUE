@@ -19,6 +19,8 @@ import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorReason;
+import com.cue.global.error.ExternalApi;
 import com.cue.source.service.SourceCheckService;
 import com.cue.trend.service.GlobalTrendService;
 import java.util.List;
@@ -100,7 +102,7 @@ class ErrorDetailTest {
     void 평가가_외부_API에서_실패하면_위치와_API와_원인을_보여주고_다시_성공하면_지운다() throws Exception {
         when(gemini.available()).thenReturn(true);
         long id = createIdea();
-        doThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, ErrorDetail.external("Gemini", "429 호출 한도 초과")))
+        doThrow(new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.HTTP_TOO_MANY_REQUESTS)))
                 .when(gemini).generateJson(anyString(), anyMap());
 
         JsonNode failed = evaluateAndWait(id);
@@ -140,7 +142,7 @@ class ErrorDetailTest {
     void 구조화_실패_응답은_data에_위치와_API와_원인을_담는다() throws Exception {
         when(gemini.available()).thenReturn(true);
         when(gemini.generateJson(any(AiLane.class), anyString(), anyString(), anyMap())).thenThrow(
-                new CustomException(ErrorCode.AI_BUSY, ErrorDetail.external("Gemini", "429 호출 한도 초과")));
+                new CustomException(ErrorCode.AI_BUSY, ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.HTTP_TOO_MANY_REQUESTS)));
 
         mvc.perform(post("/api/ideas/structure").header("Authorization", token).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"text\":\"코드 리뷰를 도와주는 도구\"}"))

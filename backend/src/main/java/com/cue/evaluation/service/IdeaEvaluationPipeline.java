@@ -12,6 +12,8 @@ import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorLocation;
+import com.cue.global.error.ErrorReason;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.score.entity.ScoreType;
@@ -138,7 +140,7 @@ public class IdeaEvaluationPipeline {
                 reflected = evidenceChanges.current();
             } catch (RuntimeException e) {
                 restoreHashes(changed, previous); // 다음 실행에서 같은 변경을 다시 감지한다
-                failure = locate(e, "근거 4개 기준 평가");
+                failure = locate(e, ErrorLocation.EVIDENCE_EVALUATION);
             }
         }
         if (runB) {
@@ -146,7 +148,7 @@ public class IdeaEvaluationPipeline {
                 changes.addAll(trendEvaluator.evaluate(snapshot, trend));
                 trendDone = trend.id();
             } catch (RuntimeException e) {
-                RuntimeException located = locate(e, "트렌디함 평가");
+                RuntimeException located = locate(e, ErrorLocation.TREND_EVALUATION);
                 if (failure == null) {
                     failure = located;
                 } else {
@@ -160,7 +162,7 @@ public class IdeaEvaluationPipeline {
             updated = evaluationService.recordResults(ideaId, changes, fullDone, trendDone, reflected);
         } catch (RuntimeException e) {
             restoreHashes(changed, previous); // 저장하지 못했으니 변경을 다음에 다시 감지한다
-            RuntimeException located = locate(e, "평가 결과 저장");
+            RuntimeException located = locate(e, ErrorLocation.EVALUATION_SAVE);
             if (failure != null) {
                 located.addSuppressed(failure);
             }
@@ -177,9 +179,10 @@ public class IdeaEvaluationPipeline {
     }
 
     /** 실패에 발생 위치를 붙인다. 예상하지 못한 예외는 G001로 감싸 원래 예외를 cause로 남긴다. */
-    private static CustomException locate(RuntimeException e, String location) {
+    private static CustomException locate(RuntimeException e, ErrorLocation location) {
         return e instanceof CustomException custom ? custom.at(location)
-                : new CustomException(ErrorCode.INTERNAL_SERVER_ERROR, new ErrorDetail(location, null, "서버 내부 오류"), e);
+                : new CustomException(ErrorCode.INTERNAL_SERVER_ERROR,
+                        ErrorDetail.of(null, ErrorReason.INTERNAL_ERROR).at(location), e);
     }
 
     /**

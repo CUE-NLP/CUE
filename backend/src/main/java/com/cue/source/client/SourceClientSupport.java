@@ -3,7 +3,7 @@ package com.cue.source.client;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.global.error.ErrorDetail;
-import com.cue.global.error.ExternalFailure;
+import com.cue.global.error.ErrorReason;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -22,7 +22,7 @@ final class SourceClientSupport {
         try {
             byte[] body = request.retrieve().body(byte[].class);
             if (body == null || body.length == 0) {
-                throw failure("빈 응답");
+                throw failure(ErrorReason.EMPTY_RESPONSE);
             }
             return MAPPER.readTree(new String(gunzipIfNeeded(body), StandardCharsets.UTF_8));
         } catch (CustomException e) {
@@ -49,13 +49,12 @@ final class SourceClientSupport {
     }
 
     /** 원인 문구를 담은 G002. 어느 API인지는 호출한 쪽(provider를 아는 곳)이 로그에 남긴다. */
-    static CustomException failure(String reason) {
-        return new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, ErrorDetail.external(null, reason));
+    static CustomException failure(ErrorReason reason) {
+        return new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, ErrorDetail.of(null, reason));
     }
 
     private static CustomException failure(Exception cause) {
-        return new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR,
-                ErrorDetail.external(null, ExternalFailure.reason(cause)), cause);
+        return new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, ErrorDetail.of(null, cause), cause);
     }
 
     /** 본문을 문자열 그대로 받는다. 모든 실패는 G002. */

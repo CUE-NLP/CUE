@@ -5,6 +5,8 @@ import com.cue.evaluation.dto.EvaluationRunResult;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorLocation;
+import com.cue.global.error.ErrorReason;
 import com.cue.idea.entity.EvaluationStatus;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.trend.service.GlobalTrendService;
@@ -109,7 +111,7 @@ public class EvaluationQueueService {
                 throw new CustomException(ErrorCode.EVALUATION_QUEUE_FULL);
             }
             ideas.markFailed(ideaId, LocalDateTime.now(), ErrorCode.EVALUATION_QUEUE_FULL.getCode(),
-                    "평가 대기열", null, "대기열이 가득 참");
+                    ErrorLocation.EVALUATION_QUEUE.label(), null, ErrorReason.QUEUE_FULL.text());
             log.warn("평가 대기열이 가득 차 자동 평가를 시작하지 못했습니다 ideaId={}", ideaId);
             return EvaluationStatus.FAILED;
         }
@@ -175,6 +177,15 @@ public class EvaluationQueueService {
         return true;
     }
 
+    /** 기록할 실패 원인. 위치를 붙이지 못한 곳에서 난 실패는 "아이디어 평가"로 남긴다. */
+    private static ErrorDetail failureDetail(RuntimeException e) {
+        if (e instanceof CustomException custom) {
+            return custom.getDetail() != null ? custom.getDetail()
+                    : ErrorDetail.from(custom.getErrorCode()).at(ErrorLocation.EVALUATION);
+        }
+        return ErrorDetail.of(null, ErrorReason.INTERNAL_ERROR).at(ErrorLocation.EVALUATION);
+    }
+
     private void runQueued(Long ideaId) {
         try {
             execute(ideaId, WORKER_ALLOWED);
@@ -204,9 +215,7 @@ public class EvaluationQueueService {
             } catch (RuntimeException e) {
                 String code = e instanceof CustomException ce
                         ? ce.getErrorCode().getCode() : ErrorCode.INTERNAL_SERVER_ERROR.getCode();
-                ErrorDetail detail = e instanceof CustomException ce && ce.getDetail() != null
-                        ? ce.getDetail() : new ErrorDetail("아이디어 평가", null, e instanceof CustomException ce
-                                ? ce.getErrorCode().getMessage() : "서버 내부 오류");
+                ErrorDetail detail = failureDetail(e);
                 log.error("평가 실패 ideaId={} code={} {}", ideaId, code, detail.summary(), e);
                 ideas.markFailed(ideaId, LocalDateTime.now(), code, detail.location(), detail.api(), detail.reason());
                 throw e;

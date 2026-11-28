@@ -9,6 +9,8 @@ import com.cue.global.ai.PromptLoader;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
 import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ErrorReason;
+import com.cue.global.error.ExternalApi;
 import com.cue.score.entity.ScoreType;
 import com.cue.source.dto.EvaluatedItem;
 import com.cue.source.dto.SourceCheckResult;
@@ -103,7 +105,7 @@ public class EvidenceEvaluator {
         JsonNode changes = result.path("changes");
         if (!changes.isArray()) {
             throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
-                    ErrorDetail.external("Gemini", "응답에 changes 목록이 없음"));
+                    ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.MISSING_LIST, "changes"));
         }
         Map<ScoreType, ScoreChange> out = new LinkedHashMap<>();
         Map<String, SourceCheckResult> byUrl = indexByUrl(added);
@@ -129,7 +131,7 @@ public class EvidenceEvaluator {
         JsonNode scores = result.path("scores");
         if (!scores.isArray()) {
             throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
-                    ErrorDetail.external("Gemini", "응답에 scores 목록이 없음"));
+                    ErrorDetail.of(ExternalApi.GEMINI, ErrorReason.MISSING_LIST, "scores"));
         }
         Map<ScoreType, ScoreChange> out = new LinkedHashMap<>();
         Map<String, SourceCheckResult> byUrl = indexByUrl(evidence);

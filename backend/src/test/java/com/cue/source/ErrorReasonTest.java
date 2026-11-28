@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.cue.global.error.CustomException;
-import com.cue.global.error.ExternalFailure;
+import com.cue.global.error.ErrorReason;
 import com.cue.source.client.GithubSourceClient;
 import com.cue.source.client.SearchSettings;
 import com.sun.net.httpserver.HttpServer;
@@ -20,7 +20,7 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 /** 실제 HTTP 연결로 실패 원인 문구를 확인한다 (운영과 같은 JDK HttpClient 구성, 로컬 서버만 사용). */
-class ExternalFailureTest {
+class ErrorReasonTest {
     private HttpServer server;
 
     @AfterEach
@@ -52,7 +52,7 @@ class ExternalFailureTest {
         factory.setReadTimeout(Duration.ofMillis(300));
         var client = new GithubSourceClient(RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build(),
                 SearchSettings.forKeywordSearch(5));
-        return ExternalFailure.reason(assertThrows(CustomException.class, () -> client.search("k")));
+        return ErrorReason.of(assertThrows(CustomException.class, () -> client.search("k")));
     }
 
     @Test
@@ -67,6 +67,13 @@ class ExternalFailureTest {
         assertEquals("응답 시간 초과", reasonOfSearch(start(200, "{}", 1_500)));
         server.stop(0);
         assertEquals("응답 해석 실패", reasonOfSearch(start(200, "<html>", 0)));
+    }
+
+    @Test
+    void 정의에_없는_상태_코드는_번호를_채워_알려준다() {
+        assertEquals("502 외부 서버 오류", ErrorReason.ofStatus(502));
+        assertEquals("418 요청 실패", ErrorReason.ofStatus(418));
+        assertEquals("429 호출 한도 초과", ErrorReason.ofStatus(429));
     }
 
     @Test

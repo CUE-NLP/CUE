@@ -1,5 +1,6 @@
 package com.cue.source.client;
 
+import com.cue.global.error.ErrorReason;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
 import java.util.ArrayList;
@@ -63,7 +64,7 @@ public class HuggingFaceSourceClient implements SourceClient {
     @Override
     public String fetchContent(SourceItem item) {
         if (!MODEL_ID.matcher(item.title()).matches()) {
-            throw SourceClientSupport.failure("모델 이름 형식이 아님");
+            throw SourceClientSupport.failure(ErrorReason.INVALID_MODEL_NAME);
         }
         String card = SourceClientSupport.getText(restClient.get().uri("/" + item.title() + "/raw/main/README.md"));
         return card.startsWith("---") && card.indexOf("\n---", 3) > 0
