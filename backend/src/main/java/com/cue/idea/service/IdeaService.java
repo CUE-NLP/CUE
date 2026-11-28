@@ -57,6 +57,7 @@ public class IdeaService {
         IdeaType type = req.type() != null ? req.type() : IdeaType.IT;
         Idea idea = new Idea(user, type, req.problem(), req.target(), req.solution(), req.expectation());
         idea.rename(req.title());
+        idea.editRawText(req.rawText());
         ideas.save(idea);
         if (!keywords.isEmpty()) {
             idea.applyKeywords(keywords, KeywordOrigin.USER);
@@ -65,7 +66,7 @@ public class IdeaService {
             extractAndRegisterSources(idea);
             events.publishEvent(new IdeaEvaluationRequested(idea.getId())); // 커밋 뒤 첫 평가 자동 시작
         }
-        return toResponse(idea);
+        return toDetail(idea);
     }
 
     /**
@@ -77,6 +78,7 @@ public class IdeaService {
     public IdeaResponse update(Long userId, Long ideaId, UpdateIdeaRequest req) {
         Idea idea = findOwnedForUpdate(userId, ideaId); // I001 → I002 → I005 순서로 검사
         idea.rename(req.title());
+        idea.editRawText(req.rawText());
         List<String> keywordsBefore = idea.keywordList();
         boolean contentChanged = idea.edit(req.problem(), req.target(), req.solution(), req.expectation());
         if (req.keywords() != null) {
@@ -95,7 +97,7 @@ public class IdeaService {
         if (idea.isActive() && (contentChanged || keywordsChanged)) {
             events.publishEvent(new IdeaEvaluationRequested(idea.getId()));
         }
-        return toResponse(idea);
+        return toDetail(idea);
     }
 
     /**
@@ -136,7 +138,7 @@ public class IdeaService {
 
     @Transactional(readOnly = true)
     public IdeaResponse get(Long userId, Long ideaId) {
-        return toResponse(findOwned(userId, ideaId));
+        return toDetail(findOwned(userId, ideaId));
     }
 
     /** 평가를 요청할 수 있는지 확인한다: 없으면 I001, 남의 것이면 I002, 보류면 I004, 오늘 이미 평가했으면 E007. */
@@ -185,7 +187,7 @@ public class IdeaService {
     public IdeaResponse reserveWeights(Long userId, Long ideaId, UpdateWeightsRequest req) {
         Idea idea = findOwned(userId, ideaId);
         idea.reserveWeights(req.weights());
-        return toResponse(idea);
+        return toDetail(idea);
     }
 
     /** 최신 점수를 확인했음을 기록한다. 이후 새 평가가 생기기 전까지 hasNewChange가 false가 된다. */
@@ -193,18 +195,30 @@ public class IdeaService {
     public IdeaResponse markChecked(Long userId, Long ideaId) {
         Idea idea = findOwned(userId, ideaId);
         idea.markChecked();
-        return toResponse(idea);
+        return toDetail(idea);
     }
 
-    /** 리더보드: 로그인한 사용자의 아이디어를 상태별(ACTIVE 목록 / HOLD 보류 목록)로 총점순 또는 최근 상승순 정렬. */
+    /** 즐겨찾기를 바꾼다. 평가와 무관하므로 평가 중에도 가능하다. */
+    @Transactional
+    public IdeaResponse changeFavorite(Long userId, Long ideaId, boolean favorite) {
+        Idea idea = findOwned(userId, ideaId);
+        idea.changeFavorite(favorite);
+        return toDetail(idea);
+    }
+
+    /** 리더보드: 로그인한 사용자의 아이디어를 상태별(ACTIVE 목록 / HOLD 보류 목록)로 총점순 또는 최근 상승순 정렬. {@code favoriteOnly}면 즐겨찾기만. */
     @Transactional(readOnly = true)
-    public List<IdeaResponse> leaderboard(Long userId, IdeaStatus status, IdeaSort sort) {
+    public List<IdeaResponse> leaderboard(Long userId, IdeaStatus status, IdeaSort sort, boolean favoriteOnly) {
         Sort order = switch (sort) {
             case TOTAL -> Sort.by(Sort.Order.desc("totalScore"), Sort.Order.desc("id"));
+            case LATEST -> Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
             case RECENT_RISE -> Sort.by(Sort.Order.desc("lastDifference").nullsLast(),
                     Sort.Order.desc("totalScore"), Sort.Order.desc("id"));
         };
-        return ideas.findByUserIdAndStatus(userId, status, order).stream().map(this::toResponse).toList();
+        List<Idea> found = favoriteOnly
+                ? ideas.findByUserIdAndStatusAndFavoriteTrue(userId, status, order)
+                : ideas.findByUserIdAndStatus(userId, status, order);
+        return found.stream().map(idea -> toResponse(idea, null)).toList();
     }
 
     /** 총점 이력 (오래된 순). 점수 이력 차트용. */
@@ -229,7 +243,12 @@ public class IdeaService {
                 .toList();
     }
 
-    private IdeaResponse toResponse(Idea idea) {
+    /** 단건 응답: 원문을 담는다. */
+    private IdeaResponse toDetail(Idea idea) {
+        return toResponse(idea, idea.getRawText());
+    }
+
+    private IdeaResponse toResponse(Idea idea, String rawText) {
         List<ScoreResponse> scores = idea.getScores().stream()
                 .map(s -> new ScoreResponse(
                         s.getType(), percent(s.getWeight()), percent(s.getPendingWeight()), s.getScore(),
@@ -240,7 +259,7 @@ public class IdeaService {
                 idea.getSolution(), idea.getExpectation(), idea.getTotalScore(), idea.getLastDifference(),
                 idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores,
                 idea.keywordList(), idea.getKeywordOrigin(), idea.getEvaluationStatus(), idea.getLastEvaluationErrorCode(),
-                idea.lastEvaluationError());
+                idea.lastEvaluationError(), idea.isFavorite(), rawText);
     }
 
     private static Integer percent(BigDecimal fraction) {

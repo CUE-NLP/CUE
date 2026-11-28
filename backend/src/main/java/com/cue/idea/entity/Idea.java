@@ -25,6 +25,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Idea {
     public static final int TITLE_MAX_LENGTH = 60;
+    public static final int RAW_TEXT_MAX_LENGTH = 10_000;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -49,6 +51,13 @@ public class Idea {
 
     @Column(length = TITLE_MAX_LENGTH)
     private String title;
+
+    /** 사용자가 처음 적은 원문. 조회·수정용이며 평가·키워드 추출에는 쓰지 않는다(재구조화는 사용자가 구조화 API를 직접 호출). 없으면 null. */
+    @Column(name = "raw_text", columnDefinition = "TEXT")
+    private String rawText;
+
+    @Column(nullable = false)
+    private boolean favorite;
 
     @Column(columnDefinition = "TEXT")
     private String problem;
@@ -160,6 +169,17 @@ public class Idea {
         if (title != null) {
             this.title = title.strip();
         }
+    }
+
+    /** 원문 수정. null이면 그대로, 공백뿐이면 지운다. 조회용이라 평가 상태는 바뀌지 않는다. */
+    public void editRawText(String rawText) {
+        if (rawText != null) {
+            this.rawText = rawText.isBlank() ? null : rawText;
+        }
+    }
+
+    public void changeFavorite(boolean favorite) {
+        this.favorite = favorite;
     }
 
     /**

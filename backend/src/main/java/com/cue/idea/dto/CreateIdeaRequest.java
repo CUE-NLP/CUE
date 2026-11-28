@@ -32,4 +32,7 @@ public record CreateIdeaRequest(
         @Schema(description = "사용자가 직접 정한 외부 자료 검색 키워드 (선택, 최대 2개, 각 1~50자, 빈 문자열 불가). "
                 + "보내면 AI 키워드 추출 없이 이 값을 쓰고(keywordOrigin=USER), 생략하거나 비어 있을 때만 AI가 추출한다(keywordOrigin=AI)",
                 example = "[\"idea scoring\", \"startup validation\"]", nullable = true)
-        @Size(max = 2) List<@NotBlank @Size(max = 50) String> keywords) {}
+        @Size(max = 2) List<@NotBlank @Size(max = 50) String> keywords,
+        @Schema(description = "아이디어 원문 (선택, 최대 10000자). 조회·수정용으로만 저장하며 평가에는 쓰지 않는다",
+                example = "개발자들이 사이드 프로젝트 아이디어를 잊어버리는 게 문제라서...", nullable = true)
+        @Size(max = Idea.RAW_TEXT_MAX_LENGTH) String rawText) {}

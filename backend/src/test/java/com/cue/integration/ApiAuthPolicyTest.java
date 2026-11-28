@@ -89,6 +89,7 @@ class ApiAuthPolicyTest extends PostgresIntegrationTest {
                 new Endpoint(HttpMethod.GET, "/api/ideas/{id}", null),
                 new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}", "{\"problem\":\"x\"}"),
                 new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}/weights", WEIGHTS_BODY),
+                new Endpoint(HttpMethod.PATCH, "/api/ideas/{id}/favorite", "{\"favorite\":true}"),
                 new Endpoint(HttpMethod.DELETE, "/api/ideas/{id}", null),
                 new Endpoint(HttpMethod.POST, "/api/ideas/{id}/check", null),
                 new Endpoint(HttpMethod.POST, "/api/ideas/{id}/evaluate", null),

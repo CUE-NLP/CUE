@@ -138,7 +138,7 @@ class OpenApiDocsTest extends PostgresIntegrationTest {
             if (name.equals("sort")) {
                 sort = true;
                 assertTrue(p.get("description").asString().contains("RECENT_RISE"));
-                assertEquals(List.of("TOTAL", "RECENT_RISE"), enumValues(p.get("schema")));
+                assertEquals(List.of("TOTAL", "LATEST", "RECENT_RISE"), enumValues(p.get("schema")));
             }
         }
         assertTrue(status && sort);

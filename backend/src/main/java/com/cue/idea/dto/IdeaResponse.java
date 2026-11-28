@@ -45,4 +45,7 @@ public record IdeaResponse(
                 + "QUEUED·RUNNING 동안은 아이디어를 수정할 수 없다(I005)", example = "IDLE") EvaluationStatus evaluationStatus,
         @Schema(description = "마지막 평가가 실패했을 때(FAILED)의 에러 코드. 그 밖은 null", example = "G002", nullable = true) String lastEvaluationErrorCode,
         @Schema(description = "마지막 평가가 실패한 위치와, 외부 API를 쓰다 실패했으면 그 API·원인. FAILED가 아니면 null", nullable = true)
-        ErrorDetail lastEvaluationError) {}
+        ErrorDetail lastEvaluationError,
+        @Schema(description = "즐겨찾기 여부 (기본 false)", example = "false") boolean favorite,
+        @Schema(description = "아이디어 원문. 단건 응답에만 담기며 목록 응답에서는 항상 null. 저장한 원문이 없어도 null",
+                nullable = true, example = "개발자들이 사이드 프로젝트 아이디어를 잊어버리는 게 문제라서...") String rawText) {}
