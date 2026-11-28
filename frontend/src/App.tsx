@@ -21,7 +21,6 @@ import {
   ChangeModal,
   DocumentModal,
   EditModal,
-  SettingsModal,
   SummaryModal,
   WeightsModal,
   WeightsPicker,
@@ -30,8 +29,10 @@ import AuthPage from './pages/AuthPage'
 import DetailPage from './pages/DetailPage'
 import InputPage from './pages/InputPage'
 import LeaderboardPage from './pages/LeaderboardPage'
+import MyIdeasPage, { type MyIdeasView } from './pages/MyIdeasPage'
 import ResultPage from './pages/ResultPage'
 import ReviewPage from './pages/ReviewPage'
+import SettingsPage from './pages/SettingsPage'
 import WelcomePage from './pages/WelcomePage'
 
 type Page =
@@ -45,15 +46,8 @@ type Page =
   | 'review'
   | 'result'
   | 'detail'
-type Overlay =
-  | 'weights-picker'
-  | 'weights'
-  | 'edit'
-  | 'document'
-  | 'changes'
   | 'settings'
-  | 'summary'
-  | null
+type Overlay = 'weights-picker' | 'weights' | 'edit' | 'document' | 'changes' | 'summary' | null
 const emptyFields: IdeaFields = {
   title: '',
   target: '',
@@ -72,7 +66,9 @@ export default function App() {
     [structuring, setStructuring] = useState(false),
     [error, setError] = useState(''),
     [overlay, setOverlay] = useState<Overlay>(null)
-  const [weightTarget, setWeightTarget] = useState<Idea | null>(null)
+  const [weightTargets, setWeightTargets] = useState<Idea[]>([])
+  const [detailOrigin, setDetailOrigin] = useState<'leaderboard' | 'mine'>('mine')
+  const [myIdeasView, setMyIdeasView] = useState<MyIdeasView>('list')
   const [document, setDocument] = useState<{
     reference: Evaluation['references'][number]
     evaluation: Evaluation
@@ -121,6 +117,7 @@ export default function App() {
   }, [selected?.id, selected?.evaluationStatus, page])
   function open(idea: Idea, next: Page = 'detail') {
     setSelected(idea)
+    setDetailOrigin(page === 'leaderboard' ? 'leaderboard' : 'mine')
     navigate(next)
     getIdea(idea.id).then(setSelected).catch(fail)
   }
@@ -209,7 +206,9 @@ export default function App() {
       const result = await evaluateIdea(selected.id)
       setSelected({ ...result.idea, evaluationStatus: result.status })
     } catch (cause) {
-      fail(cause)
+      if (cause instanceof ApiError && cause.code === 'E007')
+        setError('이 아이디어는 오늘 이미 평가했어요. 가중치 변경은 다음 평가에 적용됩니다. (E007)')
+      else fail(cause)
     } finally {
       setBusy(false)
     }
@@ -245,14 +244,25 @@ export default function App() {
     }
   }
   async function saveWeights(next: Record<ScoreType, number>) {
-    if (!weightTarget) return
+    if (!weightTargets.length) return
     setBusy(true)
+    setError('')
     try {
-      const idea = await updateWeights(weightTarget.id, next)
-      setSelected((old) => (old?.id === idea.id ? idea : old))
-      setOverlay(null)
-    } catch (cause) {
-      fail(cause)
+      const failures: string[] = []
+      const failedIds: number[] = []
+      for (const target of weightTargets) {
+        try {
+          const idea = await updateWeights(target.id, next)
+          setSelected((old) => (old?.id === idea.id ? idea : old))
+        } catch (cause) {
+          failedIds.push(target.id)
+          failures.push(`${target.title || `#${target.id}`}: ${errorText(cause)}`)
+        }
+      }
+      if (failures.length) {
+        setError(`${failures.length}개 아이디어에 저장하지 못했어요. ${failures.join(' · ')}`)
+        setWeightTargets((old) => old.filter((target) => failedIds.includes(target.id)))
+      } else setOverlay(null)
     } finally {
       setBusy(false)
     }
@@ -281,12 +291,12 @@ export default function App() {
     }
   }
   const weightSettings = (idea?: Idea) => {
-    setWeightTarget(idea || null)
+    setWeightTargets(idea ? [idea] : [])
     setOverlay(idea ? 'weights' : 'weights-picker')
   }
 
   return (
-    <main className={tw('app-shell')}>
+    <main className={tw('app-shell')} data-page={page}>
       <div className={tw('app-card')}>
         {page === 'welcome' && <WelcomePage go={navigate} />}
         {(page === 'login' || page === 'signup') && (
@@ -302,17 +312,44 @@ export default function App() {
             onError={fail}
           />
         )}
-        {(['home', 'leaderboard', 'mine'] as Page[]).includes(page) && (
+        {page === 'home' && (
+          <InputPage
+            raw={raw}
+            setRaw={setRaw}
+            back={() => navigate('leaderboard')}
+            review={() => void beginReview()}
+            busy={structuring}
+            onError={fail}
+            home
+            go={navigate}
+            alerts={() => void showChanges()}
+          />
+        )}
+        {page === 'leaderboard' && (
           <LeaderboardPage
-            view={page as 'home' | 'leaderboard' | 'mine'}
+            view="leaderboard"
             open={(idea) => open(idea)}
             create={startIdea}
             settings={() => weightSettings()}
-            account={() => setOverlay('settings')}
+            account={() => navigate('settings')}
             alerts={() => void showChanges()}
             go={navigate}
             onError={fail}
           />
+        )}
+        {page === 'mine' && (
+          <MyIdeasPage
+            open={(idea) => open(idea)}
+            create={startIdea}
+            alerts={() => void showChanges()}
+            go={navigate}
+            onError={fail}
+            viewMode={myIdeasView}
+            setViewMode={setMyIdeasView}
+          />
+        )}
+        {page === 'settings' && (
+          <SettingsPage user={user} go={navigate} logout={() => void signOut()} busy={busy} />
         )}
         {page === 'input' && (
           <InputPage
@@ -338,7 +375,10 @@ export default function App() {
           <ResultPage
             idea={selected}
             back={() => navigate('mine')}
-            openDetail={() => navigate('detail')}
+            openDetail={() => {
+              setDetailOrigin('mine')
+              navigate('detail')
+            }}
             evaluate={() => void evaluate()}
             busy={busy}
           />
@@ -346,9 +386,11 @@ export default function App() {
         {page === 'detail' && selected && (
           <DetailPage
             idea={selected}
-            back={() => navigate('leaderboard')}
+            back={() => navigate(detailOrigin)}
             edit={() => setOverlay('edit')}
             settings={() => weightSettings(selected)}
+            reevaluate={() => void evaluate()}
+            busy={busy}
             summary={() => setOverlay('summary')}
             document={(reference, evaluation) => {
               setDocument({ reference, evaluation })
@@ -361,14 +403,17 @@ export default function App() {
         {overlay === 'weights-picker' && (
           <WeightsPicker
             close={() => setOverlay(null)}
-            choose={(idea) => weightSettings(idea)}
+            choose={(ideas) => {
+              setWeightTargets(ideas)
+              setOverlay('weights')
+            }}
             onError={fail}
           />
         )}
-        {overlay === 'weights' && weightTarget && (
+        {overlay === 'weights' && weightTargets.length > 0 && (
           <WeightsModal
-            key={weightTarget.id}
-            idea={weightTarget}
+            idea={weightTargets[0]}
+            count={weightTargets.length}
             close={() => setOverlay(null)}
             save={(next) => void saveWeights(next)}
             busy={busy}
@@ -397,13 +442,6 @@ export default function App() {
               setOverlay(null)
               open(idea)
             }}
-          />
-        )}
-        {overlay === 'settings' && (
-          <SettingsModal
-            userName={user?.nickname || '사용자'}
-            close={() => setOverlay(null)}
-            logout={() => void signOut()}
           />
         )}
         <ErrorBanner message={error} close={() => setError('')} />

@@ -42,8 +42,14 @@ export const scoreText = (value: number) =>
   Number(value).toLocaleString('ko-KR', { maximumFractionDigits: 2 })
 export const deltaText = (value: number | null) =>
   value == null ? '' : `${value > 0 ? '+' : ''}${scoreText(value)}`
-export const dateText = (value: string) =>
-  new Date(value).toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' })
+export const dateText = (value: string) => {
+  const date = new Date(value)
+  return `${String(date.getFullYear()).slice(-2)}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`
+}
+export const dateTimeText = (value: string) => {
+  const date = new Date(value)
+  return `${dateText(value)} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
 
 export function Brand({ back, onBell }: { back?: () => void; onBell?: () => void }) {
   return (

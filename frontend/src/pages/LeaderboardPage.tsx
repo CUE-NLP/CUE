@@ -1,11 +1,11 @@
 import { tw } from '../tailwindStyles'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import { getIdeaHistory, getIdeas, runDemoEvaluation, type Idea } from '../api/ideas'
 import {
   BottomNav,
   Brand,
-  Button,
+  dateTimeText,
   deltaText,
   evaluated,
   fieldLabels,
@@ -42,13 +42,6 @@ const topChange = (idea: Idea) => {
     null
   )
 }
-const dateTimeText = (value: string) =>
-  new Date(value).toLocaleString('ko-KR', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 const objectParticle = (word: string) => {
   const code = word.charCodeAt(word.length - 1) - 0xac00
   return code >= 0 && code <= 11171 && code % 28 !== 0 ? '을' : '를'
@@ -89,7 +82,45 @@ export default function LeaderboardPage({
     [checking, setChecking] = useState<number[] | null>(null),
     [checkNote, setCheckNote] = useState(''),
     [demoOff, setDemoOff] = useState(false),
-    [reload, setReload] = useState(0)
+    [reload, setReload] = useState(0),
+    [activeCard, setActiveCard] = useState(0)
+  const carouselRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    setActiveCard(0)
+    carouselRef.current?.scrollTo({ top: 0 })
+  }, [filter, view])
+  const jumpToCard = (index: number) => {
+    const carousel = carouselRef.current
+    const card = carousel?.children[index] as HTMLElement | undefined
+    if (!carousel || !card) return
+    carousel.scrollTo({
+      top: card.offsetTop - (carousel.firstElementChild as HTMLElement).offsetTop,
+      behavior: 'smooth',
+    })
+    setActiveCard(index)
+  }
+  const syncCard = () => {
+    const carousel = carouselRef.current
+    if (!carousel) return
+    const cards = Array.from(carousel.children) as HTMLElement[]
+    if (!cards.length) return
+    if (
+      carousel.scrollHeight > carousel.clientHeight &&
+      carousel.scrollTop >= carousel.scrollHeight - carousel.clientHeight - 2
+    ) {
+      setActiveCard(cards.length - 1)
+      return
+    }
+    const current = cards.reduce(
+      (best, card, index) =>
+        Math.abs(card.offsetTop - cards[0].offsetTop - carousel.scrollTop) <
+        Math.abs(cards[best].offsetTop - cards[0].offsetTop - carousel.scrollTop)
+          ? index
+          : best,
+      0,
+    )
+    setActiveCard(current)
+  }
   useEffect(() => {
     let active = true
     setBusy(true)
@@ -135,7 +166,7 @@ export default function LeaderboardPage({
           const failed = mine.filter((idea) => idea.evaluationStatus === 'FAILED').length
           setChecking(null)
           setCheckNote(
-            failed ? `확인을 마쳤어요. ${failed}개는 평가하지 못했어요.` : '확인을 마쳤어요.',
+            failed ? `재평가를 마쳤어요. ${failed}개는 평가하지 못했어요.` : '재평가를 마쳤어요.',
           )
         })
         .catch((error) => {
@@ -157,7 +188,7 @@ export default function LeaderboardPage({
           ...skipped.filter((item) => item.reason !== 'QUEUE_FULL').map((item) => item.ideaId),
         ]
         if (!ids.length) {
-          setCheckNote('확인할 아이디어가 없어요.')
+          setCheckNote('재평가할 아이디어가 없어요.')
           return
         }
         setChecking(ids)
@@ -165,11 +196,11 @@ export default function LeaderboardPage({
       })
       .catch((error) => {
         if (error instanceof ApiError && error.code === 'D002')
-          setCheckNote('방금 확인했어요. 30초 뒤에 다시 눌러 주세요.')
+          setCheckNote('방금 재평가했어요. 30초 뒤에 다시 눌러 주세요.')
         else if (error instanceof ApiError && error.code === 'D001') {
           // 서버에서 시연 API가 꺼져 있으면 버튼을 숨긴다
           setDemoOff(true)
-          setCheckNote('지금은 바로 확인 기능이 꺼져 있어요.')
+          setCheckNote('지금은 바로 재평가 기능이 꺼져 있어요.')
         } else onError(error)
       })
       .finally(() => setStarting(false))
@@ -223,8 +254,10 @@ export default function LeaderboardPage({
       </div>
       <div className={`${tw('refresh-note')} gap-2`}>
         <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-[11px]! text-[#51517a]!">◷ &nbsp;24시간마다 자동 확인</span>
-          <span>{newest ? `최근 확인 ${dateTimeText(newest)}` : '첫 평가를 기다리는 중'}</span>
+          <span className="text-[11px]! text-[#51517a]!">
+            ◷ &nbsp;24시간마다 근거 자료 변화 수집 및 재평가
+          </span>
+          <span>{newest ? `최근 재평가 ${dateTimeText(newest)}` : '첫 평가를 기다리는 중'}</span>
         </div>
         {!demoOff && (
           <button
@@ -248,7 +281,7 @@ export default function LeaderboardPage({
               <path d="M20 11a8 8 0 1 0-2.3 5.7" />
               <path d="M20 4v7h-7" />
             </svg>
-            {starting || checking ? '확인하는 중…' : '지금 확인'}
+            {starting || checking ? '재평가 중…' : '지금 재평가'}
           </button>
         )}
       </div>
@@ -260,18 +293,14 @@ export default function LeaderboardPage({
       <div className={tw('filters')}>
         {(
           [
-            ['all', '전체'],
+            ['all', '점수순'],
             ['rise', '최근 상승'],
             ['hold', '보류'],
           ] as const
         ).map(([id, label]) => (
           <button
             key={id}
-            className={
-              filter === id
-                ? `${tw('active')} border-[#6938ff]! bg-[#6938ff]! text-white!`
-                : undefined
-            }
+            className={filter === id ? 'active' : undefined}
             aria-pressed={filter === id}
             onClick={() => setFilter(id)}
           >
@@ -281,96 +310,118 @@ export default function LeaderboardPage({
       </div>
       <p className={`${tw('filter-hint')} text-right`}>
         {filter === 'rise'
-          ? `최근 상승 ${riseCount}개 · 이전 평가 대비`
+          ? `최근 상승 ${riseCount}개 · 이전 평가 대비 상승폭순`
           : filter === 'hold'
             ? '보류 중인 아이디어'
             : '종합 점수순'}
       </p>
-      <div className={tw('idea-list')}>
-        {ideas.length === 0 ? (
-          <div className={tw('empty-state')}>
-            {busy
-              ? '불러오는 중…'
-              : filter === 'hold'
-                ? '보류 중인 아이디어가 없어요.'
-                : '첫 아이디어를 남겨보세요.'}
-          </div>
-        ) : (
-          ideas.map((idea, index) => {
-            const hold = idea.status === 'HOLD'
-            const change = topChange(idea)
-            const changeValue = change?.latestDifference ?? 0
-            // 평가 중·실패·평가 전처럼 확인이 필요한 상태만 작게 표시한다 (평가 완료는 생략)
-            const showStatus = !hold && (idea.evaluationStatus !== 'IDLE' || !evaluated(idea))
-            const showDelta = !hold && evaluated(idea) && !firstEvaluation(idea)
-            const difference = idea.lastDifference ?? 0
-            return (
-              <button key={idea.id} className={tw('idea-tile')} onClick={() => open(idea)}>
-                <span className={tw('rank')} aria-label={hold ? '보류' : `${index + 1}위`}>
-                  {hold ? (
-                    <span className="text-[20px]">⏳</span>
-                  ) : index < 3 ? (
-                    <span className="text-[24px] leading-none">{medals[index]}</span>
-                  ) : (
-                    <span className="inline-grid h-[26px] w-[26px] place-items-center rounded-full bg-[#eef0f6] text-[12px] text-[#647096]">
-                      {index + 1}
-                    </span>
-                  )}
-                </span>
-                <span className={tw('tile-main')}>
-                  <strong className={tw('tile-title')}>{ideaTitle(idea)}</strong>
-                  {hold ? (
-                    <span className="block text-[12px] leading-snug text-[#647096]">
-                      보류 · {missingText(idea)} 보완해 주세요.
-                    </span>
-                  ) : (
-                    (change || showStatus) && (
-                      <span className="flex flex-wrap items-center gap-1.5 [&_.status-badge]:px-2 [&_.status-badge]:py-0.5 [&_.status-badge]:text-[10px]">
-                        {change && (
-                          <small>
-                            {scoreLabels[change.type]} {changeValue > 0 ? '↑' : '↓'}
-                          </small>
-                        )}
-                        {showStatus && <Status idea={idea} />}
-                      </span>
-                    )
-                  )}
-                </span>
-                {!hold && (
-                  <span className={tw('tile-score')}>
-                    {evaluated(idea) ? (
-                      <>
-                        {scoreText(idea.totalScore)}
-                        <span className="ml-0.5 text-[13px]">점</span>
-                      </>
+      <div className="carousel-layout">
+        <div className={tw('idea-list')} ref={carouselRef} onScroll={syncCard}>
+          {ideas.length === 0 ? (
+            <div className={tw('empty-state')}>
+              {busy
+                ? '불러오는 중…'
+                : filter === 'hold'
+                  ? '보류 중인 아이디어가 없어요.'
+                  : '첫 아이디어를 남겨보세요.'}
+            </div>
+          ) : (
+            ideas.map((idea, index) => {
+              const hold = idea.status === 'HOLD'
+              const change = topChange(idea)
+              const changeValue = change?.latestDifference ?? 0
+              // 평가 중·실패·평가 전처럼 확인이 필요한 상태만 작게 표시한다 (평가 완료는 생략)
+              const showStatus = !hold && (idea.evaluationStatus !== 'IDLE' || !evaluated(idea))
+              const showDelta = !hold && evaluated(idea) && !firstEvaluation(idea)
+              const difference = idea.lastDifference ?? 0
+              return (
+                <button key={idea.id} className={tw('idea-tile')} onClick={() => open(idea)}>
+                  <span className={tw('rank')} aria-label={hold ? '보류' : `${index + 1}위`}>
+                    {hold ? (
+                      <span className="text-[20px]">⏳</span>
+                    ) : index < 3 ? (
+                      <span className="text-[24px] leading-none">{medals[index]}</span>
                     ) : (
-                      '—'
-                    )}
-                    {showDelta && (
-                      <span
-                        className={`block text-[11px] ${
-                          isZero(difference)
-                            ? 'text-[#647096]'
-                            : tw(difference > 0 ? 'positive' : 'negative')
-                        }`}
-                      >
-                        {isZero(difference)
-                          ? '변화 없음'
-                          : `${difference > 0 ? '▲' : '▼'} ${deltaText(difference)}점`}
+                      <span className="inline-grid h-[26px] w-[26px] place-items-center rounded-full bg-[#eef0f6] text-[12px] text-[#647096]">
+                        {index + 1}
                       </span>
                     )}
-                    <Sparkline totals={histories[idea.id]?.totals ?? []} />
                   </span>
-                )}
-              </button>
-            )
-          })
+                  <span className={tw('tile-main')}>
+                    <strong className={tw('tile-title')}>{ideaTitle(idea)}</strong>
+                    {hold ? (
+                      <span className="grid gap-1 text-[11px] leading-snug text-[#647096]">
+                        <span>작성 {dateTimeText(idea.createdAt)} · 평가 전</span>
+                        <span className="line-clamp-2 break-words">
+                          {idea.problem?.trim() ||
+                            idea.solution?.trim() ||
+                            '아직 구조화한 내용이 없어요.'}
+                        </span>
+                        <span className="text-[#6938ff]">{missingText(idea)} 보완해 주세요.</span>
+                      </span>
+                    ) : (
+                      (change || showStatus) && (
+                        <span className="flex flex-wrap items-center gap-1.5 [&_.status-badge]:px-2 [&_.status-badge]:py-0.5 [&_.status-badge]:text-[10px]">
+                          {change && (
+                            <small>
+                              {scoreLabels[change.type]} {changeValue > 0 ? '↑' : '↓'}
+                            </small>
+                          )}
+                          {showStatus && <Status idea={idea} />}
+                        </span>
+                      )
+                    )}
+                  </span>
+                  {!hold && (
+                    <span className={tw('tile-score')}>
+                      {evaluated(idea) ? (
+                        <>
+                          {scoreText(idea.totalScore)}
+                          <span className="ml-0.5 text-[13px]">점</span>
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                      {showDelta && (
+                        <span
+                          className={`block text-[11px] ${
+                            isZero(difference)
+                              ? 'text-[#647096]'
+                              : tw(difference > 0 ? 'positive' : 'negative')
+                          }`}
+                        >
+                          {isZero(difference)
+                            ? '변화 없음'
+                            : `${difference > 0 ? '▲' : '▼'} ${deltaText(difference)}점`}
+                        </span>
+                      )}
+                      <Sparkline totals={histories[idea.id]?.totals ?? []} />
+                    </span>
+                  )}
+                </button>
+              )
+            })
+          )}
+        </div>
+        {ideas.length > 1 && (
+          <nav className="carousel-side-nav" aria-label="아이디어 카드 이동">
+            {ideas.map((idea, index) => (
+              <button
+                key={idea.id}
+                type="button"
+                className={activeCard === index ? 'active' : ''}
+                aria-label={`${index + 1}번째 아이디어로 이동: ${ideaTitle(idea)}`}
+                aria-current={activeCard === index ? 'true' : undefined}
+                onClick={() => jumpToCard(index)}
+              />
+            ))}
+          </nav>
         )}
       </div>
       <div className={tw('bottom-actions leaderboard-create')}>
-        <Button secondary onClick={create}>
+        <button type="button" className="create-idea-button" onClick={create}>
           ＋ 새 아이디어
-        </Button>
+        </button>
       </div>
       <BottomNav current={view} go={(next) => (next === 'settings' ? account() : go(next))} />
     </section>
@@ -391,6 +442,8 @@ function Sparkline({ totals }: { totals: number[] }) {
     max === min ? height / 2 : height - pad - ((value - min) / (max - min)) * (height - pad * 2),
   ])
   const [lastX, lastY] = xy[xy.length - 1]
+  const line = xy.map((point) => point.join(',')).join(' ')
+  const area = `${pad},${height - pad} ${line} ${lastX},${height - pad}`
   return (
     <svg
       className="mt-1 ml-auto block"
@@ -399,8 +452,9 @@ function Sparkline({ totals }: { totals: number[] }) {
       viewBox={`0 0 ${width} ${height}`}
       aria-hidden="true"
     >
+      <polygon points={area} fill="#eae2ff" />
       <polyline
-        points={xy.map((point) => point.join(',')).join(' ')}
+        points={line}
         fill="none"
         stroke="#6938ff"
         strokeWidth="1.5"
