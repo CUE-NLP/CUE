@@ -11,6 +11,7 @@ import {
 import {
   Button,
   dateText,
+  dateTimeText,
   deltaText,
   fieldLabels,
   ideaTitle,
@@ -27,10 +28,11 @@ export function WeightsPicker({
   onError,
 }: {
   close: () => void
-  choose: (idea: Idea) => void
+  choose: (ideas: Idea[]) => void
   onError: (error: unknown) => void
 }) {
   const [ideas, setIdeas] = useState<Idea[]>([])
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
   useEffect(() => {
     let active = true
     getIdeas('ACTIVE')
@@ -45,16 +47,46 @@ export function WeightsPicker({
     }
   }, [])
   return (
-    <Modal title="평가 설정할 아이디어 선택" close={close}>
-      <h2>평가할 아이디어 선택</h2>
-      <p className={tw('subcopy')}>아이디어마다 평가 가중치를 설정할 수 있어요.</p>
-      <div className={tw('picker-list')}>
+    <Modal title="평가 설정할 아이디어 선택" close={close} className="picker-sheet">
+      <h2 className="picker-title">평가할 아이디어 선택</h2>
+      <p className={tw('subcopy')}>같은 기준으로 평가할 아이디어를 모두 선택해 주세요.</p>
+      <div className={`picker-list ${tw('picker-list')}`}>
         {ideas.map((idea) => (
-          <button key={idea.id} onClick={() => choose(idea)}>
-            {ideaTitle(idea)}　→
+          <button
+            className={`picker-idea-card ${selectedIds.includes(idea.id) ? 'is-selected' : ''}`}
+            key={idea.id}
+            aria-pressed={selectedIds.includes(idea.id)}
+            onClick={() =>
+              setSelectedIds((old) =>
+                old.includes(idea.id) ? old.filter((id) => id !== idea.id) : [...old, idea.id],
+              )
+            }
+          >
+            <span className="picker-idea-score" aria-hidden="true">
+              {idea.lastEvaluatedAt ? `${scoreText(idea.totalScore)}점` : '—'}
+            </span>
+            <span className="min-w-0 flex-1">
+              <strong className="block truncate text-[14px] text-[#090d3d]">
+                {ideaTitle(idea)}
+              </strong>
+              <small className="mt-1 block text-[11px] font-normal text-[#647096]">
+                {idea.lastEvaluatedAt ? '평가 가중치 설정' : '첫 평가를 위한 가중치 설정'}
+              </small>
+            </span>
+            <span className="picker-check" aria-hidden="true">
+              {selectedIds.includes(idea.id) ? '✓' : ''}
+            </span>
           </button>
         ))}
         {ideas.length === 0 && <p className={tw('subcopy')}>평가할 아이디어가 없어요.</p>}
+      </div>
+      <div className="picker-submit">
+        <Button
+          disabled={!selectedIds.length}
+          onClick={() => choose(ideas.filter((idea) => selectedIds.includes(idea.id)))}
+        >
+          선택한 {selectedIds.length}개 가중치 설정하기
+        </Button>
       </div>
     </Modal>
   )
@@ -62,11 +94,13 @@ export function WeightsPicker({
 
 export function WeightsModal({
   idea,
+  count = 1,
   close,
   save,
   busy,
 }: {
   idea: Idea
+  count?: number
   close: () => void
   save: (weights: Record<ScoreType, number>) => void
   busy: boolean
@@ -83,38 +117,77 @@ export function WeightsModal({
       ) as Record<ScoreType, number>,
   )
   const total = scoreTypes.reduce((sum, type) => sum + Number(weights[type] || 0), 0)
+  const adjust = (type: ScoreType, amount: number) =>
+    setWeights((old) => ({ ...old, [type]: Math.max(0, Math.min(100, old[type] + amount)) }))
   return (
     <Modal title="평가 가중치 설정" close={close} className={tw('weights-sheet')}>
       <h2 className="font-bold">평가 가중치 설정</h2>
-      <p className={tw('subcopy')}>중요하게 보는 기준의 비중을 조절하세요.</p>
+      <p className={tw('subcopy')}>
+        {count > 1
+          ? `선택한 ${count}개 아이디어에 같은 가중치를 적용해요.`
+          : '중요하게 보는 기준의 비중을 조절하세요.'}
+      </p>
       <div className={tw('weight-fields')}>
         {scoreTypes.map((type) => (
-          <label className={tw('weight-card')} key={type}>
+          <div className={tw('weight-card')} key={type}>
             <span>
               <b>{scoreLabels[type]}</b>
               <small>{scoreDescriptions[type]}</small>
             </span>
-            <output>{weights[type]}%</output>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#f2efff] text-[17px] text-[#6938ff] disabled:opacity-40"
+                aria-label={`${scoreLabels[type]} 가중치 1% 내리기`}
+                disabled={busy || weights[type] <= 0}
+                onClick={() => adjust(type, -1)}
+              >
+                −
+              </button>
+              <output>{weights[type]}%</output>
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#f2efff] text-[17px] text-[#6938ff] disabled:opacity-40"
+                aria-label={`${scoreLabels[type]} 가중치 1% 올리기`}
+                disabled={busy || weights[type] >= 100}
+                onClick={() => adjust(type, 1)}
+              >
+                +
+              </button>
+            </div>
             <input
+              className="weight-slider"
               type="range"
               min="0"
               max="100"
               value={weights[type]}
+              disabled={busy}
+              style={{
+                background: `linear-gradient(90deg, #a68aff 0%, #6938ff ${weights[type]}%, #e8ebf4 ${weights[type]}%)`,
+              }}
               onChange={(event) =>
                 setWeights((old) => ({ ...old, [type]: Number(event.target.value) }))
               }
               aria-label={`${scoreLabels[type]} 가중치`}
             />
-          </label>
+          </div>
         ))}
       </div>
-      <p className={tw(`weight-total ${total === 100 ? '' : 'invalid'}`)}>
-        합계 {total}% / 100%{total !== 100 && ' · 합계가 100%여야 해요.'}
-      </p>
+      <div className={tw(`weight-total ${total === 100 ? 'valid' : 'invalid'}`)} role="status">
+        <div className="flex items-center justify-between">
+          <strong>합계</strong>
+          <strong>{total}% / 100%</strong>
+        </div>
+        <p>
+          {total === 100
+            ? '가중치 합계가 100%예요. 적용할 수 있어요.'
+            : '가중치 합계를 100%로 맞춰 주세요.'}
+        </p>
+      </div>
       <p className={tw('subcopy')}>변경한 가중치는 다음 평가부터 적용됩니다.</p>
       <div className={tw('sheet-actions')}>
         <Button disabled={busy || total !== 100} onClick={() => save(weights)}>
-          {busy ? '저장 중…' : '가중치 저장하기'}
+          {busy ? '저장 중…' : count > 1 ? `${count}개 아이디어에 저장하기` : '가중치 저장하기'}
         </Button>
       </div>
     </Modal>
@@ -176,10 +249,10 @@ export function EditModal({
       <h2 className="font-bold">구조화 항목 수정</h2>
       <p className={tw('subcopy')}>내용을 수정한 뒤 저장하세요.</p>
       <div className={tw('edit-fields')}>
-        <label className="text-[15px]! text-[#090d3d]">
-          아이디어 제목
+        <label className="rounded-2xl border border-[#e8e1f8] bg-[#fcfbff] p-3 text-[15px]! font-bold text-[#6938ff]! shadow-[0_3px_12px_#2e146b08] transition-colors focus-within:border-[#bba5ff]">
+          <span>아이디어 제목</span>
           <input
-            className="w-full rounded-xl border border-[#c9b8ff] px-3 py-2"
+            className="w-full border-0! bg-transparent! px-0! py-1 font-normal text-[#090d3d] focus:ring-0!"
             maxLength={IDEA_TITLE_MAX_LENGTH}
             placeholder="짧은 제목을 입력해 주세요"
             value={fields.title}
@@ -190,10 +263,13 @@ export function EditModal({
           </span>
         </label>
         {fieldLabels.map(({ key, label }) => (
-          <label key={key} className="text-[15px]! text-[#090d3d]">
-            {label}
+          <label
+            key={key}
+            className="rounded-2xl border border-[#e8e1f8] bg-[#fcfbff] p-3 text-[15px]! font-bold text-[#6938ff]! shadow-[0_3px_12px_#2e146b08] transition-colors focus-within:border-[#bba5ff]"
+          >
+            <span>{label}</span>
             <textarea
-              className="border-[#c9b8ff]! focus:border-[#6938ff]!"
+              className="rounded-none! border-0! bg-transparent! p-0! font-normal! text-[#090d3d]! focus:ring-0!"
               maxLength={5000}
               value={fields[key]}
               onChange={(event) => setFields((old) => ({ ...old, [key]: event.target.value }))}
@@ -260,7 +336,7 @@ export function DocumentModal({
       </div>
       {safeUrl && (
         <a
-          className="mt-2 inline-block text-[13px] font-bold text-[#6938ff] hover:underline"
+          className="mt-2 block text-right text-[13px] font-bold text-[#6938ff] hover:underline"
           href={safeUrl.href}
           target="_blank"
           rel="noopener noreferrer"
@@ -358,37 +434,6 @@ export function ChangeModal({
     </Modal>
   )
 }
-export function SettingsModal({
-  userName,
-  close,
-  logout,
-}: {
-  userName: string
-  close: () => void
-  logout: () => void
-}) {
-  const [confirm, setConfirm] = useState(false)
-  useEffect(() => {
-    setConfirm(false)
-  }, [])
-  return (
-    <Modal title="설정" close={close} className={tw('settings-sheet')}>
-      <h2 className="font-bold">설정</h2>
-      <p className={tw('subcopy')}>{userName}님의 아이디어 포트폴리오</p>
-      <div className={tw('settings-info')}>
-        <strong>평가 주기</strong>
-        <span>백엔드에서 24시간마다 자동 확인합니다.</span>
-      </div>
-      {confirm ? (
-        <Button onClick={logout}>로그아웃하기</Button>
-      ) : (
-        <Button secondary onClick={() => setConfirm(true)}>
-          로그아웃
-        </Button>
-      )}
-    </Modal>
-  )
-}
 // 마지막 글자에 받침이 있는지 (한글이 아니면 받침 없음으로 본다)
 const hasFinalConsonant = (word: string) => {
   const code = word.charCodeAt(word.length - 1) - 0xac00
@@ -413,10 +458,21 @@ export function SummaryModal({ idea, close }: { idea: Idea; close: () => void })
       className={`${tw('summary-sheet')} pt-7! rounded-3xl! [&>.sheet-handle]:hidden [&>.sheet-close]:hidden`}
     >
       <h2 className="font-bold">{ideaTitle(idea)}</h2>
+      <p className="mt-1 text-[11px] text-[#647096]">첫 기록 · {dateTimeText(idea.createdAt)}</p>
       <strong className={tw('summary-score')}>
         {idea.lastEvaluatedAt ? `${scoreText(idea.totalScore)}점` : '평가 전'}
       </strong>
       <p className={tw('subcopy')}>{summaryText(idea)}</p>
+      <section className="summary-content mt-4 grid gap-2.5" aria-label="구조화한 아이디어">
+        {fieldLabels.map(({ key, label }) => (
+          <div key={key} className="rounded-xl border border-[#e8e1f8] bg-[#fcfbff] px-3 py-2.5">
+            <h3 className="m-0! text-[12px]! font-bold text-[#6938ff]">{label}</h3>
+            <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[#374064]">
+              {idea[key]?.trim() || '입력된 내용이 없어요.'}
+            </p>
+          </div>
+        ))}
+      </section>
       <Button secondary onClick={close}>
         닫기
       </Button>

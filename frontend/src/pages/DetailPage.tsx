@@ -10,6 +10,7 @@ import {
 import {
   Brand,
   dateText,
+  dateTimeText,
   deltaText,
   evaluated,
   fieldLabels,
@@ -19,6 +20,7 @@ import {
   scoreTypes,
   Status,
 } from '../components/ui'
+import { ScoreBreakdown } from '../components/ScoreBreakdown'
 type Tab = 'score' | 'sources' | 'history'
 // 소수 계산 오차(예: 0.000001)를 0으로 보기 위한 비교
 const isZero = (value: number) => Math.abs(value) < 0.005
@@ -48,6 +50,8 @@ export default function DetailPage({
   back,
   edit,
   settings,
+  reevaluate,
+  busy,
   summary,
   document,
   check,
@@ -57,6 +61,8 @@ export default function DetailPage({
   back: () => void
   edit: () => void
   settings: () => void
+  reevaluate: () => void
+  busy: boolean
   summary: () => void
   document: (reference: Evaluation['references'][number], evaluation: Evaluation) => void
   check: () => void
@@ -162,16 +168,6 @@ export default function DetailPage({
       summary: sortedEvaluations.find((item) => item.scoreType === type)?.evidenceSummary,
     }))
   const unchangedCount = unchangedMetrics.length
-  const weights = idea.scores?.map((score) => score.weightPercent) ?? []
-  const topScore = idea.scores?.reduce<(typeof idea.scores)[number] | undefined>(
-    (top, score) => (!top || score.weightPercent > top.weightPercent ? score : top),
-    undefined,
-  )
-  const weightNote = !topScore
-    ? ''
-    : weights.every((weight) => weight === weights[0])
-      ? `가중치 동일 · 각 ${weights[0]}%`
-      : `가중치 최고 · ${scoreLabels[topScore.type]} ${topScore.weightPercent}%`
   const weightPending = idea.scores?.some(
     (score) =>
       score.pendingWeightPercent != null && score.pendingWeightPercent !== score.weightPercent,
@@ -213,28 +209,28 @@ export default function DetailPage({
       <Brand back={back} />
       <div className={tw('detail-heading')}>
         <div className={tw('detail-title')}>
-          <h1 className="min-w-0 truncate font-bold" title={ideaTitle(idea)}>
-            {ideaTitle(idea)}
-          </h1>
+          <h1 className="min-w-0 flex-1 break-words font-bold">{ideaTitle(idea)}</h1>
           <Status idea={idea} />
         </div>
         <div className={tw('total-summary')}>
-          <strong>{evaluated(idea) ? scoreText(idea.totalScore) : '—'}</strong>
-          <span>점</span>
-          {showChange && idea.lastDifference != null && (
-            <b className={deltaClass(idea.lastDifference)}>
-              {isZero(idea.lastDifference)
-                ? '변화 없음'
-                : `${idea.lastDifference > 0 ? '▲' : '▼'} ${deltaText(idea.lastDifference)}점`}
-            </b>
-          )}
+          <div className="flex items-baseline gap-0.5 whitespace-nowrap">
+            <strong>{evaluated(idea) ? scoreText(idea.totalScore) : '—'}</strong>
+            <span>점</span>
+            {showChange && idea.lastDifference != null && (
+              <b className={deltaClass(idea.lastDifference)}>
+                {isZero(idea.lastDifference)
+                  ? '변화 없음'
+                  : `${idea.lastDifference > 0 ? '▲' : '▼'} ${deltaText(idea.lastDifference)}점`}
+              </b>
+            )}
+          </div>
           {showChange && previousTotal != null && (
-            <small className="ml-2 text-[12px] text-[#647096]">
+            <small className="block w-full whitespace-nowrap text-right text-[12px] text-[#647096]">
               이전 평가 {scoreText(previousTotal)}점
             </small>
           )}
           {firstEvaluation && idea.lastEvaluatedAt && (
-            <small className="ml-3 text-[12px] text-[#647096]">
+            <small className="block whitespace-nowrap text-[12px] text-[#647096]">
               첫 평가 · {dateText(idea.lastEvaluatedAt)}
             </small>
           )}
@@ -247,6 +243,14 @@ export default function DetailPage({
             {notice.text}
           </div>
         )}
+        {idea.status === 'HOLD' && (
+          <div className="mb-3 rounded-xl border border-[#e8e1f8] bg-[#fcfbff] px-3 py-2.5 text-[12px] leading-relaxed">
+            <div className="font-semibold text-[#6938ff]">작성 {dateTimeText(idea.createdAt)}</div>
+            <p className="mt-1 text-[#647096]">
+              입력 원문은 서버에 저장되지 않아 확인할 수 없어요.
+            </p>
+          </div>
+        )}
         <div className={tw('detail-actions')}>
           <button
             onClick={edit}
@@ -257,6 +261,15 @@ export default function DetailPage({
           </button>
           <button onClick={settings}>☷ 평가 설정</button>
           <button onClick={summary}>▤ 카드 요약</button>
+          {idea.status === 'ACTIVE' && (
+            <button
+              onClick={reevaluate}
+              disabled={progress || busy}
+              title="이 아이디어만 평가 요청"
+            >
+              ↻ 이 아이디어 재평가
+            </button>
+          )}
         </div>
       </div>
       <div className={tw('detail-tabs')} role="tablist">
@@ -272,6 +285,7 @@ export default function DetailPage({
             role="tab"
             aria-selected={tab === id}
             className={tw(tab === id ? 'active' : '')}
+            style={{ borderBottom: tab === id ? '3px solid #6938ff' : '3px solid transparent' }}
             onClick={() => setTab(id)}
           >
             {label}
@@ -283,8 +297,21 @@ export default function DetailPage({
           <p className={tw('subcopy')}>불러오는 중…</p>
         ) : tab === 'score' ? (
           <>
+            <section className={tw('metrics-card')}>
+              <div className="flex items-baseline justify-between gap-2">
+                <h2 className="font-bold!">평가 지표</h2>
+                {weightPending && (
+                  <small className="text-right text-[11px] leading-snug text-[#647096]">
+                    다음 평가부터 가중치 변경
+                  </small>
+                )}
+              </div>
+              <ScoreBreakdown idea={idea} />
+            </section>
             <section className={tw('delta-card')}>
-              <h2>{firstEvaluation ? '첫 평가 결과' : '무엇이 달라졌나요?'}</h2>
+              <h2 className="font-bold!">
+                {firstEvaluation ? '첫 평가 결과' : '무엇이 달라졌나요?'}
+              </h2>
               {latestRound.length ? (
                 <>
                   {latestRound.map((item) => (
@@ -294,13 +321,13 @@ export default function DetailPage({
                       </strong>
                       {!isFirstEvaluation(item) && (
                         <div
-                          className={`mt-1 text-[12px] font-bold ${deltaClass(item.difference)}`}
+                          className={`mt-1 text-right text-[12px] font-bold ${deltaClass(item.difference)}`}
                         >
                           {deltaText(item.difference)}점 · 종합 점수 {deltaText(contribution(item))}
                           점
                         </div>
                       )}
-                      <p>{item.evidenceSummary}</p>
+                      <ReasonText text={item.evidenceSummary} />
                     </div>
                   ))}
                   {latestReferences.length > 0 && (
@@ -311,15 +338,18 @@ export default function DetailPage({
                       <div className="grid grid-cols-1 gap-2">
                         {latestReferences.map(({ reference, item, key }) => (
                           <button
-                            className={tw('reference-card')}
+                            className={`${tw('reference-card')} evidence-glow`}
                             key={key}
                             onClick={() => document(reference, item)}
                           >
                             <strong className="block truncate text-[13px]">
-                              {reference.title || reference.url}　→
+                              {reference.title || reference.url}
                             </strong>
                             <small className="mt-1 block text-[11px] text-[#6938ff]">
                               {changeText(item)}
+                            </small>
+                            <small className="mt-1 block text-[10px] text-[#647096]">
+                              평가에 반영 · {dateTimeText(item.evaluatedAt)}
                             </small>
                           </button>
                         ))}
@@ -330,7 +360,7 @@ export default function DetailPage({
                     <>
                       <button
                         type="button"
-                        className="mt-3 flex items-center gap-1 text-[11px] text-[#647096]"
+                        className="mt-3 flex w-full items-center justify-between gap-1 text-left text-[11px] text-[#647096]"
                         aria-expanded={showUnchanged}
                         onClick={() => setShowUnchanged((open) => !open)}
                       >
@@ -345,7 +375,7 @@ export default function DetailPage({
                             <strong className="block text-[16px] text-[#090d3d]">
                               {scoreLabels[type]} {score == null ? '—' : scoreText(score)}
                             </strong>
-                            <p>{summary || '이전 평가의 판단 근거가 없어요.'}</p>
+                            <ReasonText text={summary || '이전 평가의 판단 근거가 없어요.'} />
                           </div>
                         ))}
                     </>
@@ -355,40 +385,6 @@ export default function DetailPage({
                 <div className="mt-2 text-[12px] text-[#647096]">아직 평가 결과가 없어요.</div>
               )}
             </section>
-            <section className={tw('metrics-card')}>
-              <div className="flex items-baseline justify-between gap-2">
-                <h2>평가 지표</h2>
-                {weightNote && (
-                  <small className="text-right text-[11px] leading-snug text-[#647096]">
-                    {weightNote}
-                    {weightPending && (
-                      <>
-                        <br />
-                        다음 평가부터 가중치 변경
-                      </>
-                    )}
-                  </small>
-                )}
-              </div>
-              {scoreTypes.map((type) => {
-                const score = idea.scores?.find((item) => item.type === type)
-                if (!score) return null
-                return (
-                  <div className={tw('metric-row')} key={type}>
-                    <span>{scoreLabels[type]}</span>
-                    <div className={tw('metric-track')}>
-                      <i
-                        style={{
-                          width: `${evaluated(idea) ? Math.max(0, Math.min(100, score.score || 0)) : 0}%`,
-                        }}
-                      />
-                    </div>
-                    <b>{evaluated(idea) ? scoreText(score.score || 0) : '—'}</b>
-                    <small>/ 100</small>
-                  </div>
-                )
-              })}
-            </section>
           </>
         ) : tab === 'sources' ? (
           <>
@@ -396,7 +392,7 @@ export default function DetailPage({
             <p className={tw('subcopy')}>문서를 누르면 판단 근거와 점수 반영을 확인해요.</p>
             {allReferences.map(({ reference, item, key }) => (
               <button
-                className={`${tw('source-card')} grid-cols-1 transition-shadow ${
+                className={`${tw('source-card')} evidence-glow grid-cols-1 ${
                   highlight === `sources-${item.evaluatedAt}` ? 'ring-2 ring-[#6938ff]' : ''
                 }`}
                 data-highlight={`sources-${item.evaluatedAt}`}
@@ -404,13 +400,13 @@ export default function DetailPage({
                 onClick={() => document(reference, item)}
               >
                 <small>
-                  {dateText(item.evaluatedAt)} 확인
+                  {dateTimeText(item.evaluatedAt)} 평가 반영
                   {reference.provider && ` · ${reference.provider}`}
                 </small>
                 <strong className="line-clamp-2 break-words">
                   {reference.title || reference.url}
                 </strong>
-                <span>
+                <span className="text-left">
                   {isFirstEvaluation(item) ? (
                     `${scoreLabels[item.scoreType]} 첫 평가 ${scoreText(item.scoreAfter)}점`
                   ) : (
@@ -423,7 +419,7 @@ export default function DetailPage({
                   )}
                 </span>
                 <p className="truncate">{item.evidenceSummary}</p>
-                <span className="font-bold">문서와 변경 근거 보기 →</span>
+                <span className="text-right font-bold">문서와 변경 근거 보기 →</span>
               </button>
             ))}
             {allReferences.length === 0 && (
@@ -465,7 +461,9 @@ export default function DetailPage({
                 data-highlight={`round-${round.key}`}
                 key={round.key}
               >
-                <small className="text-[11px] text-[#647096]">{dateText(round.evaluatedAt)}</small>
+                <small className="text-[11px] text-[#647096]">
+                  {dateTimeText(round.evaluatedAt)}
+                </small>
                 {round.point &&
                   (round.first ? (
                     <strong className="mt-1 block text-[17px] text-[#090d3d]">
@@ -495,7 +493,7 @@ export default function DetailPage({
                 ))}
                 {round.items.some((item) => item.references.length > 0) && (
                   <button
-                    className="mt-3 border-0 bg-transparent p-0 text-[12px] font-bold text-[#6938ff]"
+                    className="mt-3 ml-auto block border-0 bg-transparent p-0 text-right text-[12px] font-bold text-[#6938ff]"
                     onClick={() => {
                       setTab('sources')
                       setHighlight(`sources-${round.evaluatedAt}`)
@@ -510,6 +508,40 @@ export default function DetailPage({
         )}
       </div>
     </section>
+  )
+}
+
+function ReasonText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const [overflow, setOverflow] = useState(false)
+  const paragraph = useRef<HTMLParagraphElement>(null)
+  useEffect(() => {
+    const element = paragraph.current
+    if (!element) return
+    const measure = () => {
+      if (!expanded) setOverflow(element.scrollHeight > element.clientHeight + 1)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [text, expanded])
+  return (
+    <>
+      <p ref={paragraph} className={expanded ? '' : 'line-clamp-3'}>
+        {text}
+      </p>
+      {overflow && (
+        <button
+          type="button"
+          className="mt-1 ml-auto block border-0 bg-transparent p-0 text-right text-[12px] font-bold text-[#6938ff]"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? '접기 ▴' : '더보기 ▾'}
+        </button>
+      )}
+    </>
   )
 }
 
