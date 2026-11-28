@@ -136,7 +136,12 @@ public class IdeaStructuringService {
         }
         checkCooldown(userId);
 
-        JsonNode r = gemini.generateJson(AiLane.INTERACTIVE, SYSTEM_PROMPT, "# 아이디어 원문\n" + text, SCHEMA);
+        JsonNode r;
+        try {
+            r = gemini.generateJson(AiLane.INTERACTIVE, SYSTEM_PROMPT, "# 아이디어 원문\n" + text, SCHEMA);
+        } catch (CustomException e) {
+            throw e.at("아이디어 구조화");
+        }
         String target = clean(r.path("target"));
         String problem = clean(r.path("problem"));
         String solution = clean(r.path("solution"));

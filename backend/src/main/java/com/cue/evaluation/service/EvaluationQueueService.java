@@ -4,6 +4,7 @@ import com.cue.evaluation.config.EvaluationExecutorConfig;
 import com.cue.evaluation.dto.EvaluationRunResult;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
 import com.cue.idea.entity.EvaluationStatus;
 import com.cue.idea.repository.IdeaRepository;
 import com.cue.trend.service.GlobalTrendService;
@@ -107,7 +108,8 @@ public class EvaluationQueueService {
                 ideas.markIdle(ideaId, LocalDateTime.now());
                 throw new CustomException(ErrorCode.EVALUATION_QUEUE_FULL);
             }
-            ideas.markFailed(ideaId, LocalDateTime.now(), ErrorCode.EVALUATION_QUEUE_FULL.getCode());
+            ideas.markFailed(ideaId, LocalDateTime.now(), ErrorCode.EVALUATION_QUEUE_FULL.getCode(),
+                    "평가 대기열", null, "대기열이 가득 참");
             log.warn("평가 대기열이 가득 차 자동 평가를 시작하지 못했습니다 ideaId={}", ideaId);
             return EvaluationStatus.FAILED;
         }
@@ -202,8 +204,11 @@ public class EvaluationQueueService {
             } catch (RuntimeException e) {
                 String code = e instanceof CustomException ce
                         ? ce.getErrorCode().getCode() : ErrorCode.INTERNAL_SERVER_ERROR.getCode();
-                log.error("평가 실패 ideaId={} code={}", ideaId, code, e);
-                ideas.markFailed(ideaId, LocalDateTime.now(), code);
+                ErrorDetail detail = e instanceof CustomException ce && ce.getDetail() != null
+                        ? ce.getDetail() : new ErrorDetail("아이디어 평가", null, e instanceof CustomException ce
+                                ? ce.getErrorCode().getMessage() : "서버 내부 오류");
+                log.error("평가 실패 ideaId={} code={} {}", ideaId, code, detail.summary(), e);
+                ideas.markFailed(ideaId, LocalDateTime.now(), code, detail.location(), detail.api(), detail.reason());
                 throw e;
             }
         } finally {

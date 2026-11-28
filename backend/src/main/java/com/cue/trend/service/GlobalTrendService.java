@@ -101,7 +101,7 @@ public class GlobalTrendService {
             return snapshot;
         } catch (RuntimeException e) {
             failedAt = LocalDateTime.now();
-            log.warn("글로벌 트렌드를 만들지 못했습니다. TREND 평가는 건너뜁니다: {}", e.toString());
+            log.warn("글로벌 트렌드를 만들지 못했습니다. TREND 평가는 건너뜁니다 위치=글로벌 트렌드 수집: {}", e.toString());
             return null;
         }
     }
@@ -157,7 +157,7 @@ public class GlobalTrendService {
                     found.put(provider, items);
                 }
             } catch (RuntimeException e) {
-                log.warn("트렌드 조회 실패 provider={}: {}", provider, e.toString());
+                log.warn("트렌드 조회 실패 provider={} 위치=글로벌 트렌드 조회, API={}: {}", provider, provider.displayName(), e.toString());
             }
         }
         if (found.isEmpty()) {

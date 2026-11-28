@@ -13,4 +13,16 @@ public enum ApiProvider {
 
     /** 글로벌 트렌드(5번째 평가 기준 TREND)에 쓰는 고정 3개. 모두 키워드 없이 "급상승" 지표로 조회한다. */
     public static final List<ApiProvider> TREND_PROVIDERS = List.of(HACKER_NEWS, GITHUB, HUGGING_FACE);
+
+    /** 에러 원인을 알릴 때 쓰는 이름. */
+    public String displayName() {
+        return switch (this) {
+            case HACKER_NEWS -> "Hacker News";
+            case GITHUB -> "GitHub";
+            case HUGGING_FACE -> "Hugging Face";
+            case WIKIPEDIA_PAGEVIEWS -> "Wikipedia";
+            case SEMANTIC_SCHOLAR -> "Semantic Scholar";
+            case STACK_EXCHANGE -> "Stack Exchange";
+        };
+    }
 }

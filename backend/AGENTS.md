@@ -41,7 +41,7 @@ trend/        entity (Trend, TrendItem) / repository / service (GlobalTrendServi
 각 도메인은 `controller / service / repository / entity / dto` 로 나눈다. 새 도메인도 같은 규칙을 따른다.
 
 ## DB (Flyway, `src/main/resources/db/migration`)
-- 마이그레이션은 **`V1__init.sql`(스키마 확정본)** 으로 시작한다 (users, ideas, scores, refresh_tokens, trends, trend_items, evaluations, evaluation_references, idea_score_histories, sources). **V1은 고정이며 수정하지 않는다.** 이후 변경은 `V2__*.sql`부터 새 파일로 추가한다. 현재 `V2__daily_evaluation_and_evaluated_items.sql`(`ideas.evaluated_on`, `sources.evaluated_items` 추가)까지 있다.
+- 마이그레이션은 **`V1__init.sql`(스키마 확정본)** 으로 시작한다 (users, ideas, scores, refresh_tokens, trends, trend_items, evaluations, evaluation_references, idea_score_histories, sources). **V1은 고정이며 수정하지 않는다.** 이후 변경은 `V2__*.sql`부터 새 파일로 추가한다. 현재 `V2__daily_evaluation_and_evaluated_items.sql`(`ideas.evaluated_on`, `sources.evaluated_items` 추가), `V3__evaluation_error_detail.sql`(`ideas.last_evaluation_error_location/api/reason` 추가)까지 있다.
 - **스키마는 2026-11-24에 확정했다. 이미 머지된 마이그레이션 파일(`V1__init.sql` 포함)은 절대 수정하지 않는다.** 수정하면 이미 적용한 DB가 Flyway 체크섬 불일치로 기동에 실패한다. 스키마를 바꿀 때는 `V{n}__설명.sql`(n = 마지막 버전 + 1) 새 파일을 같은 PR에 추가한다. 새 마이그레이션은 기존 데이터를 지키며 자동 적용되므로 팀원이 DB를 초기화할 필요가 없다. 지금의 `V1__init.sql`과 다른 예전 V1으로 만든 로컬 DB만 `docker compose down -v` 후 한 번 새로 만든다(데이터가 지워지니 먼저 `flyway_schema_history`의 V1 체크섬을 확인한다. 지금 V1은 `449303195`).
 - `ddl-auto: validate` 이므로 엔티티와 스키마가 어긋나면 기동 실패. 엔티티를 바꾸면 새 `V{n}__*.sql`을 같은 PR에 추가한다.
 
@@ -79,6 +79,7 @@ ERD 관계: users 1:N ideas, ideas 1:N scores, ideas 1:N sources, ideas 1:N idea
 - 시연(D): `D001` 시연 API 꺼짐(403) / `D002` 시연 실행 쿨다운(429).
 - 아이디어(I): `I005` 평가가 대기·진행 중인 아이디어는 수정·삭제 불가(409) / `I006` 구조화 요청이 너무 잦음(429).
 - 평가(E): `E001` AI 사용 불가(Gemini 비활성/키 없음, 503) / `E002` AI 응답 해석 불가(502) / `E004` 평가 대기열 가득(503) / `E005` 재시작으로 평가 중단(503, `FAILED` 상태의 `last_evaluation_error_code`로만 노출) / `E006` AI가 바쁨(503, 인터랙티브 레인이 한도·429/503으로 호출하지 못함 — 구조화는 사용자가 직접 입력하게 안내) / `E007` 오늘 이미 평가함(409, 평가는 아이디어마다 하루 한 번). AI 통신 실패 자체는 `G002`. (`E003`은 비동기 전환으로 없앴다: 이미 진행 중이면 에러 없이 현재 상태를 돌려준다.)
+- **에러에는 위치와 원인을 담는다** (`ErrorDetail{location, api, reason}`): 외부 API를 부르다 던지는 예외는 `new CustomException(code, ErrorDetail.external("API 이름", "원인"), cause)`로 만들고, 위치를 아는 호출한 쪽이 `e.at("위치")`를 붙인다. 원인 문구는 `ExternalFailure`(HTTP 상태·시간 초과·연결 실패·해석 실패)로 만들며 **키·토큰·URL 쿼리·응답 본문·예외 메시지를 넣지 않는다.** 실패 응답의 `data`, 아이디어의 `lastEvaluationError`(평가 실패), 로그에 같이 나온다. 외부 자료 API 실패는 평가를 멈추지 않아 로그에만 남는다. 새 외부 호출·에러를 추가할 때도 이 규칙을 지킨다.
 - 코드 번호를 새로 만들기 전에 열려 있는 PR 브랜치의 `ErrorCode`도 확인해 번호가 겹치지 않게 한다 (예: 외부 자료 수집의 `S001·S002`). 현재 G001~G007, A001~A010, U001~U002, I001~I006, S001~S003, D001~D002, E001·E002·E004·E005·E006·E007.
 - **범용 예외로 새지 않게 한다**: 실패 경로는 `IllegalArgumentException`/`IllegalStateException`/메시지 없는 던지기 대신 `CustomException(ErrorCode)`로 던진다. 프레임워크 예외(`HttpMediaTypeNotSupportedException` 등)는 `GlobalExceptionHandler`에서 코드로 매핑한다. 새 ErrorCode를 만들면 `GlobalExceptionHandler`/서비스에서 실제로 쓰이는지, Swagger(`@ApiErrors`)에 나열됐는지 확인한다.
 - 사용: `throw new CustomException(ErrorCode.XXX)`. 새 도메인은 새 영문자 구역을 만든다.

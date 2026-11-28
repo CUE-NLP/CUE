@@ -239,7 +239,8 @@ public class IdeaService {
         return new IdeaResponse(idea.getId(), idea.getTitle(), idea.getType(), idea.getItCategory(), idea.getStatus(), idea.getProblem(), idea.getTarget(),
                 idea.getSolution(), idea.getExpectation(), idea.getTotalScore(), idea.getLastDifference(),
                 idea.getLastEvaluatedAt(), idea.hasNewChange(), idea.getCreatedAt(), scores,
-                idea.keywordList(), idea.getKeywordOrigin(), idea.getEvaluationStatus(), idea.getLastEvaluationErrorCode());
+                idea.keywordList(), idea.getKeywordOrigin(), idea.getEvaluationStatus(), idea.getLastEvaluationErrorCode(),
+                idea.lastEvaluationError());
     }
 
     private static Integer percent(BigDecimal fraction) {

@@ -2,6 +2,8 @@ package com.cue.global.ai;
 
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
+import com.cue.global.error.ExternalFailure;
 import com.cue.idea.service.GeminiProperties;
 import java.net.http.HttpClient;
 import java.time.Clock;
@@ -132,7 +134,8 @@ public class GeminiClient {
         for (int attempt = 0; ; attempt++) {
             if (!limiter.acquire(maxWaitMs)) {
                 log.warn("Gemini 호출 한도 대기가 길어 포기합니다 lane={}", aiLane);
-                throw new CustomException(interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR);
+                throw new CustomException(interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR,
+                        failure("호출 간격 제한 대기 시간 초과"));
             }
             try {
                 return restClient.post()
@@ -152,11 +155,16 @@ public class GeminiClient {
                     continue;
                 }
                 // 원인을 알 수 있게 상태 코드와 응답 본문 앞부분을 남긴다 (요청 헤더의 키는 로그에 넣지 않는다)
-                log.warn("Gemini 호출 실패 status={} lane={} model={} body={}", status, aiLane, model, abbreviate(e.getResponseBodyAsString()));
-                throw new CustomException(busy && interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR);
+                String reason = ExternalFailure.http(status);
+                log.warn("Gemini 호출 실패 status={} lane={} model={} 원인={} body={}", status, aiLane, model, reason,
+                        abbreviate(e.getResponseBodyAsString()));
+                throw new CustomException(busy && interactive ? ErrorCode.AI_BUSY : ErrorCode.EXTERNAL_SERVER_ERROR,
+                        failure(reason), e);
             } catch (RuntimeException e) {
-                log.warn("Gemini 호출 중 통신 오류 lane={} model={} cause={}: {}", aiLane, model, e.getClass().getSimpleName(), e.getMessage());
-                throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+                String reason = ExternalFailure.reason(e);
+                log.warn("Gemini 호출 중 통신 오류 lane={} model={} 원인={} cause={}: {}", aiLane, model, reason,
+                        e.getClass().getSimpleName(), e.getMessage());
+                throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, failure(reason), e);
             }
         }
     }
@@ -189,22 +197,47 @@ public class GeminiClient {
             sleeper.sleep(ms);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+            log.warn("Gemini 재시도 대기 중 중단됐습니다");
+            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR, failure("재시도 대기 중 중단됨"), ie);
         }
     }
 
     JsonNode parse(String responseBody) {
+        JsonNode root = null;
         try {
-            JsonNode text = objectMapper.readTree(responseBody)
-                    .path("candidates").path(0).path("content").path("parts").path(0).path("text");
+            root = objectMapper.readTree(responseBody);
+            JsonNode text = root.path("candidates").path(0).path("content").path("parts").path(0).path("text");
             if (!text.isString()) {
-                throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+                throw invalidResponse("응답에 본문이 없음" + stopReason(root), null);
             }
             return objectMapper.readTree(text.asString());
         } catch (CustomException e) {
             throw e;
         } catch (RuntimeException e) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+            throw invalidResponse("응답 해석 실패" + stopReason(root), e);
         }
+    }
+
+    private CustomException invalidResponse(String reason, Throwable cause) {
+        // 응답 본문에는 사용자의 아이디어 내용이 섞일 수 있어 로그에 남기지 않는다
+        log.warn("Gemini 응답을 해석하지 못했습니다 원인={}", reason);
+        return new CustomException(ErrorCode.AI_RESPONSE_INVALID, failure(reason), cause);
+    }
+
+    /** 응답이 끊기거나 막힌 이유가 있으면 {@code (finishReason=MAX_TOKENS)}처럼 덧붙인다. */
+    private static String stopReason(JsonNode root) {
+        if (root == null) {
+            return "";
+        }
+        String finish = root.path("candidates").path(0).path("finishReason").asString("");
+        if (!finish.isEmpty() && !finish.equals("STOP")) {
+            return "(finishReason=" + finish + ")";
+        }
+        String blocked = root.path("promptFeedback").path("blockReason").asString("");
+        return blocked.isEmpty() ? "" : "(blockReason=" + blocked + ")";
+    }
+
+    private static ErrorDetail failure(String reason) {
+        return ErrorDetail.external("Gemini", reason);
     }
 }

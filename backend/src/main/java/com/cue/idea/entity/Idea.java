@@ -2,6 +2,7 @@ package com.cue.idea.entity;
 
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
 import com.cue.score.entity.Score;
 import com.cue.score.entity.ScoreType;
 import com.cue.user.entity.User;
@@ -111,6 +112,16 @@ public class Idea {
     @Column(name = "last_evaluation_error_code", length = 10)
     private String lastEvaluationErrorCode;
 
+    /** 마지막 평가가 실패한 위치·외부 API·원인. FAILED가 아니거나 알 수 없으면 null. */
+    @Column(name = "last_evaluation_error_location", length = 100)
+    private String lastEvaluationErrorLocation;
+
+    @Column(name = "last_evaluation_error_api", length = 100)
+    private String lastEvaluationErrorApi;
+
+    @Column(name = "last_evaluation_error_reason", length = 255)
+    private String lastEvaluationErrorReason;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -176,6 +187,14 @@ public class Idea {
     public void markContentChanged() {
         needsFullEvaluation = true;
         lastTrendId = null;
+    }
+
+    /** 마지막 평가 실패의 위치와 원인. 기록이 없으면 null. */
+    public ErrorDetail lastEvaluationError() {
+        if (lastEvaluationErrorLocation == null && lastEvaluationErrorApi == null && lastEvaluationErrorReason == null) {
+            return null;
+        }
+        return new ErrorDetail(lastEvaluationErrorLocation, lastEvaluationErrorApi, lastEvaluationErrorReason);
     }
 
     /** 평가는 하루에 한 번이다: {@code today}에 이미 마쳤으면 true. 내용·키워드가 바뀌어 전체 평가가 필요하면 같은 날에도 다시 평가한다. */

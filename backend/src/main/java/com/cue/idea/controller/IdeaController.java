@@ -43,7 +43,8 @@ public class IdeaController {
                     + "원문에 근거가 없는 항목은 AI가 채우지 않고 빈 문자열로 두며, 하나라도 비면 `complete=false`(그대로 저장하면 HOLD)이고 `missingFields`에 비어 있는 항목이 담긴다. "
                     + "`complete=true`이면 IT 세부 종류(`itCategory`)와 영어 키워드 후보(`keywords`)도 함께 담기고, **내용을 고치지 않고 저장하면 서버가 이 결과를 다시 써서 저장 때 AI를 한 번 덜 호출한다**(고치면 평소처럼 다시 추출). "
                     + "같은 원문을 다시 보내면 AI 호출 없이 직전 결과를 돌려주고, 같은 사용자는 3초(설정값) 안에 새 원문을 다시 보낼 수 없다(`I006`). "
-                    + "AI가 바쁘거나 실패하면(`E006`·`E001`·`E002`·`G002`) 프론트는 사용자가 4칸을 직접 채워 저장하게 안내한다.")
+                    + "AI가 바쁘거나 실패하면(`E006`·`E001`·`E002`·`G002`) 프론트는 사용자가 4칸을 직접 채워 저장하게 안내한다. "
+                    + "외부 AI 호출이 실패한 응답(`E006`·`E002`·`G002`)의 `data`에는 `{location, api, reason}`(에러가 난 위치, 외부 API, 원인)이 담긴다.")
     @ApiErrors({ErrorCode.AI_NOT_CONFIGURED, ErrorCode.AI_RESPONSE_INVALID, ErrorCode.AI_BUSY,
             ErrorCode.STRUCTURING_TOO_FAST, ErrorCode.EXTERNAL_SERVER_ERROR})
     @PostMapping("/structure")
@@ -133,7 +134,7 @@ public class IdeaController {
                     + "(본문 `code`는 다른 성공 응답처럼 `\"200\"`). `data.status`는 방금 큐에 넣었으면 `QUEUED`, 이미 대기·진행 중이면 에러 없이 현재 상태(`QUEUED`/`RUNNING`)를 돌려준다(멱등). "
                     + "**평가는 아이디어마다 하루에 한 번**이라 오늘 이미 평가했으면 `E007`이다(내용·키워드를 수정하면 같은 날 다시 가능, 실패한 평가는 다시 요청 가능). "
                     + "본인 아이디어만(`I002`), 없음 `I001`, 보류(HOLD) `I004`, Gemini 사용 불가 `E001`, 대기열이 가득 차면 `E004`는 요청 시점에 바로 반환한다. "
-                    + "평가는 서버에서 한 번에 하나씩 순서대로 돈다. 결과는 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링해 `evaluationStatus`가 `IDLE`이면 갱신된 점수·`hasNewChange`로, `FAILED`면 `lastEvaluationErrorCode`로 확인한다. "
+                    + "평가는 서버에서 한 번에 하나씩 순서대로 돈다. 결과는 `GET /api/ideas/{id}`를 몇 초 간격으로 폴링해 `evaluationStatus`가 `IDLE`이면 갱신된 점수·`hasNewChange`로, `FAILED`면 `lastEvaluationErrorCode`와 `lastEvaluationError`(위치·외부 API·원인)로 확인한다. "
                     + "평가가 끝날 때까지 이 아이디어는 수정할 수 없다(`PATCH`가 `I005`).")
     @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED, ErrorCode.IDEA_NOT_ACTIVE,
             ErrorCode.EVALUATION_ALREADY_DONE_TODAY, ErrorCode.AI_NOT_CONFIGURED, ErrorCode.EVALUATION_QUEUE_FULL})

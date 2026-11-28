@@ -1,7 +1,7 @@
 package com.cue.source.client;
 
 import com.cue.global.error.CustomException;
-import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ExternalFailure;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
 import com.cue.source.fetch.HtmlText;
@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriUtils;
 import tools.jackson.databind.JsonNode;
@@ -20,6 +21,7 @@ import tools.jackson.databind.JsonNode;
  * 조회수·요약은 해시에 넣지 않는다(제목·URL만). 요약은 검색 snippet(HTML 태그 제거), 원문은 문서 소개({@code /api/rest_v1/page/summary/{title}}의 extract).
  * Wikimedia 정책상 User-Agent 헤더가 필수라 모든 요청에 보낸다 (개인 이메일을 넣지 않는 일반 식별 문자열).
  */
+@Slf4j
 public class WikipediaPageviewsSourceClient implements SourceClient {
     static final String ARTICLE_URL = "https://en.wikipedia.org/wiki/";
     private static final DateTimeFormatter DAY = DateTimeFormatter.BASIC_ISO_DATE;
@@ -84,6 +86,7 @@ public class WikipediaPageviewsSourceClient implements SourceClient {
             }
             return any ? sum : -1;
         } catch (CustomException e) {
+            log.warn("조회수 읽기 실패, 지표 없이 씁니다 API=Wikipedia title={} 원인={}", title, ExternalFailure.reason(e));
             return -1;
         }
     }

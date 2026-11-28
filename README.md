@@ -281,6 +281,8 @@ PATCH /api/ideas/1/weights
 
 [`ErrorCode`](backend/src/main/java/com/cue/global/error/ErrorCode.java)에서 관리하며, 코드는 `{영문 1자}{3자리}` 형식이고 전체에서 유일해야 합니다 (테스트로 검사).
 
+에러가 난 위치와, 외부 API를 쓰다 실패했으면 그 API와 원인을 함께 알립니다. 외부 AI 호출이 실패한 응답은 `data`에 `{"location": "아이디어 구조화", "api": "Gemini", "reason": "429 호출 한도 초과"}` 형태로 담고, 비동기 평가 실패는 `GET /api/ideas/{id}`의 `lastEvaluationError`로 같은 형태를 돌려줍니다. 외부 자료 API(GitHub 등) 실패는 평가를 멈추지 않으므로 서버 로그에 API와 원인을 남깁니다.
+
 | 구분 | 코드 | HTTP | 의미 |
 | --- | --- | --- | --- |
 | Global | `G001` | 500 | 예상치 못한 서버 오류 |

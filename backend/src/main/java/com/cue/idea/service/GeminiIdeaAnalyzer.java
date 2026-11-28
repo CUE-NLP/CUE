@@ -4,6 +4,7 @@ import com.cue.global.ai.AiLane;
 import com.cue.global.ai.GeminiClient;
 import com.cue.global.error.CustomException;
 import com.cue.global.error.ErrorCode;
+import com.cue.global.error.ErrorDetail;
 import com.cue.idea.entity.Idea;
 import com.cue.idea.entity.ItCategory;
 import java.util.Arrays;
@@ -108,7 +109,7 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         try {
             return requestAnalysis(idea, false);
         } catch (RuntimeException e) {
-            log.warn("Gemini 분석 실패, 임시 분석기로 대체합니다: {}", e.toString());
+            log.warn("Gemini 분석 실패, 임시 분석기로 대체합니다 위치=키워드·종류 추출: {}", e.toString());
             return fallback.analyze(idea);
         }
     }
@@ -122,7 +123,7 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         try {
             return requestAnalysis(idea, true).itCategory();
         } catch (RuntimeException e) {
-            log.warn("Gemini 종류 분류 실패, 임시 분석기로 대체합니다: {}", e.toString());
+            log.warn("Gemini 종류 분류 실패, 임시 분석기로 대체합니다 위치=종류 분류: {}", e.toString());
             return fallback.analyzeCategory(idea);
         }
     }
@@ -143,7 +144,8 @@ class GeminiIdeaAnalyzer implements IdeaAnalyzer {
         }
         List<String> keywords = normalizeKeywords(result.path("keywords"));
         if (keywords.isEmpty()) {
-            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID);
+            throw new CustomException(ErrorCode.AI_RESPONSE_INVALID,
+                    ErrorDetail.external("Gemini", "응답에 키워드가 없음"));
         }
         return new IdeaAnalysis(category, keywords);
     }

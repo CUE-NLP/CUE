@@ -5,8 +5,6 @@ import com.cue.source.entity.ApiProvider;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
-import com.cue.global.error.CustomException;
-import com.cue.global.error.ErrorCode;
 import com.cue.source.fetch.HtmlText;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.HtmlUtils;
@@ -64,7 +62,7 @@ public class StackExchangeSourceClient implements SourceClient {
     public String fetchContent(SourceItem item) {
         Matcher m = QUESTION_ID.matcher(item.url());
         if (!m.find()) {
-            throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+            throw SourceClientSupport.failure("질문 주소 형식이 아님");
         }
         String id = m.group(1);
         JsonNode question = SourceClientSupport.getJson(restClient.get().uri(uri -> withKey(uri

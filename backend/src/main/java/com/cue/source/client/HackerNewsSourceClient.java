@@ -1,7 +1,5 @@
 package com.cue.source.client;
 
-import com.cue.global.error.CustomException;
-import com.cue.global.error.ErrorCode;
 import com.cue.source.dto.SourceItem;
 import com.cue.source.entity.ApiProvider;
 import com.cue.source.fetch.HtmlText;
@@ -73,7 +71,7 @@ public class HackerNewsSourceClient implements SourceClient {
         if (item.url().startsWith(ITEM_URL)) {
             String id = item.url().substring(ITEM_URL.length());
             if (!id.matches("\\d+")) {
-                throw new CustomException(ErrorCode.EXTERNAL_SERVER_ERROR);
+                throw SourceClientSupport.failure("글 번호 형식이 아님");
             }
             JsonNode story = SourceClientSupport.getJson(restClient.get().uri("/api/v1/items/" + id));
             return HtmlText.toText(SourceClientSupport.text(story, "text"));
