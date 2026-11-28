@@ -171,6 +171,15 @@ public class IdeaService {
         return idea;
     }
 
+    /**
+     * 아이디어를 삭제한다(되돌릴 수 없음). 점수·평가·근거·총점 이력·source는 DB의 ON DELETE CASCADE로 함께 지워지고, 여러 아이디어가
+     * 함께 쓰는 글로벌 트렌드는 남는다. 수정과 같이 행을 잠근 채 평가 상태를 확인하므로, 평가 중이면 {@code I005}로 거절한다.
+     */
+    @Transactional
+    public void delete(Long userId, Long ideaId) {
+        ideas.delete(findOwnedForUpdate(userId, ideaId)); // I001 → I002 → I005 순서로 검사
+    }
+
     /** 항목별 가중치를 예약한다. 현재 점수에는 영향이 없고 다음 평가 턴부터 적용된다. */
     @Transactional
     public IdeaResponse reserveWeights(Long userId, Long ideaId, UpdateWeightsRequest req) {

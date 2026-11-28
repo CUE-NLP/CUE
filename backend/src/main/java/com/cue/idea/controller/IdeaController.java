@@ -28,7 +28,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import lombok.RequiredArgsConstructor;
 
-@Tag(name = "아이디어", description = "아이디어 저장·수정·조회, 리더보드, 가중치, 점수·평가 이력. 모두 액세스 토큰이 필요하며 본인의 아이디어만 접근할 수 있다(타인 아이디어는 `I002`).")
+@Tag(name = "아이디어", description = "아이디어 저장·수정·삭제·조회, 리더보드, 가중치, 점수·평가 이력. 모두 액세스 토큰이 필요하며 본인의 아이디어만 접근할 수 있다(타인 아이디어는 `I002`).")
 @RestController
 @RequestMapping("/api/ideas")
 @RequiredArgsConstructor
@@ -100,6 +100,18 @@ public class IdeaController {
     public CommonResponse<IdeaResponse> update(@AuthenticationPrincipal UserPrincipal principal, @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id,
                                                @Valid @RequestBody UpdateIdeaRequest req) {
         return CommonResponse.onSuccess(ideaService.update(principal.id(), id, req));
+    }
+
+    /** 아이디어와 그 평가 데이터를 삭제한다. 본인 것만(I002), 평가 대기·진행 중이면 I005. */
+    @Operation(summary = "아이디어 삭제",
+            description = "아이디어와 그 점수·평가 이력·근거 자료·총점 이력·수집 설정을 **영구 삭제**한다(되돌릴 수 없음). 성공 응답의 `data`는 null이다. "
+                    + "본인 아이디어만(`I002`), 없거나 이미 삭제했으면 `I001`. 평가가 대기·진행 중이면 `I005`로 거절하므로 끝난 뒤 다시 요청한다(보류·실패 상태는 삭제 가능).")
+    @ApiErrors({ErrorCode.IDEA_NOT_FOUND, ErrorCode.IDEA_ACCESS_DENIED, ErrorCode.IDEA_EVALUATING})
+    @DeleteMapping("/{id}")
+    public CommonResponse<Void> delete(@AuthenticationPrincipal UserPrincipal principal,
+                                       @Parameter(description = "아이디어 ID", example = "1") @PathVariable Long id) {
+        ideaService.delete(principal.id(), id);
+        return CommonResponse.onSuccess();
     }
 
     /** 최신 점수를 확인했음을 기록한다 ("새로운 변화" 알림 해제). */
